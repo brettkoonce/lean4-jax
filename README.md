@@ -7,11 +7,12 @@ Replicating the models from [Convolutional Neural Networks with Swift for Tensor
 
 ## Models
 
-| Model | File | Architecture | Params | Accuracy | Time (CPU) |
-|-------|------|-------------|--------|----------|------------|
-| MNIST MLP (Ch.1) | `MainMlp.lean` | 784→512→512→10 | 670K | 97.9% | 7.5s |
-| MNIST CNN (Ch.2) | `MainCnn.lean` | Conv²→Pool→Dense³ | 3.5M | 97.6% | 6.7 min |
-| CIFAR-10 CNN (Ch.3) | `MainCifar.lean` | Conv²→Pool→Conv²→Pool→Dense³ | 2.4M | 63.3% | 31 min |
+| Model | File | Architecture | Params | Accuracy | Time (CPU) | Time (6× 4060 Ti) |
+|-------|------|-------------|--------|----------|------------|-------------------|
+| MNIST MLP (Ch.1) | `MainMlp.lean` | 784→512→512→10 | 670K | 97.9% | 7.5s | 7.5s |
+| MNIST CNN (Ch.2) | `MainCnn.lean` | Conv²→Pool→Dense³ | 3.5M | 97.6% | 6.7 min | 23s |
+| CIFAR-10 CNN (Ch.3) | `MainCifar.lean` | Conv²→Pool→Conv²→Pool→Dense³ | 2.4M | 63.3% | 31 min | 53s |
+| ResNet-34 (Ch.4) | `MainResnet.lean` | Conv7/2→Res16→GAP→Dense | 21.3M | 68.4% | ~2 hrs | 10 min |
 
 ## Lean specs
 
@@ -55,10 +56,26 @@ def cifarCnn : NetSpec where
     .dense  512 512 .relu,
     .dense  512  10 .identity
   ]
+
+-- ResNet-34 (S4TF book Ch. 4)
+def resnet34 : NetSpec where
+  name := "ResNet-34"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .convBn 3 64 7 2 .same,
+    .maxPool 3 2,
+    .residualBlock  64  64 3 1,
+    .residualBlock  64 128 4 2,
+    .residualBlock 128 256 6 2,
+    .residualBlock 256 512 3 2,
+    .globalAvgPool,
+    .dense 512 10 .identity
+  ]
 ```
 
 Lean generates a complete JAX training script and runs it. The generated
-Python is readable and auditable at `.lake/build/generated_mnist_*.py`.
+Python is readable and auditable at `.lake/build/generated_*.py`.
 
 ## Quick start
 
@@ -80,32 +97,36 @@ For GPU (ROCm):
 .venv/bin/pip install jax[rocm]
 ```
 
-### 3. Get MNIST data
+### 3. Get data
 
 ```bash
-cd ../mnist-lean4 && ./download_mnist.sh && cd ../lean4-jax
+cd ../mnist-lean4
+./download_mnist.sh        # MNIST (MLP, CNN)
+./download_cifar.sh        # CIFAR-10
+./download_imagenette.sh   # Imagenette (ResNet-34, requires Pillow)
+cd ../lean4-jax
 ```
-
-Or if you already have the raw IDX files (`train-images-idx3-ubyte`, etc.),
-pass the directory as a CLI argument.
 
 ### 4. Build and run
 
 ```bash
-lake build mnist-mlp mnist-cnn cifar-cnn
+lake build mnist-mlp mnist-cnn cifar-cnn resnet34
 
 # MLP — ~8 seconds
 .lake/build/bin/mnist-mlp
 
-# MNIST CNN — ~7 minutes
+# MNIST CNN — ~7 minutes (23s on GPU)
 .lake/build/bin/mnist-cnn
 
-# CIFAR-10 CNN — longer (4 conv layers, 32×32 images)
+# CIFAR-10 CNN — ~31 minutes (53s on GPU)
 .lake/build/bin/cifar-cnn
+
+# ResNet-34 on Imagenette — ~10 minutes on 6× GPU
+.lake/build/bin/resnet34
 
 # Custom data dir
 .lake/build/bin/mnist-mlp /path/to/data
-.lake/build/bin/cifar-cnn /path/to/cifar-10
+.lake/build/bin/resnet34 /path/to/imagenette
 ```
 
 ## Project structure
@@ -115,7 +136,8 @@ LeanJax.lean      Shared types (Layer, NetSpec, TrainConfig, DatasetKind) + JAX 
 MainMlp.lean      MNIST MLP spec + main  (5 lines)
 MainCnn.lean      MNIST CNN spec + main  (10 lines)
 MainCifar.lean    CIFAR-10 CNN spec + main  (15 lines)
-lakefile.lean     Build config (3 executables, 1 library)
+MainResnet.lean   ResNet-34 spec + main  (20 lines)
+lakefile.lean     Build config (4 executables, 1 library)
 ```
 
 ## How it works
@@ -123,28 +145,30 @@ lakefile.lean     Build config (3 executables, 1 library)
 1. Lean defines the network as a `NetSpec` — a list of `Layer` values
 2. `JaxCodegen.generate` walks the layer list and emits idiomatic JAX Python
    - Conv layers → `jax.lax.conv_general_dilated`
+   - Residual blocks → `basic_block` / `basic_block_down` with skip connections
    - Pool layers → `jax.lax.reduce_window`
    - Dense layers → `x @ w.T + b`
-   - Activation, init, loss, training loop — all generated
+   - Instance normalization, activation, init, loss, training loop — all generated
 3. `runJax` writes the script to `.lake/build/` and runs it via `python3`
 4. JAX handles autodiff (`value_and_grad`), JIT compilation, XLA
 
-## GPU status
+## GPU / multi-GPU
 
 The generated Python is GPU-ready — **zero code changes needed**. JAX
-auto-dispatches to GPU when one is available. The only change is the backend:
+auto-dispatches to GPU when one is available:
 
 ```bash
-# ROCm (AMD) — needs jaxlib built for your ROCm version
-pip install jax-rocm60-plugin     # ROCm 6.0
-# ROCm 7.x plugin not yet on PyPI — build jaxlib from source or wait for package
-
 # CUDA (NVIDIA)
 pip install jax[cuda12]
+
+# ROCm (AMD)
+pip install jax[rocm]
 ```
 
-On a 7900 XTX the CNN would go from ~7 min → ~seconds. The Lean spec
-and generated code are identical; only the pip install differs.
+**Multi-GPU data parallelism** is automatic via `jax.sharding`. The codegen
+emits a `Mesh` + `NamedSharding` setup that detects all available GPUs,
+replicates params, and shards batches across devices. No changes to the
+Lean spec or training config — just add more GPUs.
 
 ## Why Lean → JAX?
 
