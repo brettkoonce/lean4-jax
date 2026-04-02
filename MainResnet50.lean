@@ -23,7 +23,7 @@ def resnet50 : NetSpec where
 def resnet50Config : TrainConfig where
   learningRate := 0.012
   batchSize    := 192
-  epochs       := 30
+  epochs       := 60
   momentum     := 0.9
 
 def main (args : List String) : IO Unit :=
