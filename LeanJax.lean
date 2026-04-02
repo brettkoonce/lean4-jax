@@ -120,6 +120,7 @@ private def emitImports : String :=
   "import jax\n" ++
   "import jax.numpy as jnp\n" ++
   "from jax import random, jit, value_and_grad\n" ++
+  "from jax.sharding import Mesh, NamedSharding, PartitionSpec as P\n" ++
   "import numpy as np\n" ++
   "import struct, os, time\n\n"
 
@@ -366,15 +367,19 @@ private def emitLossAndTraining (spec : NetSpec) (cfg : TrainConfig) : String :=
   "    correct = jnp.sum(preds == y)\n" ++
   "    return correct, loss\n\n" ++
   "def evaluate(params, images, labels, batch_size=512):\n" ++
+  "    batch_size = (batch_size // n_devices) * n_devices or n_devices\n" ++
   "    correct = 0\n" ++
   "    total_loss = 0.0\n" ++
   "    n_batches = 0\n" ++
-  "    for i in range(0, len(images), batch_size):\n" ++
-  "        c, l = eval_batch(params, images[i:i+batch_size], labels[i:i+batch_size])\n" ++
+  "    for i in range(0, len(images) - batch_size + 1, batch_size):\n" ++
+  "        c, l = eval_batch(params,\n" ++
+  "            jax.device_put(images[i:i+batch_size], data_sharding),\n" ++
+  "            jax.device_put(labels[i:i+batch_size], data_sharding))\n" ++
   "        correct += int(c)\n" ++
   "        total_loss += float(l)\n" ++
   "        n_batches += 1\n" ++
-  "    return correct, len(images), total_loss / n_batches\n\n"
+  "    evaluated = n_batches * batch_size\n" ++
+  "    return correct, evaluated, total_loss / max(n_batches, 1)\n\n"
 
 private def emitDataLoadCalls (ds : DatasetKind) (dataDir : String) (spec : NetSpec) : String :=
   let imgDesc := toString spec.imageH ++ "x" ++ toString spec.imageW
@@ -418,12 +423,13 @@ private def emitMain (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind) (da
   "    print(\"  \" + \"" ++ spec.archStr ++ "\")\n" ++
   "    print()\n\n" ++
   emitDataLoadCalls ds dataDir spec ++
-  "    BATCH_SIZE = " ++ bs ++ "\n" ++
+  "    BATCH_SIZE = (" ++ bs ++ " // n_devices) * n_devices or n_devices\n" ++
   "    EPOCHS = " ++ ep ++ "\n" ++
-  "    print(\"lr=" ++ lr ++ "  batch_size=\" + str(BATCH_SIZE) + \"  epochs=\" + str(EPOCHS) + \"  params=" ++ nParams ++ "\")\n" ++
+  "    print(\"lr=" ++ lr ++ "  batch_size=\" + str(BATCH_SIZE) + \" (\" + str(n_devices) + \" devices x \" + str(BATCH_SIZE // n_devices) + \")  epochs=\" + str(EPOCHS) + \"  params=" ++ nParams ++ "\")\n" ++
   "    print(\"backend=\" + str(jax.default_backend()) + \"  devices=\" + str(jax.devices()))\n" ++
   "    print(\"Starting training...\")\n\n" ++
   "    params = init_params(random.PRNGKey(" ++ seed ++ "))\n" ++
+  "    params = jax.device_put(params, replicated_sharding)\n" ++
   "    rng = np.random.RandomState(42)\n" ++
   (if hasMomentum then "    velocity = jax.tree.map(jnp.zeros_like, params)\n" else "") ++
   "\n" ++
@@ -442,9 +448,9 @@ private def emitMain (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind) (da
   "        shuf_labels = train_labels[perm]\n" ++
   "        epoch_loss = 0.0\n" ++
   "        n_batches = 0\n" ++
-  "        for i in range(0, len(train_images), BATCH_SIZE):\n" ++
-  "            x = shuf_images[i:i+BATCH_SIZE]\n" ++
-  "            y = shuf_labels[i:i+BATCH_SIZE]\n" ++
+  "        for i in range(0, len(train_images) - BATCH_SIZE + 1, BATCH_SIZE):\n" ++
+  "            x = jax.device_put(shuf_images[i:i+BATCH_SIZE], data_sharding)\n" ++
+  "            y = jax.device_put(shuf_labels[i:i+BATCH_SIZE], data_sharding)\n" ++
   (if hasMomentum then
   "            params, velocity, loss = train_step(params, velocity, x, y)\n"
   else
@@ -460,12 +466,23 @@ private def emitMain (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind) (da
   "    print(\"\")\n" ++
   "    print(\"Done. Total time: \" + str(round(time.time() - t0, 1)) + \"s\")\n"
 
+private def emitShardingSetup : String :=
+  "# ═══════════════════════════════════════════════════════════════════════\n" ++
+  "#  Multi-GPU data parallelism\n" ++
+  "# ═══════════════════════════════════════════════════════════════════════\n\n" ++
+  "devices = jax.devices()\n" ++
+  "n_devices = len(devices)\n" ++
+  "mesh = Mesh(np.array(devices), axis_names=('batch',))\n" ++
+  "data_sharding = NamedSharding(mesh, P('batch'))\n" ++
+  "replicated_sharding = NamedSharding(mesh, P())\n\n"
+
 /-- Generate a complete, self-contained JAX training script from a Lean spec. -/
 def generate (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind) (dataDir : String) : String :=
   emitHeader spec ++
   emitImports ++
   emitDataLoading ds ++
   emitHelpers spec ++
+  emitShardingSetup ++
   emitInitParams spec ++
   emitForward spec ++
   emitLossAndTraining spec cfg ++
