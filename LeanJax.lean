@@ -42,6 +42,9 @@ structure TrainConfig where
   epochs       : Nat
   seed         : Nat := 314159
   momentum     : Float := 0.0
+  weightDecay  : Float := 0.0
+  cosineDecay  : Bool := false
+  warmupEpochs : Nat := 0
 deriving Repr
 
 inductive DatasetKind where
@@ -334,29 +337,36 @@ private def emitLossAndTraining (spec : NetSpec) (cfg : TrainConfig) : String :=
   let nClasses := spec.numClasses
   let lr := toString cfg.learningRate
   let hasMomentum := cfg.momentum > 0.0
+  let hasCosine := cfg.cosineDecay
   "def loss_fn(params, x, y):\n" ++
   "    logits = forward(params, x)\n" ++
   "    log_probs = jax.nn.log_softmax(logits, axis=-1)\n" ++
   "    one_hot = jax.nn.one_hot(y, " ++ toString nClasses ++ ")\n" ++
   "    return -jnp.mean(jnp.sum(log_probs * one_hot, axis=-1))\n\n" ++
   "# ═══════════════════════════════════════════════════════════════════════\n" ++
-  "#  Training  (SGD" ++ (if hasMomentum then " + momentum" else "") ++ ")\n" ++
+  "#  Training  (SGD" ++ (if hasMomentum then " + momentum" else "") ++
+    (if hasCosine then " + cosine LR" else "") ++ ")\n" ++
   "# ═══════════════════════════════════════════════════════════════════════\n\n" ++
+  let hasWD := cfg.weightDecay > 0.0
+  let wd := toString cfg.weightDecay
   "LR = " ++ lr ++ "\n" ++
   (if hasMomentum then "MOMENTUM = " ++ toString cfg.momentum ++ "\n" else "") ++
+  (if hasWD then "WD = " ++ wd ++ "\n" else "") ++
   "\n" ++
   (if hasMomentum then
     "@jit\n" ++
-    "def train_step(params, velocity, x, y):\n" ++
+    "def train_step(params, velocity, x, y, lr):\n" ++
     "    loss, grads = value_and_grad(loss_fn)(params, x, y)\n" ++
+    (if hasWD then "    grads = jax.tree.map(lambda g, p: g + WD * p, grads, params)\n" else "") ++
     "    velocity = jax.tree.map(lambda v, g: MOMENTUM * v + g, velocity, grads)\n" ++
-    "    params = jax.tree.map(lambda p, v: p - LR * v, params, velocity)\n" ++
+    "    params = jax.tree.map(lambda p, v: p - lr * v, params, velocity)\n" ++
     "    return params, velocity, loss\n\n"
   else
     "@jit\n" ++
-    "def train_step(params, x, y):\n" ++
+    "def train_step(params, x, y, lr):\n" ++
     "    loss, grads = value_and_grad(loss_fn)(params, x, y)\n" ++
-    "    params = jax.tree.map(lambda p, g: p - LR * g, params, grads)\n" ++
+    (if hasWD then "    grads = jax.tree.map(lambda g, p: g + WD * p, grads, params)\n" else "") ++
+    "    params = jax.tree.map(lambda p, g: p - lr * g, params, grads)\n" ++
     "    return params, loss\n\n") ++
   "@jit\n" ++
   "def eval_batch(params, x, y):\n" ++
@@ -441,26 +451,50 @@ private def emitMain (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind) (da
   "    test_labels = jnp.array(test_labels)\n\n"
   else
   "    # Data stays on CPU; batches transferred to GPU on the fly\n\n") ++
+  let warmup := toString cfg.warmupEpochs
+  let hasCosine := cfg.cosineDecay
   "    t0 = time.time()\n" ++
   "    for epoch in range(EPOCHS):\n" ++
+  (if hasCosine then
+  "        # Cosine LR schedule" ++ (if cfg.warmupEpochs > 0 then " with warmup" else "") ++ "\n" ++
+  (if cfg.warmupEpochs > 0 then
+  "        if epoch < " ++ warmup ++ ":\n" ++
+  "            lr = jnp.float32(LR * (epoch + 1) / " ++ warmup ++ ")\n" ++
+  "        else:\n" ++
+  "            lr = jnp.float32(LR * 0.5 * (1 + np.cos(np.pi * (epoch - " ++ warmup ++ ") / (EPOCHS - " ++ warmup ++ "))))\n"
+  else
+  "        lr = jnp.float32(LR * 0.5 * (1 + np.cos(np.pi * epoch / EPOCHS)))\n")
+  else
+  "        lr = jnp.float32(LR)\n") ++
   "        perm = rng.permutation(len(train_images))\n" ++
   "        shuf_images = train_images[perm]\n" ++
   "        shuf_labels = train_labels[perm]\n" ++
+  let ic := match spec.layers.head? with
+    | some (.conv2d ic ..) => ic | some (.convBn ic ..) => ic | _ => 3
+  (if ¬preStage then  -- large images: random horizontal flip
+  "        # Random horizontal flip (data augmentation)\n" ++
+  "        flip = rng.random(len(shuf_images)) > 0.5\n" ++
+  "        imgs4d = shuf_images.reshape(-1, " ++ toString ic ++ ", " ++
+    toString spec.imageH ++ ", " ++ toString spec.imageW ++ ")\n" ++
+  "        imgs4d[flip] = imgs4d[flip, :, :, ::-1]\n" ++
+  "        shuf_images = imgs4d.reshape(len(shuf_images), -1)\n"
+  else "") ++
   "        epoch_loss = 0.0\n" ++
   "        n_batches = 0\n" ++
   "        for i in range(0, len(train_images) - BATCH_SIZE + 1, BATCH_SIZE):\n" ++
   "            x = jax.device_put(shuf_images[i:i+BATCH_SIZE], data_sharding)\n" ++
   "            y = jax.device_put(shuf_labels[i:i+BATCH_SIZE], data_sharding)\n" ++
   (if hasMomentum then
-  "            params, velocity, loss = train_step(params, velocity, x, y)\n"
+  "            params, velocity, loss = train_step(params, velocity, x, y, lr)\n"
   else
-  "            params, loss = train_step(params, x, y)\n") ++
+  "            params, loss = train_step(params, x, y, lr)\n") ++
   "            epoch_loss += float(loss)\n" ++
   "            n_batches += 1\n\n" ++
   "        correct, total, test_loss = evaluate(params, test_images, test_labels)\n" ++
   "        accuracy = correct / total\n" ++
   "        elapsed = time.time() - t0\n" ++
-  "        print(\"[Epoch \" + str(epoch+1) + \"] Accuracy: \" + str(correct) + \"/\" + str(total) +\n" ++
+  "        print(\"[Epoch \" + str(epoch+1) + \"] lr=\" + str(round(float(lr), 6)) +\n" ++
+  "              \" Accuracy: \" + str(correct) + \"/\" + str(total) +\n" ++
   "              \" (\" + str(round(accuracy, 4)) + \") Loss: \" + str(round(test_loss, 4)) +\n" ++
   "              \"  [\" + str(round(elapsed, 1)) + \"s]\")\n\n" ++
   "    print(\"\")\n" ++
