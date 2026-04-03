@@ -23,13 +23,13 @@ def mobilenetV2 : NetSpec where
   ]
 
 def mobilenetV2Config : TrainConfig where
-  learningRate := 0.005
+  learningRate := 0.001
   batchSize    := 192
   epochs       := 50
-  momentum     := 0.9
+  useAdam      := true
   weightDecay  := 0.0001
   cosineDecay  := true
-  warmupEpochs := 5
+  warmupEpochs := 3
 
 def main (args : List String) : IO Unit :=
   runJax mobilenetV2 mobilenetV2Config .imagenette

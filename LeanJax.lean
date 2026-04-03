@@ -46,6 +46,7 @@ structure TrainConfig where
   epochs       : Nat
   seed         : Nat := 314159
   momentum     : Float := 0.0
+  useAdam      : Bool := false
   weightDecay  : Float := 0.0
   cosineDecay  : Bool := false
   warmupEpochs : Nat := 0
@@ -544,17 +545,32 @@ private def emitLossAndTraining (spec : NetSpec) (cfg : TrainConfig) : String :=
   "    log_probs = jax.nn.log_softmax(logits, axis=-1)\n" ++
   "    one_hot = jax.nn.one_hot(y, " ++ toString nClasses ++ ")\n" ++
   "    return -jnp.mean(jnp.sum(log_probs * one_hot, axis=-1))\n\n" ++
+  let useAdam := cfg.useAdam
+  let optName := if useAdam then "Adam" else "SGD" ++ (if hasMomentum then " + momentum" else "")
   "# ═══════════════════════════════════════════════════════════════════════\n" ++
-  "#  Training  (SGD" ++ (if hasMomentum then " + momentum" else "") ++
+  "#  Training  (" ++ optName ++
     (if hasCosine then " + cosine LR" else "") ++ ")\n" ++
   "# ═══════════════════════════════════════════════════════════════════════\n\n" ++
   let hasWD := cfg.weightDecay > 0.0
   let wd := toString cfg.weightDecay
   "LR = " ++ lr ++ "\n" ++
-  (if hasMomentum then "MOMENTUM = " ++ toString cfg.momentum ++ "\n" else "") ++
+  (if hasMomentum && !useAdam then "MOMENTUM = " ++ toString cfg.momentum ++ "\n" else "") ++
   (if hasWD then "WD = " ++ wd ++ "\n" else "") ++
   "\n" ++
-  (if hasMomentum then
+  (if useAdam then
+    "@jit\n" ++
+    "def train_step(params, opt_state, x, y, lr):\n" ++
+    "    loss, grads = value_and_grad(loss_fn)(params, x, y)\n" ++
+    (if hasWD then "    grads = jax.tree.map(lambda g, p: g + WD * p, grads, params)\n" else "") ++
+    "    m, v, t = opt_state\n" ++
+    "    t = t + 1\n" ++
+    "    m = jax.tree.map(lambda mi, g: 0.9 * mi + 0.1 * g, m, grads)\n" ++
+    "    v = jax.tree.map(lambda vi, g: 0.999 * vi + 0.001 * g * g, v, grads)\n" ++
+    "    mc = jax.tree.map(lambda mi: mi / (1 - 0.9 ** t), m)\n" ++
+    "    vc = jax.tree.map(lambda vi: vi / (1 - 0.999 ** t), v)\n" ++
+    "    params = jax.tree.map(lambda p, mi, vi: p - lr * mi / (jnp.sqrt(vi) + 1e-8), params, mc, vc)\n" ++
+    "    return params, (m, v, t), loss\n\n"
+  else if hasMomentum then
     "@jit\n" ++
     "def train_step(params, velocity, x, y, lr):\n" ++
     "    loss, grads = value_and_grad(loss_fn)(params, x, y)\n" ++
@@ -642,7 +658,13 @@ private def emitMain (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind) (da
   "    params = init_params(random.PRNGKey(" ++ seed ++ "))\n" ++
   "    params = jax.device_put(params, replicated_sharding)\n" ++
   "    rng = np.random.RandomState(42)\n" ++
-  (if hasMomentum then "    velocity = jax.tree.map(jnp.zeros_like, params)\n" else "") ++
+  let useAdam := cfg.useAdam
+  (if useAdam then
+    "    opt_m = jax.tree.map(jnp.zeros_like, params)\n" ++
+    "    opt_v = jax.tree.map(jnp.zeros_like, params)\n" ++
+    "    opt_state = (opt_m, opt_v, jnp.float32(0))\n"
+  else if hasMomentum then "    velocity = jax.tree.map(jnp.zeros_like, params)\n"
+  else "") ++
   "\n" ++
   (if preStage then
   "    # Pre-stage all data as JAX arrays (one transfer, not per-batch)\n" ++
@@ -685,7 +707,9 @@ private def emitMain (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind) (da
   "        for i in range(0, len(train_images) - BATCH_SIZE + 1, BATCH_SIZE):\n" ++
   "            x = jax.device_put(shuf_images[i:i+BATCH_SIZE], data_sharding)\n" ++
   "            y = jax.device_put(shuf_labels[i:i+BATCH_SIZE], data_sharding)\n" ++
-  (if hasMomentum then
+  (if useAdam then
+  "            params, opt_state, loss = train_step(params, opt_state, x, y, lr)\n"
+  else if hasMomentum then
   "            params, velocity, loss = train_step(params, velocity, x, y, lr)\n"
   else
   "            params, loss = train_step(params, x, y, lr)\n") ++
