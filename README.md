@@ -224,6 +224,32 @@ Lean → JAX gives you:
 Compare: the Lean CNN backward pass is ~100 lines of hand-written gradient code.
 The JAX version: zero — `value_and_grad(loss_fn)` does it all.
 
+## Differences from the S4TF book
+
+All 11 architectures are **structurally identical** to the Swift for TensorFlow
+implementations — same layer configs, same channel counts. The training recipes
+differ due to multi-GPU batching and optimizer discoveries:
+
+| Model | Book config | Our config | Why |
+|-------|------------|------------|-----|
+| MNIST MLP | SGD 0.1, bs=128, 12ep | Same | Exact match |
+| MNIST CNN | SGD 0.1 | SGD 0.01 | LR tuned for stability |
+| CIFAR-10 | SGD 0.1, 12ep | SGD 0.01, 25ep | LR tuned, more epochs |
+| ResNet-34/50 | SGD 0.002, mom=0.9, bs=32 | SGD 0.02, bs=192 + cosine/warmup/WD | Linear LR scaling for 6× batch |
+| MobileNets | SGD 0.002, mom=0.9 | Adam 0.001 + cosine/WD | SGD can't converge without skip connections |
+| EfficientNet | SGD 0.002, mom=0.9 | Adam 0.001 + cosine/WD | Same — depthwise convs need adaptive LR |
+| SqueezeNet | SGD 0.0001, bs=128, 100ep | Adam 0.001, bs=192, 50ep | Adam converges in half the epochs |
+| VGG-16 | SGD 0.002, bs=32, 10ep, no BN | Adam 0.001, bs=192, 50ep, +BN, GAP | Added BN + GAP (14.7M vs ~134M params) |
+
+**Other differences:**
+- **Normalization** — book uses batch norm with running stats (per-sample forward).
+  We use instance norm (spatial stats only) — batch norm diverged with multi-GPU sharding
+- **Book processes one image at a time** with gradient accumulation over the batch.
+  We do true batched forward/backward across 6 GPUs
+- **We add** cosine LR decay, linear warmup, weight decay, random horizontal flip —
+  none of which are in the book
+- **Book adds** dropout (MobileNet v1) and running BN stats for eval — we don't
+
 ## Supported layer types
 
 | Layer | Description |
