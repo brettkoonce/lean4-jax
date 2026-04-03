@@ -19,15 +19,15 @@ def resnet50 : NetSpec where
     .dense 2048 10 .identity
   ]
 
--- Same recipe as ResNet-34, scaled for bottleneck
+-- Adam + zero-init residual for bottleneck training
 def resnet50Config : TrainConfig where
-  learningRate := 0.01
+  learningRate := 0.001
   batchSize    := 192
   epochs       := 80
-  momentum     := 0.9
+  useAdam      := true
   weightDecay  := 0.0001
   cosineDecay  := true
-  warmupEpochs := 10
+  warmupEpochs := 3
 
 def main (args : List String) : IO Unit :=
   runJax resnet50 resnet50Config .imagenette
