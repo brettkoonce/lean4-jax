@@ -12,11 +12,13 @@ Replicating the models from [Convolutional Neural Networks with Swift for Tensor
 | MNIST MLP (Ch.1) | `MainMlp.lean` | 670K | 97.9% | 7.5s | SGD |
 | MNIST CNN (Ch.2) | `MainCnn.lean` | 3.5M | 97.6% | 23s | SGD |
 | CIFAR-10 CNN (Ch.3) | `MainCifar.lean` | 2.4M | 63.3% | 53s | SGD |
-| ResNet-34 | `MainResnet.lean` | 21.3M | 72.8% | 17 min | SGD+momentum |
-| ResNet-50 | `MainResnet50.lean` | 23.5M | 61.2% | 31 min | SGD+momentum |
+| SqueezeNet v1.1 | `MainSqueezeNet.lean` | 730K | 66.3% | 13 min | Adam |
 | MobileNet v1 | `MainMobilenet.lean` | 3.2M | 52.4% | 15 min | Adam |
 | MobileNet v2 | `MainMobilenetV2.lean` | 2.2M | 59.4% | 15 min | Adam |
+| MobileNet v3-Large | `MainMobilenetV3.lean` | 3.0M | 52.4% | 14 min | Adam |
 | EfficientNet-B0 | `MainEfficientNet.lean` | 7.2M | 55.9% | 16 min | Adam |
+| ResNet-34 | `MainResnet.lean` | 21.3M | 72.8% | 17 min | SGD+momentum |
+| ResNet-50 | `MainResnet50.lean` | 23.5M | 61.2% | 31 min | SGD+momentum |
 
 ## Lean specs
 
@@ -143,6 +145,8 @@ lake build mnist-mlp mnist-cnn cifar-cnn resnet34 resnet50 mobilenet-v1 mobilene
 .lake/build/bin/mobilenet-v1    # 15 min on 6× GPU
 .lake/build/bin/mobilenet-v2    # 15 min on 6× GPU
 .lake/build/bin/efficientnet-b0 # 16 min on 6× GPU
+.lake/build/bin/mobilenet-v3    # 14 min on 6× GPU
+.lake/build/bin/squeezenet      # 13 min on 6× GPU
 
 # Custom data dir
 .lake/build/bin/mnist-mlp /path/to/data
@@ -161,7 +165,9 @@ MainResnet50.lean    ResNet-50 spec (bottleneck blocks)
 MainMobilenet.lean   MobileNet v1 spec (depthwise separable)
 MainMobilenetV2.lean MobileNet v2 spec (inverted residuals)
 MainEfficientNet.lean EfficientNet-B0 spec (MBConv + SE + Swish)
-lakefile.lean        Build config (8 executables, 1 library)
+MainMobilenetV3.lean MobileNet v3-Large spec (hard-swish, hard-sigmoid SE)
+MainSqueezeNet.lean  SqueezeNet v1.1 spec (Fire modules)
+lakefile.lean        Build config (10 executables, 1 library)
 ```
 
 ## How it works
