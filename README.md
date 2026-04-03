@@ -7,12 +7,15 @@ Replicating the models from [Convolutional Neural Networks with Swift for Tensor
 
 ## Models
 
-| Model | File | Architecture | Params | Accuracy | Time (CPU) | Time (6× 4060 Ti) |
-|-------|------|-------------|--------|----------|------------|-------------------|
-| MNIST MLP (Ch.1) | `MainMlp.lean` | 784→512→512→10 | 670K | 97.9% | 7.5s | 7.5s |
-| MNIST CNN (Ch.2) | `MainCnn.lean` | Conv²→Pool→Dense³ | 3.5M | 97.6% | 6.7 min | 23s |
-| CIFAR-10 CNN (Ch.3) | `MainCifar.lean` | Conv²→Pool→Conv²→Pool→Dense³ | 2.4M | 63.3% | 31 min | 53s |
-| ResNet-34 (Ch.4) | `MainResnet.lean` | Conv7/2→Res16→GAP→Dense | 21.3M | 68.4% | ~2 hrs | 10 min |
+| Model | File | Params | Accuracy | GPU time | Optimizer |
+|-------|------|--------|----------|---------|-----------|
+| MNIST MLP (Ch.1) | `MainMlp.lean` | 670K | 97.9% | 7.5s | SGD |
+| MNIST CNN (Ch.2) | `MainCnn.lean` | 3.5M | 97.6% | 23s | SGD |
+| CIFAR-10 CNN (Ch.3) | `MainCifar.lean` | 2.4M | 63.3% | 53s | SGD |
+| ResNet-34 | `MainResnet.lean` | 21.3M | 72.8% | 17 min | SGD+momentum |
+| ResNet-50 | `MainResnet50.lean` | 23.5M | 61.2% | 31 min | SGD+momentum |
+| MobileNet v1 | `MainMobilenet.lean` | 3.2M | 52.4% | 15 min | Adam |
+| MobileNet v2 | `MainMobilenetV2.lean` | 2.2M | 59.4% | 15 min | Adam |
 
 ## Lean specs
 
@@ -57,7 +60,7 @@ def cifarCnn : NetSpec where
     .dense  512  10 .identity
   ]
 
--- ResNet-34 (S4TF book Ch. 4)
+-- ResNet-34
 def resnet34 : NetSpec where
   name := "ResNet-34"
   imageH := 224
@@ -71,6 +74,25 @@ def resnet34 : NetSpec where
     .residualBlock 256 512 3 2,
     .globalAvgPool,
     .dense 512 10 .identity
+  ]
+
+-- MobileNet v2 — 2.2M params, inverted residuals
+def mobilenetV2 : NetSpec where
+  name := "MobileNet v2"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .convBn 3 32 3 2 .same,
+    .invertedResidual  32  16 1 1 1,
+    .invertedResidual  16  24 6 2 2,
+    .invertedResidual  24  32 6 2 3,
+    .invertedResidual  32  64 6 2 4,
+    .invertedResidual  64  96 6 1 3,
+    .invertedResidual  96 160 6 2 3,
+    .invertedResidual 160 320 6 1 1,
+    .convBn 320 1280 1 1 .same,
+    .globalAvgPool,
+    .dense 1280 10 .identity
   ]
 ```
 
@@ -110,19 +132,15 @@ cd ../lean4-jax
 ### 4. Build and run
 
 ```bash
-lake build mnist-mlp mnist-cnn cifar-cnn resnet34
+lake build mnist-mlp mnist-cnn cifar-cnn resnet34 resnet50 mobilenet-v1 mobilenet-v2
 
-# MLP — ~8 seconds
-.lake/build/bin/mnist-mlp
-
-# MNIST CNN — ~7 minutes (23s on GPU)
-.lake/build/bin/mnist-cnn
-
-# CIFAR-10 CNN — ~31 minutes (53s on GPU)
-.lake/build/bin/cifar-cnn
-
-# ResNet-34 on Imagenette — ~10 minutes on 6× GPU
-.lake/build/bin/resnet34
+.lake/build/bin/mnist-mlp       # 7.5s
+.lake/build/bin/mnist-cnn       # 23s on GPU
+.lake/build/bin/cifar-cnn       # 53s on GPU
+.lake/build/bin/resnet34        # 17 min on 6× GPU
+.lake/build/bin/resnet50        # 31 min on 6× GPU
+.lake/build/bin/mobilenet-v1    # 15 min on 6× GPU
+.lake/build/bin/mobilenet-v2    # 15 min on 6× GPU
 
 # Custom data dir
 .lake/build/bin/mnist-mlp /path/to/data
@@ -132,12 +150,15 @@ lake build mnist-mlp mnist-cnn cifar-cnn resnet34
 ## Project structure
 
 ```
-LeanJax.lean      Shared types (Layer, NetSpec, TrainConfig, DatasetKind) + JAX codegen + runner
-MainMlp.lean      MNIST MLP spec + main  (5 lines)
-MainCnn.lean      MNIST CNN spec + main  (10 lines)
-MainCifar.lean    CIFAR-10 CNN spec + main  (15 lines)
-MainResnet.lean   ResNet-34 spec + main  (20 lines)
-lakefile.lean     Build config (4 executables, 1 library)
+LeanJax.lean         Types + JAX codegen + runner (~600 lines)
+MainMlp.lean         MNIST MLP spec
+MainCnn.lean         MNIST CNN spec
+MainCifar.lean       CIFAR-10 CNN spec
+MainResnet.lean      ResNet-34 spec
+MainResnet50.lean    ResNet-50 spec (bottleneck blocks)
+MainMobilenet.lean   MobileNet v1 spec (depthwise separable)
+MainMobilenetV2.lean MobileNet v2 spec (inverted residuals)
+lakefile.lean        Build config (7 executables, 1 library)
 ```
 
 ## How it works
