@@ -20,13 +20,13 @@ def resnet34 : NetSpec where
   ]
 
 def resnetConfig : TrainConfig where
-  learningRate := 0.02
+  learningRate := 0.001
   batchSize    := 192
-  epochs       := 50
-  momentum     := 0.9
+  epochs       := 80
+  useAdam      := true
   weightDecay  := 0.0001
   cosineDecay  := true
-  warmupEpochs := 5
+  warmupEpochs := 3
 
 def main (args : List String) : IO Unit :=
   runJax resnet34 resnetConfig .imagenette
