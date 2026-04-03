@@ -19,7 +19,7 @@ def vitConfig : TrainConfig where
   batchSize    := 192
   epochs       := 80
   useAdam      := true
-  weightDecay  := 0.0001
+  weightDecay  := 0.01
   cosineDecay  := true
   warmupEpochs := 5
 
