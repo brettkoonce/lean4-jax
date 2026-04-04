@@ -57,6 +57,7 @@ structure TrainConfig where
   weightDecay  : Float := 0.0
   cosineDecay  : Bool := false
   warmupEpochs : Nat := 0
+  augment      : Bool := false
 deriving Repr
 
 inductive DatasetKind where
@@ -1095,6 +1096,23 @@ private def emitLossAndTraining (spec : NetSpec) (cfg : TrainConfig) : String :=
   "    log_probs = jax.nn.log_softmax(logits, axis=-1)\n" ++
   "    one_hot = jax.nn.one_hot(y, " ++ toString nClasses ++ ")\n" ++
   "    return -jnp.mean(jnp.sum(log_probs * one_hot, axis=-1))\n\n" ++
+  let ic := match spec.layers.head? with
+    | some (.conv2d ic ..) => ic | some (.convBn ic ..) => ic
+    | some (.patchEmbed ic ..) => ic | _ => 3
+  (if cfg.augment && spec.imageH > 32 then
+    let pad := 14  -- pad each side by 14 pixels (224→252)
+    let padded := spec.imageH + 2 * pad
+    "def augment_batch(x, rng):\n" ++
+    "    \"\"\"Random crop (numpy, CPU): pad " ++ toString spec.imageH ++ "→" ++ toString padded ++
+      ", crop back to " ++ toString spec.imageH ++ "x" ++ toString spec.imageW ++ ".\"\"\"\n" ++
+    "    x = x.reshape(-1, " ++ toString ic ++ ", " ++ toString spec.imageH ++ ", " ++ toString spec.imageW ++ ")\n" ++
+    "    x = np.pad(x, ((0,0), (0,0), (" ++ toString pad ++ "," ++ toString pad ++
+      "), (" ++ toString pad ++ "," ++ toString pad ++ ")))\n" ++
+    "    top = rng.randint(0, " ++ toString (2 * pad + 1) ++ ")\n" ++
+    "    left = rng.randint(0, " ++ toString (2 * pad + 1) ++ ")\n" ++
+    "    x = x[:, :, top:top+" ++ toString spec.imageH ++ ", left:left+" ++ toString spec.imageW ++ "]\n" ++
+    "    return x.reshape(x.shape[0], -1)\n\n"
+  else "") ++
   let useAdam := cfg.useAdam
   let optName := if useAdam then "Adam" else "SGD" ++ (if hasMomentum then " + momentum" else "")
   "# ═══════════════════════════════════════════════════════════════════════\n" ++
@@ -1255,7 +1273,11 @@ private def emitMain (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind) (da
   "        epoch_loss = 0.0\n" ++
   "        n_batches = 0\n" ++
   "        for i in range(0, len(train_images) - BATCH_SIZE + 1, BATCH_SIZE):\n" ++
-  "            x = jax.device_put(shuf_images[i:i+BATCH_SIZE], data_sharding)\n" ++
+  (if cfg.augment && spec.imageH > 32 then
+  "            batch = augment_batch(shuf_images[i:i+BATCH_SIZE].copy(), rng)\n" ++
+  "            x = jax.device_put(batch, data_sharding)\n"
+  else
+  "            x = jax.device_put(shuf_images[i:i+BATCH_SIZE], data_sharding)\n") ++
   "            y = jax.device_put(shuf_labels[i:i+BATCH_SIZE], data_sharding)\n" ++
   (if useAdam then
   "            params, opt_state, loss = train_step(params, opt_state, x, y, lr)\n"
