@@ -24,6 +24,8 @@ def vitConfig : TrainConfig where
   warmupEpochs := 5
   augment      := true
 
+#eval vitTiny.validate!
+
 def main (args : List String) : IO Unit :=
   runJax vitTiny vitConfig .imagenette
     (args.head? |>.getD "data/imagenette")

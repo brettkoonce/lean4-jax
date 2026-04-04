@@ -20,5 +20,7 @@ def cnnConfig : TrainConfig where
   batchSize    := 128
   epochs       := 12
 
+#eval mnistCnn.validate!
+
 def main (args : List String) : IO Unit :=
   runJax mnistCnn cnnConfig .mnist (args.head? |>.getD "data") "generated_mnist_cnn.py"

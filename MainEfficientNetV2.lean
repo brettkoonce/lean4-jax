@@ -31,6 +31,8 @@ def efficientNetV2Config : TrainConfig where
   warmupEpochs := 5
   augment      := true
 
+#eval efficientNetV2S.validate!
+
 def main (args : List String) : IO Unit :=
   runJax efficientNetV2S efficientNetV2Config .imagenette
     (args.head? |>.getD "data/imagenette")

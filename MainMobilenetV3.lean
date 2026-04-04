@@ -40,6 +40,8 @@ def mobilenetV3Config : TrainConfig where
   warmupEpochs := 5
   augment      := true
 
+#eval mobilenetV3Large.validate!
+
 def main (args : List String) : IO Unit :=
   runJax mobilenetV3Large mobilenetV3Config .imagenette
     (args.head? |>.getD "data/imagenette")

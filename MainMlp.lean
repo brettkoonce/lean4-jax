@@ -16,5 +16,7 @@ def mnistConfig : TrainConfig where
   batchSize    := 128
   epochs       := 12
 
+#eval mnistMlp.validate!
+
 def main (args : List String) : IO Unit :=
   runJax mnistMlp mnistConfig .mnist (args.head? |>.getD "data") "generated_mnist_mlp.py"

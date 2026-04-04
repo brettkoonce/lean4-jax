@@ -30,6 +30,8 @@ def resnet50Config : TrainConfig where
   warmupEpochs := 3
   augment      := true
 
+#eval resnet50.validate!
+
 def main (args : List String) : IO Unit :=
   runJax resnet50 resnet50Config .imagenette
     (args.head? |>.getD "data/imagenette")

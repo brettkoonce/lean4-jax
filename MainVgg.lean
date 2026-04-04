@@ -48,6 +48,8 @@ def vggConfig : TrainConfig where
   warmupEpochs := 3
   augment      := true
 
+#eval vgg16bn.validate!
+
 def main (args : List String) : IO Unit :=
   runJax vgg16bn vggConfig .imagenette
     (args.head? |>.getD "data/imagenette")

@@ -25,5 +25,7 @@ def cifarConfig : TrainConfig where
   batchSize    := 128
   epochs       := 25
 
+#eval cifarCnn.validate!
+
 def main (args : List String) : IO Unit :=
   runJax cifarCnn cifarConfig .cifar10 (args.head? |>.getD "data/cifar-10") "generated_cifar_cnn.py"

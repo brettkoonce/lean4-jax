@@ -36,6 +36,8 @@ def squeezenetConfig : TrainConfig where
   warmupEpochs := 5
   augment      := true
 
+#eval squeezenet.validate!
+
 def main (args : List String) : IO Unit :=
   runJax squeezenet squeezenetConfig .imagenette
     (args.head? |>.getD "data/imagenette")
