@@ -16,6 +16,7 @@ Replicating the models from [Convolutional Neural Networks with Swift for Tensor
 | MobileNet v1 | `MainMobilenet.lean` | 3.2M | 62.8% | 23 min | Adam |
 | MobileNet v2 | `MainMobilenetV2.lean` | 2.2M | 63.4% | 24 min | Adam |
 | MobileNet v3-Large | `MainMobilenetV3.lean` | 3.0M | 62.4% | 22 min | Adam |
+| MobileNet V4-Medium | `MainMobilenetV4.lean` | 4.1M | 64.9% | 22 min | Adam |
 | EfficientNet-B0 | `MainEfficientNet.lean` | 7.2M | 62.7% | 25 min | Adam |
 | EfficientNet V2-S | `MainEfficientNetV2.lean` | 38.2M | 76.0% | 34 min | Adam |
 | **VGG-16-BN** | `MainVgg.lean` | **14.7M** | **86.6%** | **27 min** | Adam |
