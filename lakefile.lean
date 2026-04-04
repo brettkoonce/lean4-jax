@@ -43,3 +43,6 @@ lean_exe «vgg16bn» where
 
 lean_exe «vit-tiny» where
   root := `MainVit
+
+lean_exe «efficientnet-v2s» where
+  root := `MainEfficientNetV2

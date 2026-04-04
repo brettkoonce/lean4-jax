@@ -33,6 +33,7 @@ inductive Layer where
   | invertedResidual (ic oc expand stride nBlocks : Nat)
   | mbConv (ic oc expand kSize stride nBlocks : Nat) (useSE : Bool)
   | mbConvV3 (ic oc expandCh kSize stride : Nat) (useSE useHSwish : Bool)
+  | fusedMbConv (ic oc expand kSize stride nBlocks : Nat) (useSE : Bool)
   | fireModule (ic squeeze expand1x1 expand3x3 : Nat)
   | patchEmbed (ic dim patchSize nPatches : Nat)
   | transformerEncoder (dim heads mlpDim nBlocks : Nat)
@@ -127,6 +128,23 @@ def Layer.nParams : Layer → Nat
       let seP := if useSE then (seMid * expandCh + seMid) + (expandCh * seMid + expandCh) else 0
       let projP := oc * expandCh + 2 * oc
       expandP + dwP + seP + projP
+  | .fusedMbConv ic oc expand k stride n useSE =>
+      -- Fused: single kxk conv (expand) + optional SE + 1x1 project
+      -- When expand=1: kxk conv ic→oc directly, no project
+      -- When expand>1: kxk conv ic→mid, then 1x1 project mid→oc
+      let mid := if expand == 1 then oc else ic * expand
+      let expandP := mid * ic * k * k + 2 * mid
+      let seMid := Nat.max 1 (mid / 4)
+      let seP := if useSE then (seMid * mid + seMid) + (mid * seMid + mid) else 0
+      let projP := if expand == 1 then 0 else (oc * mid + 2 * oc)
+      let firstBlock := expandP + seP + projP
+      let midR := if expand == 1 then oc else oc * expand
+      let expandR := midR * oc * k * k + 2 * midR
+      let seMidR := Nat.max 1 (midR / 4)
+      let seR := if useSE then (seMidR * midR + seMidR) + (midR * seMidR + midR) else 0
+      let projR := if expand == 1 then 0 else (oc * midR + 2 * oc)
+      let restBlock := expandR + seR + projR
+      firstBlock + (n - 1) * restBlock
   | .fireModule ic sq e1 e3 =>
       (sq * ic + 2 * sq) + (e1 * sq + 2 * e1) + (e3 * sq * 9 + 2 * e3)
   | .patchEmbed ic dim p nP =>
@@ -146,13 +164,13 @@ def NetSpec.totalParams (s : NetSpec) : Nat :=
   s.layers.foldl (fun acc l => acc + l.nParams) 0
 
 def NetSpec.hasConv (s : NetSpec) : Bool :=
-  s.layers.any fun | .conv2d .. => true | .convBn .. => true | .residualBlock .. => true | .bottleneckBlock .. => true | .separableConv .. => true | .invertedResidual .. => true | .mbConv .. => true | .mbConvV3 .. => true | .fireModule .. => true | .patchEmbed .. => true | _ => false
+  s.layers.any fun | .conv2d .. => true | .convBn .. => true | .residualBlock .. => true | .bottleneckBlock .. => true | .separableConv .. => true | .invertedResidual .. => true | .mbConv .. => true | .mbConvV3 .. => true | .fusedMbConv .. => true | .fireModule .. => true | .patchEmbed .. => true | _ => false
 
 def NetSpec.hasPool (s : NetSpec) : Bool :=
   s.layers.any fun | .maxPool .. => true | _ => false
 
 def NetSpec.hasBn (s : NetSpec) : Bool :=
-  s.layers.any fun | .convBn .. => true | .residualBlock .. => true | .bottleneckBlock .. => true | .separableConv .. => true | .invertedResidual .. => true | .mbConv .. => true | .mbConvV3 .. => true | .fireModule .. => true | _ => false
+  s.layers.any fun | .convBn .. => true | .residualBlock .. => true | .bottleneckBlock .. => true | .separableConv .. => true | .invertedResidual .. => true | .mbConv .. => true | .mbConvV3 .. => true | .fusedMbConv .. => true | .fireModule .. => true | _ => false
 
 def NetSpec.hasResidual (s : NetSpec) : Bool :=
   s.layers.any fun | .residualBlock .. => true | .bottleneckBlock .. => true | _ => false
@@ -167,7 +185,7 @@ def NetSpec.hasInvertedResidual (s : NetSpec) : Bool :=
   s.layers.any fun | .invertedResidual .. => true | _ => false
 
 def NetSpec.hasMbConv (s : NetSpec) : Bool :=
-  s.layers.any fun | .mbConv .. => true | .mbConvV3 .. => true | _ => false
+  s.layers.any fun | .mbConv .. => true | .mbConvV3 .. => true | .fusedMbConv .. => true | _ => false
 
 def NetSpec.hasGlobalAvgPool (s : NetSpec) : Bool :=
   s.layers.any fun | .globalAvgPool => true | _ => false
@@ -198,6 +216,7 @@ def NetSpec.archStr (s : NetSpec) : String :=
     | .mbConv ic oc e k s n useSE      => s!"MB{n}({ic}→{oc},e{e},k{k},s{s}" ++ (if useSE then ",SE" else "") ++ ")"
     | .mbConvV3 ic oc exp k s useSE hs => s!"V3({ic}→{oc},{exp},k{k},s{s}" ++
         (if useSE then ",SE" else "") ++ (if hs then ",HS" else ",RE") ++ ")"
+    | .fusedMbConv ic oc e k s n useSE => s!"FMB{n}({ic}→{oc},e{e},k{k},s{s}" ++ (if useSE then ",SE" else "") ++ ")"
     | .fireModule ic sq e1 e3 => s!"Fire({ic}→{e1 + e3},sq{sq})"
     | .patchEmbed ic dim p _     => s!"Patch({ic}→{dim},{p}x{p})"
     | .transformerEncoder dim h _ n => s!"Trans({n}x[{h}h,{dim}])")
@@ -444,6 +463,45 @@ private def emitHelpers (spec : NetSpec) : String := Id.run do
       "    var = jnp.var(x, axis=(2, 3), keepdims=True)\n" ++
       "    x = (x - mean) / jnp.sqrt(var + 1e-5)\n" ++
       "    x = x * params[i][1].reshape(1, -1, 1, 1) + params[i][2].reshape(1, -1, 1, 1)\n" ++
+      "    if residual.shape == x.shape and stride == 1:\n" ++
+      "        x = x + residual\n" ++
+      "    return x\n\n" ++
+      "def fused_mbconv_block(params, x, idx, stride, expand, ksize, use_se):\n" ++
+      "    \"\"\"Fused-MBConv: kxk conv (expand) → SE → 1x1 project, with Swish.\"\"\"\n" ++
+      "    residual = x\n" ++
+      "    i = idx\n" ++
+      "    # Fused expand: kxk conv instead of 1x1 + depthwise\n" ++
+      "    pad = ((ksize - 1) // 2, (ksize - 1) // 2)\n" ++
+      "    x = jax.lax.conv_general_dilated(x, params[i][0], (stride,stride), (pad,pad),\n" ++
+      "          dimension_numbers=('NCHW', 'OIHW', 'NCHW'))\n" ++
+      "    mean = jnp.mean(x, axis=(2, 3), keepdims=True)\n" ++
+      "    var = jnp.var(x, axis=(2, 3), keepdims=True)\n" ++
+      "    x = (x - mean) / jnp.sqrt(var + 1e-5)\n" ++
+      "    x = x * params[i][1].reshape(1, -1, 1, 1) + params[i][2].reshape(1, -1, 1, 1)\n" ++
+      "    x = swish(x)\n" ++
+      "    i += 1\n" ++
+      "    # Squeeze-and-Excitation\n" ++
+      "    if use_se:\n" ++
+      "        se = jnp.mean(x, axis=(2, 3), keepdims=True)\n" ++
+      "        se = jax.lax.conv_general_dilated(se, params[i][0], (1,1), 'SAME',\n" ++
+      "              dimension_numbers=('NCHW', 'OIHW', 'NCHW'))\n" ++
+      "        se = se + params[i][1].reshape(1, -1, 1, 1)\n" ++
+      "        se = swish(se)\n" ++
+      "        i += 1\n" ++
+      "        se = jax.lax.conv_general_dilated(se, params[i][0], (1,1), 'SAME',\n" ++
+      "              dimension_numbers=('NCHW', 'OIHW', 'NCHW'))\n" ++
+      "        se = se + params[i][1].reshape(1, -1, 1, 1)\n" ++
+      "        se = jax.nn.sigmoid(se)\n" ++
+      "        x = x * se\n" ++
+      "        i += 1\n" ++
+      "    # Project (linear) — only if expand > 1\n" ++
+      "    if expand > 1:\n" ++
+      "        x = jax.lax.conv_general_dilated(x, params[i][0], (1,1), 'SAME',\n" ++
+      "              dimension_numbers=('NCHW', 'OIHW', 'NCHW'))\n" ++
+      "        mean = jnp.mean(x, axis=(2, 3), keepdims=True)\n" ++
+      "        var = jnp.var(x, axis=(2, 3), keepdims=True)\n" ++
+      "        x = (x - mean) / jnp.sqrt(var + 1e-5)\n" ++
+      "        x = x * params[i][1].reshape(1, -1, 1, 1) + params[i][2].reshape(1, -1, 1, 1)\n" ++
       "    if residual.shape == x.shape and stride == 1:\n" ++
       "        x = x + residual\n" ++
       "    return x\n\n"
@@ -730,6 +788,33 @@ private def emitInitParams (spec : NetSpec) : String := Id.run do
             ", 1, 1), minval=-scale, maxval=scale), jnp.zeros(" ++ toString expandCh ++ ")))\n"
       -- Project
       code := code ++ emitConvBnInit s!"V3 project {expandCh}→{oc}" expandCh oc 1
+    | .fusedMbConv ic oc expand kSize _ n useSE =>
+      let emitFusedBlock (blockIc blockOc : Nat) : String := Id.run do
+        let mid := if expand == 1 then blockOc else blockIc * expand
+        let mut code := ""
+        -- Fused expand: kxk conv
+        code := code ++ emitConvBnInit s!"FMB fused {blockIc}→{mid}, {kSize}x{kSize}" blockIc mid kSize
+        -- SE
+        if useSE then
+          let seMid := Nat.max 1 (mid / 4)
+          code := code ++
+            "    # SE down " ++ toString mid ++ "→" ++ toString seMid ++ "\n" ++
+            "    key, k_ = random.split(key)\n" ++
+            "    scale = jnp.sqrt(6.0 / " ++ toString seMid ++ ")\n" ++
+            "    params.append((random.uniform(k_, (" ++ toString seMid ++ ", " ++ toString mid ++
+              ", 1, 1), minval=-scale, maxval=scale), jnp.zeros(" ++ toString seMid ++ ")))\n" ++
+            "    # SE up " ++ toString seMid ++ "→" ++ toString mid ++ "\n" ++
+            "    key, k_ = random.split(key)\n" ++
+            "    scale = jnp.sqrt(6.0 / " ++ toString mid ++ ")\n" ++
+            "    params.append((random.uniform(k_, (" ++ toString mid ++ ", " ++ toString seMid ++
+              ", 1, 1), minval=-scale, maxval=scale), jnp.zeros(" ++ toString mid ++ ")))\n"
+        -- Project (only if expand > 1)
+        if expand != 1 then
+          code := code ++ emitConvBnInit s!"FMB project {mid}→{blockOc}" mid blockOc 1
+        code
+      code := code ++ emitFusedBlock ic oc
+      for _ in List.range (n - 1) do
+        code := code ++ emitFusedBlock oc oc
     | .fireModule ic sq e1 e3 =>
       code := code ++ emitConvBnInit s!"Fire squeeze {ic}→{sq}" ic sq 1
       code := code ++ emitConvBnInit s!"Fire expand1x1 {sq}→{e1}" sq e1 1
@@ -877,6 +962,18 @@ private def emitForward (spec : NetSpec) : String := Id.run do
         (if useSE then "True" else "False") ++ ", " ++
         (if useHSwish then "True" else "False") ++ ")\n"
       pidx := pidx + nP
+    | .fusedMbConv _ic _oc expand kSize stride n useSE =>
+      let nPerBlock (blockExpand : Nat) (se : Bool) :=
+        1 + (if se then 2 else 0) + (if blockExpand != 1 then 1 else 0)
+      code := code ++ "    x = fused_mbconv_block(params, x, " ++ toString pidx ++ ", " ++
+        toString stride ++ ", " ++ toString expand ++ ", " ++ toString kSize ++ ", " ++
+        (if useSE then "True" else "False") ++ ")\n"
+      pidx := pidx + nPerBlock expand useSE
+      for _ in List.range (n - 1) do
+        code := code ++ "    x = fused_mbconv_block(params, x, " ++ toString pidx ++ ", 1, " ++
+          toString expand ++ ", " ++ toString kSize ++ ", " ++
+          (if useSE then "True" else "False") ++ ")\n"
+        pidx := pidx + nPerBlock expand useSE
     | .fireModule _ _ _ _ =>
       code := code ++ "    x = fire_module(params, x, " ++ toString pidx ++ ")\n"
       pidx := pidx + 3
