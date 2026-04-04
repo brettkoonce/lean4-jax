@@ -28,6 +28,7 @@ def resnet50Config : TrainConfig where
   weightDecay  := 0.0001
   cosineDecay  := true
   warmupEpochs := 3
+  augment      := true
 
 def main (args : List String) : IO Unit :=
   runJax resnet50 resnet50Config .imagenette

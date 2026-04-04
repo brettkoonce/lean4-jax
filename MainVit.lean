@@ -22,6 +22,7 @@ def vitConfig : TrainConfig where
   weightDecay  := 0.01
   cosineDecay  := true
   warmupEpochs := 5
+  augment      := true
 
 def main (args : List String) : IO Unit :=
   runJax vitTiny vitConfig .imagenette

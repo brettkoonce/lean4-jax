@@ -46,6 +46,7 @@ def vggConfig : TrainConfig where
   weightDecay  := 0.0001
   cosineDecay  := true
   warmupEpochs := 3
+  augment      := true
 
 def main (args : List String) : IO Unit :=
   runJax vgg16bn vggConfig .imagenette

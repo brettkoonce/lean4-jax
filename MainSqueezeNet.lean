@@ -34,6 +34,7 @@ def squeezenetConfig : TrainConfig where
   weightDecay  := 0.001
   cosineDecay  := true
   warmupEpochs := 5
+  augment      := true
 
 def main (args : List String) : IO Unit :=
   runJax squeezenet squeezenetConfig .imagenette
