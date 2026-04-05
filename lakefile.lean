@@ -8,6 +8,19 @@ package «lean4-jax» where
 lean_lib «LeanJax» where
   roots := #[`LeanJax]
 
+-- IREE FFI shim: Lean ↔ C bridge for libiree_ffi.so (see ffi/).
+target ireeLeanFfiO pkg : System.FilePath := do
+  let oFile := pkg.buildDir / "ffi" / "iree_lean_ffi.o"
+  let srcJob ← inputTextFile <| pkg.dir / "ffi" / "iree_lean_ffi.c"
+  let weakArgs := #["-I", (← getLeanIncludeDir).toString,
+                    "-I", (pkg.dir / "ffi").toString]
+  let traceArgs := #["-fPIC", "-O2"]
+  buildO oFile srcJob weakArgs traceArgs
+
+extern_lib libireeffi pkg := do
+  let shimO ← fetch <| pkg.target ``ireeLeanFfiO
+  buildStaticLib (pkg.staticLibDir / nameToStaticLib "ireeffi") #[shimO]
+
 lean_exe «mnist-mlp» where
   root := `MainMlp
 
@@ -49,3 +62,35 @@ lean_exe «efficientnet-v2s» where
 
 lean_exe «mobilenet-v4» where
   root := `MainMobilenetV4
+
+lean_exe «mnist-mlp-mlir» where
+  root := `MainMlpMlir
+  moreLinkArgs := #[
+    "-L/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-liree_ffi",
+    "-Wl,-rpath,/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-Wl,--allow-shlib-undefined"]
+
+lean_exe «test-iree» where
+  root := `TestIreeRuntime
+  moreLinkArgs := #[
+    "-L/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-liree_ffi",
+    "-Wl,-rpath,/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-Wl,--allow-shlib-undefined"]
+
+lean_exe «test-train» where
+  root := `TestTrainStep
+  moreLinkArgs := #[
+    "-L/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-liree_ffi",
+    "-Wl,-rpath,/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-Wl,--allow-shlib-undefined"]
+
+lean_exe «mnist-mlp-train» where
+  root := `MainMlpTrain
+  moreLinkArgs := #[
+    "-L/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-liree_ffi",
+    "-Wl,-rpath,/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-Wl,--allow-shlib-undefined"]
