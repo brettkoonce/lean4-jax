@@ -12,4 +12,6 @@ ffi/test_ffi_so
 mlir_poc/*.vmfb
 mlir_poc/inputs/
 mlir_poc/inputs_trained/
+mlir_poc/cnn128/
+mlir_poc/cnn_inputs/
 mlir_poc/__pycache__/

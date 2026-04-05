@@ -246,14 +246,49 @@ The GPU is idle most of the time. Closing the gap:
 Together these should bring us under 2 ms/step (~1 s/epoch), competitive
 with JAX.
 
+## CNN extension (partial)
+
+`MlirCodegen.lean` now handles `.conv2d`, `.maxPool`, and `.flatten` in
+addition to `.dense`. Walks layer list tracking current tensor shape (flat
+or NCHW), emits an input reshape if the first layer is conv, advances a
+param index on each conv/dense layer.
+
+**Smoke test (`mnist_cnn.mlir`, hand-written):** 2 conv + max pool + flatten
++ 3 dense. Compiles for both CPU and CUDA. Matches JAX reference to 1e-6
+(batch 4) and 1e-6 (batch 128) via `mlir_poc/validate_cnn.py`.
+
+**Lean-generated CNN (`MainCnnMlir.lean`):** `NetSpec` → 4704-char MLIR →
+`.vmfb`. Numerical match with JAX at batch 128: **max diff 1.0e-6**.
+
+**CNN forward perf (batch 128, 4060 Ti):** 7.29 ms/call. 29× more compute
+than the MLP forward (0.25 ms), as expected — conv FLOPs dominate.
+
+**CNN *training* is blocked** by an IREE bug in StableHLO→linalg lowering:
+the backward convolutions that JAX autodiff generates have non-standard
+`dim_numbers` like `[f, 0, 1, b]x[i, 0, 1, o]->[0, 1, b, f]`, which IREE's
+pipeline miscompiles to `linalg.conv_2d_nhwc_hwcf` with a malformed
+`strides` attribute. Minimal repro: `jax.grad(sum(conv(x,W)**2))` fails
+to compile with IREE 3.11. This blocks the JAX-bootstrap path (Option B)
+for any convolutional model.
+
+The forced path is **Option A (hand-written VJPs in MLIR)** for CNN.
+That's the next real chunk of work: conv backward (dW and dx), pool backward
+(argmax scatter), plus reusing the existing dense backward. ~400 LOC of
+MLIR-emission pattern, non-trivial but mechanical.
+
+Projected CNN training wall time once backward is written: ~140s for 12
+epochs × 468 batches × ~25 ms/step (compute-bound, unlike MLP which was
+FFI-overhead-bound).
+
 ## What's next
 
-1. **Hand-written VJPs** (Option A of the plan) — replace `jit_train_step.main`
-   with our own MLIR emission from Lean. Diffing against the JAX export as a
-   reference makes this a pure refactor, not research.
-2. **Perf optimizations** above. FFI boundary is the bottleneck, not IREE.
-3. **More architectures.** CNN, ResNet-34, etc. Each needs its layer types
-   added to `MlirCodegen.lean` — conv, pool, norm, residual.
+1. **Hand-written VJPs** for dense + conv + pool — needed for CNN training
+   and now the critical path, not optional.
+2. **Perf optimizations** for MLP — persistent on-device weights,
+   ByteArray FFI variant. Would close the 20× gap vs JAX on MNIST MLP.
+3. **More architectures.** CIFAR-10 CNN is near-free once the above lands
+   (same ops, different dataset loader). ResNet-34 needs `convBn` +
+   instance norm + residual skip — real StableHLO variety.
 
 ## File map
 

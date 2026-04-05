@@ -63,6 +63,9 @@ lean_exe «efficientnet-v2s» where
 lean_exe «mobilenet-v4» where
   root := `MainMobilenetV4
 
+lean_exe «mnist-cnn-mlir» where
+  root := `MainCnnMlir
+
 lean_exe «mnist-mlp-mlir» where
   root := `MainMlpMlir
   moreLinkArgs := #[
