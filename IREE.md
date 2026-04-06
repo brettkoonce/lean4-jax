@@ -1,62 +1,50 @@
 # Lean → MLIR → IREE: What We Built
 
-Notes on the path from "Lean emits JAX Python" to "Lean trains MNIST end-to-end
-via native IREE runtime calls, no Python at runtime." Picks up where
-`Lean_MLIR.md` left off.
+Lean 4 as a specification language for neural network training. Declare
+architecture as a `NetSpec`, auto-generate forward + backward + SGD as
+StableHLO MLIR, compile via IREE, train on GPU. Zero Python at runtime.
 
 ## Results
 
-Three architectures train from scratch in Lean, with hand-written VJPs in
-StableHLO, zero Python at runtime, GPU execution via IREE:
+Three architectures train from scratch in Lean, GPU execution via IREE:
 
-| Model | Params | Epochs | Final metric | Time/epoch | Total |
-|-------|--------|--------|-------------|-----------|-------|
-| MNIST MLP | 670K | 12 | **97.90% acc** | 16s | 3 min |
-| MNIST CNN | 3.5M | 12 | loss 0.046 | 72s | 15 min |
-| CIFAR-10 CNN | 2.4M | 25 | loss 0.668 | 126s | 52 min |
+| Model | Params | Epochs | Final metric | f64 path | f32 path |
+|-------|--------|--------|-------------|----------|----------|
+| MNIST MLP | 670K | 12 | **97.90% acc** | 16s/ep | 14.8s/ep |
+| MNIST CNN | 3.5M | 12 | loss 0.046 | 72s/ep | — |
+| CIFAR-10 CNN | 2.4M | 25 | loss 0.668 | 126s/ep | **58s/ep** |
 
-```
-$ .lake/build/bin/mnist-mlp-train
-Epoch  1: loss=0.364  acc=92.67% (16s)    Epoch 12: loss=0.026  acc=97.90%
+MLP accuracy matches the JAX baseline (97.75%) within training noise.
 
-$ .lake/build/bin/mnist-cnn-train
-Epoch  1: loss=0.392  (78s)               Epoch 12: loss=0.046  (72s)
-
-$ .lake/build/bin/cifar-cnn-train
-Epoch  1: loss=1.908  (129s)              Epoch 25: loss=0.668  (126s)
-```
-
-MLP accuracy matches the JAX baseline (97.75%) within training noise. CNN/CIFAR
-loss curves confirm correct gradients (steady monotonic decrease).
+**VJP codegen:** `MlirCodegen.generateTrainStep` auto-generates the full
+train_step MLIR from a `NetSpec` — forward pass, softmax-CE loss, per-layer
+backward VJPs, and SGD updates. Validated bit-exact against hand-written
+MLIR for both MLP and CNN architectures. No hand-written backward needed
+for any architecture composed of {dense, conv2d, maxPool, flatten}.
 
 ## Architecture
 
 ```
-Lean NetSpec
+Lean NetSpec (e.g. [.conv2d 3 32 3 .same .relu, .maxPool 2 2, .dense 512 10 .identity])
      │
-     ├─► MlirCodegen.generate (Lean, ~200 LOC)
-     │     emits forward.mlir (StableHLO: conv, pool, flatten, dense)
-     │
-     ├─► hand_*_train_step.mlir (hand-written VJPs)
-     │     forward + softmax-CE + per-layer backward + SGD
+     ├─► MlirCodegen.generate         → forward.mlir
+     ├─► MlirCodegen.generateTrainStep → train_step.mlir (forward + VJPs + SGD)
      │
      ▼ iree-compile (pip)
 forward.vmfb  +  train_step.vmfb
      │
      ▼
-Lean training loop (Main*Train.lean)
-     │   - load data (MNIST IDX / CIFAR-10 binary)
-     │   - He-init packed params
-     │   - per batch: IreeSession.trainStepPacked  ────► FFI ──► GPU
-     │   - eval: IreeSession.mlpForward            ────► FFI ──► GPU
+Lean training loop
+     │   - F32.loadIdxImages / F32.cifarBatch (C, instant)
+     │   - F32.heInit (C, instant)
+     │   - per batch: IreeSession.trainStepF32  ────► zero-copy FFI ──► GPU
      ▼
 loss / accuracy
 ```
 
-Two `.vmfb` modules per architecture, one Lean binary. All GPU calls flow
-through `libiree_ffi.so` (1.4 MB, statically-linked IREE runtime + flatcc).
-The generic `trainStepPacked` FFI function works for any architecture via
-packed shape descriptors — no per-model C code needed.
+All tensor data is `ByteArray` (raw float32). Zero f64↔f32 conversion at
+the FFI boundary. GPU calls go through `libiree_ffi.so` (1.4 MB, static
+IREE runtime). Shape descriptors drive the generic FFI — no per-model C code.
 
 ## How we got here
 
@@ -260,7 +248,41 @@ The GPU is idle most of the time. Closing the gap:
 Together these should bring us under 2 ms/step (~1 s/epoch), competitive
 with JAX.
 
-## Hand-written VJPs (Option A)
+## VJP codegen (the S4TF-equivalent)
+
+`MlirCodegen.generateTrainStep` walks a `NetSpec` twice:
+
+1. **Forward pass** — same layer-by-layer emission as `generate`, but saves
+   intermediate SSA names (input, pre-activation, output) per layer into
+   a `FwdRec` array.
+
+2. **Backward pass** — walks the `FwdRec` array in reverse. For each layer,
+   first applies relu backward (if applicable), then emits dW/db/d_input
+   using the saved forward intermediates. The gradient SSA name threads
+   through from layer to layer.
+
+Each `Layer` variant has matched forward + backward emission:
+
+| Layer | Forward | Backward dW | Backward dx |
+|-------|---------|-------------|-------------|
+| `.dense` | `dot_general` + bias + relu | `input.T @ grad` | `grad @ W.T` |
+| `.conv2d` | `stablehlo.convolution` + bias + relu | transpose trick (see below) | reverse+transpose kernel conv |
+| `.maxPool` | `reduce_window` (max) | `select_and_scatter` | — |
+| `.flatten` | `reshape` | `reshape` (reverse) | — |
+
+Loss: softmax-CE with one-hot via `iota` + `compare` + `select`.
+SGD: `W_new = W - lr * dW` per param.
+
+**Validated bit-exact** against hand-written MLIR for both MLP (7 outputs
+at 0.0 diff) and CNN (10/11 at 0.0, W1 at 1.4e-4 fp32 accumulation noise).
+
+This is the practical equivalent of S4TF's `@differentiable` but without
+a compiler fork: pre-defined per-layer VJPs composed automatically from
+the `NetSpec` DSL. Adding a new layer type requires implementing its
+forward + backward emission (~50 LOC each), then it works for any architecture
+that uses it.
+
+## Hand-written VJPs (historical, now superseded by codegen)
 
 JAX-bootstrap (Option B) was the initial plan for training, but IREE 3.11
 has a bug in StableHLO→linalg lowering: `jax.grad` of conv layers produces
@@ -371,17 +393,29 @@ reaches 63.3% accuracy; our loss curve is consistent with that range.
 **CNN/CIFAR are Lean-overhead-bound** — the per-batch FloatArray construction
 (393K pushes for CIFAR) + f64→f32 conversion of 2.4M params dominates.
 
-### Optimization path
+### F32 optimization (done)
+
+Switching from `FloatArray` (Float64) to `ByteArray` (raw float32) storage
+eliminated the f64↔f32 conversion bottleneck:
+
+| Model | f64 path | f32 path | Speedup |
+|---|---|---|---|
+| MNIST MLP (670K params) | 16s/ep | 14.8s/ep | 1.08× |
+| CIFAR-10 CNN (2.4M params) | 126s/ep | **58s/ep** | **2.2×** |
+
+Data loading also moved to C (`F32.loadIdxImages`, `F32.cifarBatch`):
+instant (<100ms) vs ~5 min with Lean-level FloatArray.push.
+
+### Remaining optimization path
 
 | Fix | Effort | Impact |
 |---|---|---|
-| ByteArray storage (raw f32, skip f64 conversion) | 2 hours | ~3× on param-heavy models |
-| Pre-sliced batch views | 1 hour | ~2× on CIFAR (kills 393K pushes/batch) |
-| Persistent on-device params | 4 hours | ~5× (kills host↔device transfer) |
-| All three combined | 1 day | ~10× → competitive with JAX |
+| Persistent on-device params | 4 hours | ~3× (kills host↔device transfer) |
+| Pre-allocated batch buffers | 1 hour | ~1.5× (reuse ByteArray per batch) |
+| All combined | 1 day | ~5× → competitive with JAX on 1 GPU |
 
 Multi-GPU only matters once the per-step overhead is under ~5ms. Currently
-the GPU is idle 85-95% of the time; adding GPUs just adds more idle GPUs.
+the GPU is idle 80-90% of the time; adding GPUs just adds more idle GPUs.
 
 ## IREE bugs encountered
 
@@ -398,12 +432,15 @@ the GPU is idle 85-95% of the time; adding GPUs just adds more idle GPUs.
 
 1. **Test-set eval for CNN/CIFAR** — wire up forward-only inference for
    accuracy measurement (currently loss-only).
-2. **Perf optimizations** — ByteArray storage + persistent device buffers
-   to close the gap with JAX.
+2. **Persistent device buffers** — keep params on GPU across steps, ship
+   only batch data per step. Would close most of the remaining perf gap.
 3. **ResNet-34 on Imagenette** — needs `convBn` (instance norm), residual
-   skip connections, bottleneck blocks. The real architectural stress test.
-4. **Codegen for backward** — move hand-written VJPs into `MlirCodegen.lean`
-   so new architectures get backward emission automatically.
+   skip connections, strided convolutions. Add forward+backward emission
+   per layer type (~50 LOC each), then `generateTrainStep resnet34 128`
+   auto-generates the full train_step.
+4. **Codegen-only training loop** — replace hand-written train_step .mlir
+   files with `generateTrainStep` calls in MainCnnTrain/MainCifarTrain.
+   The hand-written files become historical references.
 
 ## File map
 
