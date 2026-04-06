@@ -55,6 +55,25 @@ LEAN_EXPORT size_t lean_f32_argmax10(b_lean_obj_arg ba, size_t off) {
     return best;
 }
 
+// ---- Convert a batch of CIFAR-10 raw records to f32 ByteArray ----
+// Each record is 3073 bytes (1 label + 3072 pixels). Normalizes to [0,1].
+LEAN_EXPORT lean_obj_res lean_f32_cifar_batch(
+    b_lean_obj_arg raw_ba, size_t start, size_t count, lean_obj_arg w) {
+    (void)w;
+    const uint8_t* raw = lean_sarray_cptr(raw_ba);
+    size_t npixels = count * 3072;
+    size_t nbytes = npixels * 4;
+    lean_object* ba = lean_alloc_sarray(1, nbytes, nbytes);
+    float* p = (float*)lean_sarray_cptr(ba);
+    for (size_t i = 0; i < count; i++) {
+        size_t rec_off = (start + i) * 3073;
+        for (size_t j = 0; j < 3072; j++) {
+            p[i * 3072 + j] = (float)raw[rec_off + 1 + j] / 255.0f;
+        }
+    }
+    return lean_io_result_mk_ok(ba);
+}
+
 // ---- Load MNIST IDX images → f32 ByteArray (normalized to [0,1]) ----
 static uint32_t read_be32(const uint8_t* p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |

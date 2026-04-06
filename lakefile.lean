@@ -115,6 +115,14 @@ lean_exe «mnist-mlp-train-f32» where
     "-Wl,-rpath,/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
     "-Wl,--allow-shlib-undefined"]
 
+lean_exe «cifar-cnn-train-f32» where
+  root := `MainCifarTrainF32
+  moreLinkArgs := #[
+    "-L/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-liree_ffi",
+    "-Wl,-rpath,/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-Wl,--allow-shlib-undefined"]
+
 lean_exe «cifar-cnn-train» where
   root := `MainCifarTrain
   moreLinkArgs := #[

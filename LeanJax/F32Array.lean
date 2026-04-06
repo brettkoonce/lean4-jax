@@ -65,4 +65,10 @@ def sliceImages (images : ByteArray) (start count pixelsPerImage : Nat) : ByteAr
 def sliceLabels (labels : ByteArray) (start count : Nat) : ByteArray :=
   labels.extract (start * 4) ((start + count) * 4)
 
+/-- Convert a batch of CIFAR-10 raw records to f32 ByteArray.
+    `raw` is the concatenated batch file bytes (3073 bytes per record).
+    Returns `count × 3072` float32 values normalized to [0,1]. -/
+@[extern "lean_f32_cifar_batch"]
+opaque cifarBatch (raw : @& ByteArray) (start : USize) (count : USize) : IO ByteArray
+
 end F32
