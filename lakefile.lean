@@ -99,6 +99,9 @@ lean_exe «test-train» where
     "-Wl,-rpath,/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
     "-Wl,--allow-shlib-undefined"]
 
+lean_exe «test-codegen-ts» where
+  root := `TestCodegenTrainStep
+
 lean_exe «test-f32» where
   root := `TestF32
   moreLinkArgs := #[
