@@ -277,3 +277,73 @@ LEAN_EXPORT lean_obj_res lean_iree_train_step_packed(
   free(p_out);
   return lean_io_result_mk_ok(result);
 }
+
+// ---- Zero-copy f32 generic train step ----
+// All tensor data is ByteArray (raw float32 bytes). No f64 conversion.
+LEAN_EXPORT lean_obj_res lean_iree_train_step_f32(
+    b_lean_obj_arg sess_obj,
+    b_lean_obj_arg fn_name_obj,
+    b_lean_obj_arg params_ba,
+    b_lean_obj_arg shapes_ba,
+    b_lean_obj_arg x_ba,
+    b_lean_obj_arg x_shape_ba,
+    b_lean_obj_arg y_ba,
+    double lr,
+    size_t batch, lean_obj_arg world) {
+  (void)world;
+  iree_ffi_session_t* sess =
+      (iree_ffi_session_t*)lean_get_external_data(sess_obj);
+  const char* fn_name = lean_string_cstr(fn_name_obj);
+
+  // Parse shapes (same logic as f64 version)
+  const int32_t* sp = (const int32_t*)lean_sarray_cptr(shapes_ba);
+  int n_params = sp[0];
+  int32_t* param_ranks = (int32_t*)malloc(n_params * sizeof(int32_t));
+  size_t max_dims = lean_sarray_size(shapes_ba) / 4;
+  int64_t* param_dims_flat = (int64_t*)malloc(max_dims * sizeof(int64_t));
+  int64_t* param_sizes = (int64_t*)malloc(n_params * sizeof(int64_t));
+  int sp_idx = 1, dims_idx = 0;
+  int64_t total_params = 0;
+  for (int i = 0; i < n_params; i++) {
+    int rank = sp[sp_idx++];
+    param_ranks[i] = rank;
+    int64_t sz = 1;
+    for (int d = 0; d < rank; d++) {
+      param_dims_flat[dims_idx] = (int64_t)sp[sp_idx++];
+      sz *= param_dims_flat[dims_idx];
+      dims_idx++;
+    }
+    param_sizes[i] = sz;
+    total_params += sz;
+  }
+
+  // ZERO COPY: params and x already f32 in ByteArray
+  const float* p_f = (const float*)lean_sarray_cptr(params_ba);
+  const int32_t* xsp = (const int32_t*)lean_sarray_cptr(x_shape_ba);
+  int x_rank = xsp[0];
+  int64_t x_dims[8];
+  for (int i = 0; i < x_rank; i++) x_dims[i] = (int64_t)xsp[1+i];
+  const float* x_f = (const float*)lean_sarray_cptr(x_ba);
+  const int32_t* y_ptr = (const int32_t*)lean_sarray_cptr(y_ba);
+
+  // Allocate output ByteArray directly: (total_params + 1) * 4 bytes
+  size_t n_out_bytes = (total_params + 1) * 4;
+  lean_object* result = lean_alloc_sarray(1, n_out_bytes, n_out_bytes);
+  float* rp = (float*)lean_sarray_cptr(result);
+  float loss_f = 0.0f;
+
+  int rc = iree_ffi_train_step_generic(
+      sess, fn_name, (int)batch,
+      n_params, param_ranks, param_dims_flat, param_sizes,
+      p_f, x_rank, x_dims, x_f, y_ptr, (float)lr,
+      rp, &loss_f);
+
+  free(param_ranks); free(param_dims_flat); free(param_sizes);
+  if (rc != 0) {
+    lean_dec_ref(result);
+    return lean_io_result_mk_error(
+        lean_mk_io_user_error(lean_mk_string("f32 train_step failed")));
+  }
+  rp[total_params] = loss_f;
+  return lean_io_result_mk_ok(result);
+}

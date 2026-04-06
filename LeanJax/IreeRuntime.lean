@@ -51,6 +51,16 @@ opaque trainStepPacked
   (y : @& ByteArray)
   (lr : Float) (batch : USize) : IO FloatArray
 
+/-- Zero-copy f32 train step. All tensors are ByteArray (raw float32 bytes).
+    No Float64↔Float32 conversion at the boundary. -/
+@[extern "lean_iree_train_step_f32"]
+opaque trainStepF32
+  (sess : @& IreeSession) (fnName : @& String)
+  (params : @& ByteArray) (shapes : @& ByteArray)
+  (x : @& ByteArray) (xShape : @& ByteArray)
+  (y : @& ByteArray)
+  (lr : Float) (batch : USize) : IO ByteArray
+
 end IreeSession
 
 /- Sizes for the packed-params layout. -/
@@ -119,3 +129,8 @@ def lossIdx : Nat := nParams
 def shapesBA : ByteArray := packShapes paramShapes
 def xShape (batch : Nat) : ByteArray := packXShape #[batch, 3072]
 end CifarLayout
+
+def MlpLayout.paramShapes : Array (Array Nat) := #[
+  #[784, 512], #[512], #[512, 512], #[512], #[512, 10], #[10]
+]
+def MlpLayout.shapesBA : ByteArray := packShapes MlpLayout.paramShapes

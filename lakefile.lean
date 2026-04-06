@@ -17,9 +17,18 @@ target ireeLeanFfiO pkg : System.FilePath := do
   let traceArgs := #["-fPIC", "-O2"]
   buildO oFile srcJob weakArgs traceArgs
 
+-- F32 ByteArray helpers (He init, argmax, data loading — all in C for speed).
+target f32HelpersO pkg : System.FilePath := do
+  let oFile := pkg.buildDir / "ffi" / "f32_helpers.o"
+  let srcJob ← inputTextFile <| pkg.dir / "ffi" / "f32_helpers.c"
+  let weakArgs := #["-I", (← getLeanIncludeDir).toString]
+  let traceArgs := #["-fPIC", "-O2"]
+  buildO oFile srcJob weakArgs traceArgs
+
 extern_lib libireeffi pkg := do
   let shimO ← fetch <| pkg.target ``ireeLeanFfiO
-  buildStaticLib (pkg.staticLibDir / nameToStaticLib "ireeffi") #[shimO]
+  let f32O  ← fetch <| pkg.target ``f32HelpersO
+  buildStaticLib (pkg.staticLibDir / nameToStaticLib "ireeffi") #[shimO, f32O]
 
 lean_exe «mnist-mlp» where
   root := `MainMlp
@@ -84,6 +93,22 @@ lean_exe «test-iree» where
 
 lean_exe «test-train» where
   root := `TestTrainStep
+  moreLinkArgs := #[
+    "-L/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-liree_ffi",
+    "-Wl,-rpath,/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-Wl,--allow-shlib-undefined"]
+
+lean_exe «test-f32» where
+  root := `TestF32
+  moreLinkArgs := #[
+    "-L/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-liree_ffi",
+    "-Wl,-rpath,/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
+    "-Wl,--allow-shlib-undefined"]
+
+lean_exe «mnist-mlp-train-f32» where
+  root := `MainMlpTrainF32
   moreLinkArgs := #[
     "-L/home/skoonce/lean/klawd_max_power/lean4-jax-mlir/ffi",
     "-liree_ffi",
