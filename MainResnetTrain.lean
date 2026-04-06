@@ -51,7 +51,7 @@ def paramShapes : Array (Array Nat) := Id.run do
     | _ => pure ()
   return shapes
 
--- Full shapes: params + velocity buffers (same shapes)
+-- Full shapes: all param shapes then all velocity shapes (same shapes repeated)
 def allShapes : Array (Array Nat) := paramShapes ++ paramShapes
 def shapesBA : ByteArray := packShapes allShapes
 def nTotal : Nat := 2 * nParams  -- params + velocities

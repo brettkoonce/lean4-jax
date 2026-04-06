@@ -1045,47 +1045,52 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
 
     | _ => pure ()
 
-  -- ═══════════════ SGD UPDATES ═══════════════
-  code := code ++ "\n    // =================== SGD UPDATES ===================\n"
-  let mut retNames : Array String := #[]
-  let mut retTypes : Array String := #[]
-  -- Track which pidx values were already processed (for projection convBns)
+  -- ═══════════════ SGD+MOMENTUM UPDATES ═══════════════
+  code := code ++ "\n    // ================ SGD+MOMENTUM UPDATES ================\n"
+  let mut paramRetNames : Array String := #[]
+  let mut paramRetTypes : Array String := #[]
+  let mut velRetNames : Array String := #[]
+  let mut velRetTypes : Array String := #[]
   let mut processedPidx : Array Nat := #[]
   for r in records do
     match r.pidx with
     | some p =>
       if processedPidx.contains p then
-        pure ()  -- skip already-processed projection records
+        pure ()
       else
         processedPidx := processedPidx.push p
         match r.layer with
         | .conv2d ic oc kSize _ _ =>
-          let wShape := [oc, ic, kSize, kSize]
-          let bShape := [oc]
+          let wShape := [oc, ic, kSize, kSize]; let bShape := [oc]
           let (s1, wN, vwN) := emitMomentumUpdate s!"%W{p}" s!"%d_W{p}" s!"%v_W{p}" wShape s!"cW{p}"
           let (s2, bN, vbN) := emitMomentumUpdate s!"%b{p}" s!"%d_b{p}" s!"%v_b{p}" bShape s!"cb{p}"
           code := code ++ s1 ++ s2
-          retNames := retNames.push wN |>.push bN |>.push vwN |>.push vbN
-          retTypes := retTypes.push (tensorTy wShape) |>.push (tensorTy bShape)
-                                    |>.push (tensorTy wShape) |>.push (tensorTy bShape)
+          paramRetNames := paramRetNames.push wN |>.push bN
+          paramRetTypes := paramRetTypes.push (tensorTy wShape) |>.push (tensorTy bShape)
+          velRetNames := velRetNames.push vwN |>.push vbN
+          velRetTypes := velRetTypes.push (tensorTy wShape) |>.push (tensorTy bShape)
         | .dense fanIn fanOut _ =>
-          let wShape := [fanIn, fanOut]
-          let bShape := [fanOut]
+          let wShape := [fanIn, fanOut]; let bShape := [fanOut]
           let (s1, wN, vwN) := emitMomentumUpdate s!"%W{p}" s!"%d_W{p}" s!"%v_W{p}" wShape s!"dW{p}"
           let (s2, bN, vbN) := emitMomentumUpdate s!"%b{p}" s!"%d_b{p}" s!"%v_b{p}" bShape s!"db{p}"
           code := code ++ s1 ++ s2
-          retNames := retNames.push wN |>.push bN |>.push vwN |>.push vbN
-          retTypes := retTypes.push (tensorTy wShape) |>.push (tensorTy bShape)
-                                    |>.push (tensorTy wShape) |>.push (tensorTy bShape)
+          paramRetNames := paramRetNames.push wN |>.push bN
+          paramRetTypes := paramRetTypes.push (tensorTy wShape) |>.push (tensorTy bShape)
+          velRetNames := velRetNames.push vwN |>.push vbN
+          velRetTypes := velRetTypes.push (tensorTy wShape) |>.push (tensorTy bShape)
         | .convBn ic oc kSize _ _ =>
           let (sgdCode, sgdNames, sgdTypes) := emitConvBnSGD p ic oc kSize
           code := code ++ sgdCode
-          retNames := retNames ++ sgdNames
-          retTypes := retTypes ++ sgdTypes
+          -- convBnSGD returns [wNew, gNew, btNew, vwNew, vgNew, vbtNew]
+          paramRetNames := paramRetNames ++ sgdNames[:3]
+          paramRetTypes := paramRetTypes ++ sgdTypes[:3]
+          velRetNames := velRetNames ++ sgdNames[3:]
+          velRetTypes := velRetTypes ++ sgdTypes[3:]
         | _ => pure ()
     | none => pure ()
-  retNames := retNames.push "%loss"
-  retTypes := retTypes.push "tensor<f32>"
+  -- Return order: all params, then all velocities, then loss (matches input order)
+  let retNames := paramRetNames ++ velRetNames |>.push "%loss"
+  let retTypes := paramRetTypes ++ velRetTypes |>.push "tensor<f32>"
 
   code := code ++ s!"    return {String.intercalate ", " retNames.toList}\n"
   code := code ++ s!"      : {String.intercalate ", " retTypes.toList}\n"
@@ -1097,7 +1102,8 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat) : String := Id.r
   let NC := spec.numClasses
   let inDim := inputFlatDim spec
   let mut params : String := ""
-  let mut retTypes : Array String := #[]
+  let mut paramRetTypes : Array String := #[]
+  let mut velRetTypes : Array String := #[]
   let mut pidx : Nat := 0
   let mut curShape : List Nat := [B, inDim]
   match inputChannels spec with
@@ -1108,7 +1114,8 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat) : String := Id.r
     | .conv2d ic oc kSize _ _ =>
       let wTy := tensorTy [oc, ic, kSize, kSize]; let bTy := tensorTy [oc]
       params := params ++ s!"      %W{pidx}: {wTy}, %b{pidx}: {bTy},\n"
-      retTypes := retTypes.push wTy |>.push bTy |>.push wTy |>.push bTy  -- params + velocities interleaved
+      paramRetTypes := paramRetTypes.push wTy |>.push bTy
+      velRetTypes := velRetTypes.push wTy |>.push bTy
       match curShape with
       | [b, _, h, w] => curShape := [b, oc, h, w]
       | _ => pure ()
@@ -1116,13 +1123,15 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat) : String := Id.r
     | .dense fanIn fanOut _ =>
       let wTy := tensorTy [fanIn, fanOut]; let bTy := tensorTy [fanOut]
       params := params ++ s!"      %W{pidx}: {wTy}, %b{pidx}: {bTy},\n"
-      retTypes := retTypes.push wTy |>.push bTy |>.push wTy |>.push bTy
+      paramRetTypes := paramRetTypes.push wTy |>.push bTy
+      velRetTypes := velRetTypes.push wTy |>.push bTy
       curShape := [B, fanOut]
       pidx := pidx + 1
     | .convBn ic oc kSize stride _ =>
       let wTy := tensorTy [oc, ic, kSize, kSize]; let gTy := tensorTy [oc]
       params := params ++ s!"      %W{pidx}: {wTy}, %g{pidx}: {gTy}, %bt{pidx}: {gTy},\n"
-      retTypes := retTypes.push wTy |>.push gTy |>.push gTy |>.push wTy |>.push gTy |>.push gTy
+      paramRetTypes := paramRetTypes.push wTy |>.push gTy |>.push gTy
+      velRetTypes := velRetTypes.push wTy |>.push gTy |>.push gTy
       match curShape with
       | [b, _, h, w] => curShape := [b, oc, (h + stride - 1) / stride, (w + stride - 1) / stride]
       | _ => pure ()
@@ -1134,16 +1143,19 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat) : String := Id.r
         let blockIc := if bi == 0 then ic else oc
         let wTy1 := tensorTy [oc, blockIc, 3, 3]
         params := params ++ s!"      %W{pidx}: {wTy1}, %g{pidx}: {gTy}, %bt{pidx}: {gTy},\n"
-        retTypes := retTypes.push wTy1 |>.push gTy |>.push gTy |>.push wTy1 |>.push gTy |>.push gTy
+        paramRetTypes := paramRetTypes.push wTy1 |>.push gTy |>.push gTy
+        velRetTypes := velRetTypes.push wTy1 |>.push gTy |>.push gTy
         pidx := pidx + 1
         let wTy2 := tensorTy [oc, oc, 3, 3]
         params := params ++ s!"      %W{pidx}: {wTy2}, %g{pidx}: {gTy}, %bt{pidx}: {gTy},\n"
-        retTypes := retTypes.push wTy2 |>.push gTy |>.push gTy |>.push wTy2 |>.push gTy |>.push gTy
+        paramRetTypes := paramRetTypes.push wTy2 |>.push gTy |>.push gTy
+        velRetTypes := velRetTypes.push wTy2 |>.push gTy |>.push gTy
         pidx := pidx + 1
         if bi == 0 && needsProj then
           let pTy := tensorTy [oc, ic, 1, 1]
           params := params ++ s!"      %W{pidx}: {pTy}, %g{pidx}: {gTy}, %bt{pidx}: {gTy},\n"
-          retTypes := retTypes.push pTy |>.push gTy |>.push gTy |>.push pTy |>.push gTy |>.push gTy
+          paramRetTypes := paramRetTypes.push pTy |>.push gTy |>.push gTy
+          velRetTypes := velRetTypes.push pTy |>.push gTy |>.push gTy
           pidx := pidx + 1
       match curShape with
       | [b, _, h, w] => curShape := [b, oc, (h + firstStride - 1) / firstStride, (w + firstStride - 1) / firstStride]
@@ -1188,7 +1200,7 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat) : String := Id.r
     | _ => pure ()
   params := params ++ s!"      %x_flat: {tensorTy [B, inDim]}, %y: tensor<{B}xi32>,\n"
   params := params ++ "      %lr: tensor<f32>"
-  retTypes := retTypes.push "tensor<f32>"
+  let retTypes := paramRetTypes ++ velRetTypes |>.push "tensor<f32>"
   pure s!"  func.func @main(\n{params}\n    ) -> ({String.intercalate ", " retTypes.toList})"
 
 /-- Generate a full train_step MLIR module with VJPs. -/
