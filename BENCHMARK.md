@@ -53,7 +53,7 @@ Report: ms/step, epoch time, loss curve.
 |---|---|---|---|
 | MNIST MLP (12 ep) | ~7.6s | ~16ms | 0.005 |
 | CIFAR CNN (25 ep) | ~23s | ~60ms | 0.018 |
-| ResNet-34 (80 ep) | ~7.3min | ~720ms | training... |
+| ResNet-34 (80 ep) | ~7.4min | ~720ms | 0.00036 |
 
 ## CUDA results (4060 Ti, CUDA 12.9, IREE 3.12)
 
