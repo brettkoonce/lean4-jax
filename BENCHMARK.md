@@ -64,6 +64,14 @@ Report: ms/step, epoch time, loss curve.
 | CIFAR CNN BN (30 ep) | ~99s | ~254ms | 0.035 |
 | ResNet-34 (80 ep) | ~24min | ~2430ms | 0.005 @ ep23 (stopped) |
 
+## CPU results (Xeon w5-2455X, llvm-cpu backend)
+
+| Model | Epoch time | ms/step | Loss (final) |
+|---|---|---|---|
+| MNIST MLP (12 ep) | ~90s | ~192ms | 0.006 |
+
+Usage: `IREE_BACKEND=llvm-cpu IREE_DEVICE=local-task .lake/build/bin/mnist-mlp-train-f32`
+
 ## Notes
 
 - First step is always slower (JIT warmup)

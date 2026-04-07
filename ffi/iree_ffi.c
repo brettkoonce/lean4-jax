@@ -10,13 +10,14 @@
 
 #ifdef USE_HIP
   #include "iree/hal/drivers/hip/registration/driver_module.h"
-  #define IREE_REGISTER_DRIVER iree_hal_hip_driver_module_register
-  #define IREE_DEVICE_NAME "hip"
+  #define IREE_REGISTER_GPU_DRIVER iree_hal_hip_driver_module_register
+  #define IREE_DEFAULT_DEVICE "hip"
 #else
   #include "iree/hal/drivers/cuda/registration/driver_module.h"
-  #define IREE_REGISTER_DRIVER iree_hal_cuda_driver_module_register
-  #define IREE_DEVICE_NAME "cuda"
+  #define IREE_REGISTER_GPU_DRIVER iree_hal_cuda_driver_module_register
+  #define IREE_DEFAULT_DEVICE "cuda"
 #endif
+#include "iree/hal/drivers/local_task/registration/driver_module.h"
 
 // ---- Opaque session handle ----
 struct iree_ffi_session_t {
@@ -39,13 +40,15 @@ iree_ffi_session_t* iree_ffi_session_create(const char* vmfb_path) {
   iree_ffi_session_t* sess = calloc(1, sizeof(iree_ffi_session_t));
   if (!sess) return NULL;
 
-  // Register GPU driver (idempotent; only the first session does this).
+  // Register drivers (idempotent; only the first session does this).
   static int driver_registered = 0;
   iree_status_t status = iree_ok_status();
   if (!driver_registered) {
-    status = IREE_REGISTER_DRIVER(
+    status = IREE_REGISTER_GPU_DRIVER(
         iree_hal_driver_registry_default());
-    if (!iree_status_is_ok(status)) { print_status("driver_register", status); goto fail; }
+    if (!iree_status_is_ok(status)) { print_status("gpu_driver_register", status); goto fail; }
+    iree_hal_local_task_driver_module_register(
+        iree_hal_driver_registry_default());
     driver_registered = 1;
   }
 
@@ -57,9 +60,11 @@ iree_ffi_session_t* iree_ffi_session_create(const char* vmfb_path) {
                                         iree_allocator_system(), &sess->instance);
   if (!iree_status_is_ok(status)) { print_status("instance_create", status); goto fail; }
 
-  // Create GPU device (first available).
+  // Create device: check IREE_DEVICE env var, default to GPU.
+  const char* device_env = getenv("IREE_DEVICE");
+  const char* device_name = device_env ? device_env : IREE_DEFAULT_DEVICE;
   status = iree_runtime_instance_try_create_default_device(
-      sess->instance, iree_make_cstring_view(IREE_DEVICE_NAME), &sess->device);
+      sess->instance, iree_make_cstring_view(device_name), &sess->device);
   if (!iree_status_is_ok(status)) { print_status("device_create", status); goto fail; }
 
   // Create session.
