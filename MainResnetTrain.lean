@@ -140,7 +140,7 @@ def main (args : List String) : IO Unit := do
   let mut p := params
   let mut v := velocity
   for epoch in [:epochs] do
-    let lr : Float := 0.01 * (1.0 - epoch.toFloat / epochs.toFloat)
+    let lr : Float := 0.002 * (1.0 - epoch.toFloat / epochs.toFloat)
     let mut epochLoss : Float := 0.0
     let t0 ← IO.monoMsNow
     for bi in [:bpE] do
