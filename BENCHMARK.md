@@ -10,7 +10,7 @@ on AMD and NVIDIA hardware. Same codebase, same MLIR, different backends.
 | GPU | Radeon RX 7900 XTX | GeForce RTX 4060 Ti |
 | VRAM | 24 GB | 16 GB |
 | f32 TFLOPS | ~61 | ~22 |
-| Driver | ROCm 7.2 | CUDA (?) |
+| Driver | ROCm 7.2 | CUDA 12.9 |
 | IREE backend | `rocm` / `gfx1100` | `cuda` / `sm_86` |
 
 ## Benchmarks to run
@@ -55,13 +55,14 @@ Report: ms/step, epoch time, loss curve.
 | CIFAR CNN (25 ep) | ~23s | ~60ms | 0.018 |
 | ResNet-34 (80 ep) | ~7.3min | ~720ms | training... |
 
-## CUDA results (4060 Ti)
+## CUDA results (4060 Ti, CUDA 12.9, IREE 3.12)
 
 | Model | Epoch time | ms/step | Loss (final) |
 |---|---|---|---|
-| MNIST MLP (12 ep) | | | |
-| CIFAR CNN (25 ep) | | | |
-| ResNet-34 (80 ep) | | | |
+| MNIST MLP (12 ep) | ~17s | ~36ms | 0.026 |
+| MNIST CNN BN (15 ep) | ~96s | ~205ms | 0.011 |
+| CIFAR CNN BN (30 ep) | ~104s | ~267ms | training... |
+| ResNet-34 (80 ep) | ~24min | ~2430ms | training (0.34 @ ep7) |
 
 ## Notes
 
