@@ -81,4 +81,9 @@ opaque loadImagenette (path : @& String) : IO (ByteArray × ByteArray × Nat)
 opaque shuffle (images : ByteArray) (labels : ByteArray)
     (n : USize) (pixelsPerImage : USize) (seed : USize) : IO (ByteArray × ByteArray)
 
+/-- Random horizontal flip for a batch of NCHW images (50% per image). -/
+@[extern "lean_f32_random_hflip"]
+opaque randomHFlip (images : @& ByteArray) (batch : USize) (channels : USize)
+    (height : USize) (width : USize) (seed : USize) : IO ByteArray
+
 end F32

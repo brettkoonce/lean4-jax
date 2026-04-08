@@ -702,7 +702,8 @@ private def emitConvBnBackward (r : FwdRec) (gradSSA : String) : String × Strin
   return (s, s!"%cbg_dx{p}", s!"%d_W{p}")
 
 /-- Emit SGD+momentum for one param: v_new = mu*v + grad; W_new = W - lr*v_new. -/
-private def emitMomentumUpdate (paramSSA gradSSA velSSA : String) (shape : List Nat) (tag : String) : String × String × String := Id.run do
+private def emitMomentumUpdate (paramSSA gradSSA velSSA : String) (shape : List Nat) (tag : String)
+    (applyWeightDecay : Bool := false) : String × String × String := Id.run do
   let ty := tensorTy shape
   let mut s := ""
   s := s ++ s!"    %mu_{tag} = stablehlo.broadcast_in_dim %mu, dims = [] : (tensor<f32>) -> {ty}\n"
@@ -710,15 +711,21 @@ private def emitMomentumUpdate (paramSSA gradSSA velSSA : String) (shape : List 
   s := s ++ s!"    %vn_{tag} = stablehlo.add %vs_{tag}, {gradSSA} : {ty}\n"
   s := s ++ s!"    %lr_{tag} = stablehlo.broadcast_in_dim %lr, dims = [] : (tensor<f32>) -> {ty}\n"
   s := s ++ s!"    %up_{tag} = stablehlo.multiply %lr_{tag}, %vn_{tag} : {ty}\n"
-  s := s ++ s!"    %new_{tag} = stablehlo.subtract {paramSSA}, %up_{tag} : {ty}\n"
-  return (s, s!"%new_{tag}", s!"%vn_{tag}")
+  s := s ++ s!"    %sub_{tag} = stablehlo.subtract {paramSSA}, %up_{tag} : {ty}\n"
+  if applyWeightDecay then
+    -- Decoupled weight decay: w = w - lr*v - wd*lr*w
+    s := s ++ s!"    %wd_{tag} = stablehlo.broadcast_in_dim %wdecay, dims = [] : (tensor<f32>) -> {ty}\n"
+    s := s ++ s!"    %wdlr_{tag} = stablehlo.multiply %wd_{tag}, %lr_{tag} : {ty}\n"
+    s := s ++ s!"    %wdp_{tag} = stablehlo.multiply %wdlr_{tag}, {paramSSA} : {ty}\n"
+    s := s ++ s!"    %new_{tag} = stablehlo.subtract %sub_{tag}, %wdp_{tag} : {ty}\n"
+  return (s, if applyWeightDecay then s!"%new_{tag}" else s!"%sub_{tag}", s!"%vn_{tag}")
 
 /-- Emit SGD+momentum for a convBn layer (W, gamma, beta). -/
 private def emitConvBnSGD (p ic oc kSize : Nat) : String × Array String × Array String := Id.run do
   let wShape := [oc, ic, kSize, kSize]
   let bShape := [oc]
   let mut s := ""
-  let (s1, wNew, vwNew) := emitMomentumUpdate s!"%W{p}" s!"%d_W{p}" s!"%v_W{p}" wShape s!"W{p}"
+  let (s1, wNew, vwNew) := emitMomentumUpdate s!"%W{p}" s!"%d_W{p}" s!"%v_W{p}" wShape s!"W{p}" (applyWeightDecay := true)
   s := s ++ s1
   let (s2, gNew, vgNew) := emitMomentumUpdate s!"%g{p}" s!"%d_g{p}" s!"%v_g{p}" bShape s!"g{p}"
   s := s ++ s2
@@ -736,7 +743,8 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
   let mut code : String := ""
   code := code ++ "    %zf = stablehlo.constant dense<0.0> : tensor<f32>\n"
   code := code ++ "    %neginf = stablehlo.constant dense<0xFF800000> : tensor<f32>\n"
-  code := code ++ "    %mu = stablehlo.constant dense<0.9> : tensor<f32>\n\n"
+  code := code ++ "    %mu = stablehlo.constant dense<0.9> : tensor<f32>\n"
+  code := code ++ "    %wdecay = stablehlo.constant dense<1.0e-04> : tensor<f32>\n\n"
 
   -- ═══════════════ FORWARD PASS ═══════════════
   code := code ++ "    // ======================== FORWARD ========================\n"
@@ -1183,7 +1191,7 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
         match r.layer with
         | .conv2d ic oc kSize _ _ =>
           let wShape := [oc, ic, kSize, kSize]; let bShape := [oc]
-          let (s1, wN, vwN) := emitMomentumUpdate s!"%W{p}" s!"%d_W{p}" s!"%v_W{p}" wShape s!"cW{p}"
+          let (s1, wN, vwN) := emitMomentumUpdate s!"%W{p}" s!"%d_W{p}" s!"%v_W{p}" wShape s!"cW{p}" (applyWeightDecay := true)
           let (s2, bN, vbN) := emitMomentumUpdate s!"%b{p}" s!"%d_b{p}" s!"%v_b{p}" bShape s!"cb{p}"
           code := code ++ s1 ++ s2
           paramRetNames := paramRetNames.push wN |>.push bN
@@ -1192,7 +1200,7 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
           velRetTypes := velRetTypes.push (tensorTy wShape) |>.push (tensorTy bShape)
         | .dense fanIn fanOut _ =>
           let wShape := [fanIn, fanOut]; let bShape := [fanOut]
-          let (s1, wN, vwN) := emitMomentumUpdate s!"%W{p}" s!"%d_W{p}" s!"%v_W{p}" wShape s!"dW{p}"
+          let (s1, wN, vwN) := emitMomentumUpdate s!"%W{p}" s!"%d_W{p}" s!"%v_W{p}" wShape s!"dW{p}" (applyWeightDecay := true)
           let (s2, bN, vbN) := emitMomentumUpdate s!"%b{p}" s!"%d_b{p}" s!"%v_b{p}" bShape s!"db{p}"
           code := code ++ s1 ++ s2
           paramRetNames := paramRetNames.push wN |>.push bN

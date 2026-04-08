@@ -146,7 +146,8 @@ def main (args : List String) : IO Unit := do
     let mut epochLoss : Float := 0.0
     let t0 ← IO.monoMsNow
     for bi in [:bpE] do
-      let xba := F32.sliceImages curImg (bi * batchN) batchN pixelsPerImage
+      let xba0 := F32.sliceImages curImg (bi * batchN) batchN pixelsPerImage
+      let xba ← F32.randomHFlip xba0 batch 3 224 224 (epoch * 10000 + bi).toUSize
       let yb := F32.sliceLabels curLbl (bi * batchN) batchN
       let packed := params.append vel
       let ts0 ← IO.monoMsNow

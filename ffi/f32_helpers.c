@@ -231,3 +231,37 @@ LEAN_EXPORT lean_obj_res lean_f32_shuffle(lean_obj_arg img_obj, lean_obj_arg lbl
     lean_ctor_set(pair, 1, lbl_obj);
     return lean_io_result_mk_ok(pair);
 }
+
+// ---- Random horizontal flip for a batch of NCHW images (in-place on copy) ----
+// pixels_per_image = C * H * W, width = W, 50% chance per image.
+LEAN_EXPORT lean_obj_res lean_f32_random_hflip(
+    b_lean_obj_arg ba, size_t batch, size_t channels,
+    size_t height, size_t width, size_t seed, lean_obj_arg w) {
+    (void)w;
+    size_t pixels_per_image = channels * height * width;
+    size_t nbytes = batch * pixels_per_image * 4;
+    lean_object* out = lean_alloc_sarray(1, nbytes, nbytes);
+    memcpy(lean_sarray_cptr(out), lean_sarray_cptr(ba), nbytes);
+    float* data = (float*)lean_sarray_cptr(out);
+
+    uint64_t s = seed + 1;
+    for (size_t i = 0; i < batch; i++) {
+        // xorshift64 for random decision
+        s ^= s << 13; s ^= s >> 7; s ^= s << 17;
+        if (s & 1) {
+            // Flip this image horizontally: reverse each row in each channel
+            float* img = data + i * pixels_per_image;
+            for (size_t c = 0; c < channels; c++) {
+                for (size_t h = 0; h < height; h++) {
+                    float* row = img + c * height * width + h * width;
+                    for (size_t l = 0, r = width - 1; l < r; l++, r--) {
+                        float tmp = row[l];
+                        row[l] = row[r];
+                        row[r] = tmp;
+                    }
+                }
+            }
+        }
+    }
+    return lean_io_result_mk_ok(out);
+}
