@@ -270,17 +270,14 @@ VJPs and (for BN) running statistics for eval.
 Tested with Lean 4.29.0 / Lake 5.0.0, IREE built from source against
 ROCm 7.2.0 / gfx1100.
 
-## Citing JAX
-
-The phase 2 backend ([`jax/`](jax/)) generates JAX Python and depends on
-the JAX library:
+## Citing this work
 
 ```bibtex
-@software{jax2018github,
-  author = {James Bradbury and Roy Frostig and Peter Hawkins and Matthew James Johnson and Yash Katariya and Chris Leary and Dougal Maclaurin and George Necula and Adam Paszke and Jake Vander{P}las and Skye Wanderman-{M}ilne and Qiao Zhang},
-  title = {{JAX}: composable transformations of {P}ython+{N}um{P}y programs},
-  url = {http://github.com/jax-ml/jax},
-  version = {0.3.13},
-  year = {2018},
+@software{koonce2026leanmlir,
+  author  = {Brett Koonce and Claude Code},
+  title   = {Image Recognition with Lean 4},
+  url     = {https://github.com/brettkoonce/lean4-mlir},
+  version = {0.1},
+  year    = {2026},
 }
 ```
