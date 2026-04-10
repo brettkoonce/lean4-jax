@@ -1,5 +1,8 @@
 import LeanJax.Types
 import LeanJax.Spec
+
+set_option maxRecDepth 2000
+
 /-! MLIR (StableHLO) code generator: emit MLIR modules from `NetSpec`.
 
     Supports MLPs (`.dense`) and CNNs (`.conv2d`, `.maxPool`, `.flatten`).
@@ -21,6 +24,7 @@ private def inputFlatDim (spec : NetSpec) : Nat :=
   | some (.convBn ic _ _ _ _) => ic * spec.imageH * spec.imageW
   | some (.invertedResidual ic _ _ _ _) => ic * spec.imageH * spec.imageW
   | some (.mbConv ic _ _ _ _ _ _) => ic * spec.imageH * spec.imageW
+  | some (.patchEmbed ic _ _ _) => ic * spec.imageH * spec.imageW
   | _ => spec.imageH * spec.imageW
 
 /-- If the first layer is conv/convBn, returns the NCHW input channels. -/
@@ -30,6 +34,7 @@ private def inputChannels (spec : NetSpec) : Option Nat :=
   | some (.convBn ic _ _ _ _) => some ic
   | some (.invertedResidual ic _ _ _ _) => some ic
   | some (.mbConv ic _ _ _ _ _ _) => some ic
+  | some (.patchEmbed ic _ _ _) => some ic
   | _ => none
 
 /-- Render tensor type: `tensor<128x1x28x28xf32>`. -/
@@ -599,6 +604,236 @@ private def emitFlatten (pos : Nat) (curSSA : String) (curShape : List Nat)
     return (s, s!"%fl{pos}", newShape)
   | _ => return ("    // flatten: already flat or unknown rank\n", curSSA, curShape)
 
+/-- Emit patch embedding forward. Input (B, ic, H, W) → (B, N+1, dim).
+    Three params: W (dim, ic, p, p), b (dim,), cls (dim,), pos (N+1, dim).
+    Returns (code, outSSA, outShape). -/
+private def emitPatchEmbedForward (tag : String) (curSSA : String) (curShape : List Nat)
+    (ic dim pSize nP : Nat) (pWSSA pBSSA pClsSSA pPosSSA : String)
+    : String × String × List Nat := Id.run do
+  match curShape with
+  | [b, _, h, w] =>
+    let oH := h / pSize
+    let oW := w / pSize
+    let nT := nP + 1
+    let convOut := [b, dim, oH, oW]
+    let patchFlat := [b, dim, nP]
+    let patchT := [b, nP, dim]
+    let outShape := [b, nT, dim]
+    let mut s := ""
+    -- Conv stride=pSize, no padding
+    s := s ++ s!"    %pe_cv{tag} = \"stablehlo.convolution\"({curSSA}, {pWSSA}) " ++ "{\n"
+    s := s ++ "        batch_group_count = 1 : i64,\n"
+    s := s ++ convDimNumbers
+    s := s ++ "        feature_group_count = 1 : i64,\n"
+    s := s ++ s!"        padding = dense<[[0, 0], [0, 0]]> : tensor<2x2xi64>,\n"
+    s := s ++ "        rhs_dilation = array<i64: 1, 1>,\n"
+    s := s ++ s!"        window_strides = array<i64: {pSize}, {pSize}>\n"
+    s := s ++ s!"      " ++ "}" ++ s!" : ({tensorTy curShape}, {tensorTy [dim, ic, pSize, pSize]}) -> {tensorTy convOut}\n"
+    -- Add bias
+    s := s ++ s!"    %pe_bb{tag} = stablehlo.broadcast_in_dim {pBSSA}, dims = [1] : ({tensorTy [dim]}) -> {tensorTy convOut}\n"
+    s := s ++ s!"    %pe_cvb{tag} = stablehlo.add %pe_cv{tag}, %pe_bb{tag} : {tensorTy convOut}\n"
+    -- Reshape (B, dim, oH, oW) → (B, dim, nP)
+    s := s ++ s!"    %pe_rs{tag} = stablehlo.reshape %pe_cvb{tag} : ({tensorTy convOut}) -> {tensorTy patchFlat}\n"
+    -- Transpose (B, dim, nP) → (B, nP, dim)
+    s := s ++ s!"    %pe_tr{tag} = stablehlo.transpose %pe_rs{tag}, dims = [0, 2, 1] : ({tensorTy patchFlat}) -> {tensorTy patchT}\n"
+    -- CLS token: broadcast (dim,) → (B, 1, dim)
+    s := s ++ s!"    %pe_cls_bc{tag} = stablehlo.broadcast_in_dim {pClsSSA}, dims = [2] : ({tensorTy [dim]}) -> {tensorTy [b, 1, dim]}\n"
+    -- Concat along axis=1
+    s := s ++ s!"    %pe_cc{tag} = stablehlo.concatenate %pe_cls_bc{tag}, %pe_tr{tag}, dim = 1 : ({tensorTy [b, 1, dim]}, {tensorTy patchT}) -> {tensorTy outShape}\n"
+    -- Positional embedding: broadcast (nT, dim) → (B, nT, dim), add
+    s := s ++ s!"    %pe_pos_bc{tag} = stablehlo.broadcast_in_dim {pPosSSA}, dims = [1, 2] : ({tensorTy [nT, dim]}) -> {tensorTy outShape}\n"
+    s := s ++ s!"    %pe_out{tag} = stablehlo.add %pe_cc{tag}, %pe_pos_bc{tag} : {tensorTy outShape}\n"
+    return (s, s!"%pe_out{tag}", outShape)
+  | _ => return ("    // patchEmbed error\n", curSSA, curShape)
+
+/-- Emit LayerNorm forward for a (B, N, D) input, normalizing across D.
+    Returns (code, outSSA, saved records: normSSA, istdSSA, meanSSA).
+    gamma, beta are (D,). -/
+private def emitLayerNormForward (tag : String) (xSSA : String) (shape : List Nat)
+    (gammaSSA betaSSA : String)
+    : String × String × String × String × String := Id.run do
+  match shape with
+  | [b, n, d] =>
+    let ty := tensorTy shape
+    let bnTy := tensorTy [b, n]
+    let dTy := tensorTy [d]
+    let mut s := ""
+    -- sum over d
+    s := s ++ s!"    %ln_zf{tag} = stablehlo.constant dense<0.0> : tensor<f32>\n"
+    s := s ++ s!"    %ln_sum{tag} = stablehlo.reduce({xSSA} init: %ln_zf{tag}) applies stablehlo.add across dimensions = [2]\n"
+    s := s ++ s!"          : ({ty}, tensor<f32>) -> {bnTy}\n"
+    s := s ++ s!"    %ln_Nc{tag} = stablehlo.constant dense<{d.toFloat}> : {bnTy}\n"
+    s := s ++ s!"    %ln_mean{tag} = stablehlo.divide %ln_sum{tag}, %ln_Nc{tag} : {bnTy}\n"
+    s := s ++ s!"    %ln_mean_bc{tag} = stablehlo.broadcast_in_dim %ln_mean{tag}, dims = [0, 1] : ({bnTy}) -> {ty}\n"
+    s := s ++ s!"    %ln_diff{tag} = stablehlo.subtract {xSSA}, %ln_mean_bc{tag} : {ty}\n"
+    s := s ++ s!"    %ln_sq{tag} = stablehlo.multiply %ln_diff{tag}, %ln_diff{tag} : {ty}\n"
+    s := s ++ s!"    %ln_vsum{tag} = stablehlo.reduce(%ln_sq{tag} init: %ln_zf{tag}) applies stablehlo.add across dimensions = [2]\n"
+    s := s ++ s!"          : ({ty}, tensor<f32>) -> {bnTy}\n"
+    s := s ++ s!"    %ln_var{tag} = stablehlo.divide %ln_vsum{tag}, %ln_Nc{tag} : {bnTy}\n"
+    s := s ++ s!"    %ln_eps{tag} = stablehlo.constant dense<1.0e-5> : {bnTy}\n"
+    s := s ++ s!"    %ln_ve{tag} = stablehlo.add %ln_var{tag}, %ln_eps{tag} : {bnTy}\n"
+    s := s ++ s!"    %ln_istd{tag} = stablehlo.rsqrt %ln_ve{tag} : {bnTy}\n"
+    s := s ++ s!"    %ln_istd_bc{tag} = stablehlo.broadcast_in_dim %ln_istd{tag}, dims = [0, 1] : ({bnTy}) -> {ty}\n"
+    s := s ++ s!"    %ln_norm{tag} = stablehlo.multiply %ln_diff{tag}, %ln_istd_bc{tag} : {ty}\n"
+    s := s ++ s!"    %ln_g_bc{tag} = stablehlo.broadcast_in_dim {gammaSSA}, dims = [2] : ({dTy}) -> {ty}\n"
+    s := s ++ s!"    %ln_gn{tag} = stablehlo.multiply %ln_norm{tag}, %ln_g_bc{tag} : {ty}\n"
+    s := s ++ s!"    %ln_b_bc{tag} = stablehlo.broadcast_in_dim {betaSSA}, dims = [2] : ({dTy}) -> {ty}\n"
+    s := s ++ s!"    %ln_out{tag} = stablehlo.add %ln_gn{tag}, %ln_b_bc{tag} : {ty}\n"
+    return (s, s!"%ln_out{tag}", s!"%ln_norm{tag}", s!"%ln_istd{tag}", s!"%ln_mean{tag}")
+  | _ => return ("    // layerNorm error\n", xSSA, "", "", "")
+
+/-- Emit GELU forward (tanh form, exact) for a tensor of given shape.
+    Returns (code, outSSA, tanhSSA) where tanhSSA is saved for backward. -/
+private def emitGeluForward (tag : String) (xSSA : String) (shape : List Nat)
+    : String × String × String := Id.run do
+  let ty := tensorTy shape
+  let mut s := ""
+  s := s ++ s!"    %ge_c05{tag} = stablehlo.constant dense<0.5> : {ty}\n"
+  s := s ++ s!"    %ge_ck{tag} = stablehlo.constant dense<0.044715> : {ty}\n"
+  s := s ++ s!"    %ge_csqrt{tag} = stablehlo.constant dense<0.7978845608028654> : {ty}\n"
+  s := s ++ s!"    %ge_x2{tag} = stablehlo.multiply {xSSA}, {xSSA} : {ty}\n"
+  s := s ++ s!"    %ge_x3{tag} = stablehlo.multiply %ge_x2{tag}, {xSSA} : {ty}\n"
+  s := s ++ s!"    %ge_kx3{tag} = stablehlo.multiply %ge_x3{tag}, %ge_ck{tag} : {ty}\n"
+  s := s ++ s!"    %ge_xp{tag} = stablehlo.add {xSSA}, %ge_kx3{tag} : {ty}\n"
+  s := s ++ s!"    %ge_u{tag} = stablehlo.multiply %ge_xp{tag}, %ge_csqrt{tag} : {ty}\n"
+  s := s ++ s!"    %ge_t{tag} = stablehlo.tanh %ge_u{tag} : {ty}\n"
+  s := s ++ s!"    %ge_one{tag} = stablehlo.constant dense<1.0> : {ty}\n"
+  s := s ++ s!"    %ge_1pt{tag} = stablehlo.add %ge_one{tag}, %ge_t{tag} : {ty}\n"
+  s := s ++ s!"    %ge_hx{tag} = stablehlo.multiply {xSSA}, %ge_c05{tag} : {ty}\n"
+  s := s ++ s!"    %ge_out{tag} = stablehlo.multiply %ge_hx{tag}, %ge_1pt{tag} : {ty}\n"
+  return (s, s!"%ge_out{tag}", s!"%ge_t{tag}")
+
+/-- Emit dense layer for rank-3 (B, N, D) input → (B, N, fanOut).
+    W shape (D, fanOut), b shape (fanOut,). -/
+private def emitDense3D (tag : String) (xSSA : String) (shape : List Nat)
+    (wSSA bSSA : String) (fanOut : Nat) : String × String × List Nat := Id.run do
+  match shape with
+  | [b, n, d] =>
+    let outShape := [b, n, fanOut]
+    let ty := tensorTy shape
+    let outTy := tensorTy outShape
+    let mut s := ""
+    s := s ++ s!"    %d3_mm{tag} = stablehlo.dot_general {xSSA}, {wSSA},\n"
+    s := s ++ "              contracting_dims = [2] x [0],\n"
+    s := s ++ "              precision = [DEFAULT, DEFAULT]\n"
+    s := s ++ s!"            : ({ty}, {tensorTy [d, fanOut]}) -> {outTy}\n"
+    s := s ++ s!"    %d3_bb{tag} = stablehlo.broadcast_in_dim {bSSA}, dims = [2] : ({tensorTy [fanOut]}) -> {outTy}\n"
+    s := s ++ s!"    %d3_out{tag} = stablehlo.add %d3_mm{tag}, %d3_bb{tag} : {outTy}\n"
+    return (s, s!"%d3_out{tag}", outShape)
+  | _ => return ("    // dense3D error\n", xSSA, shape)
+
+/-- Emit multi-head self-attention forward.
+    Input x (B, N, D). Params: Wq, bq, Wk, bk, Wv, bv, Wo, bo.
+    Returns (code, outSSA, saved Q,K,V,softmax,preProj SSAs). -/
+private def emitMHSAForward (tag : String) (xSSA : String) (shape : List Nat)
+    (heads : Nat) (wqSSA bqSSA wkSSA bkSSA wvSSA bvSSA woSSA boSSA : String)
+    : String × String × String × String × String × String × String := Id.run do
+  match shape with
+  | [b, n, d] =>
+    let dh := d / heads
+    let ty := tensorTy shape
+    let heTy := tensorTy [b, n, heads, dh]
+    let hTy := tensorTy [b, heads, n, dh]
+    let sTy := tensorTy [b, heads, n, n]
+    let mut s := ""
+    -- Q, K, V projections (B, N, D) → (B, N, D)
+    let (qCode, qSSA, _) := emitDense3D s!"{tag}_q" xSSA shape wqSSA bqSSA d
+    s := s ++ qCode
+    let (kCode, kSSA, _) := emitDense3D s!"{tag}_k" xSSA shape wkSSA bkSSA d
+    s := s ++ kCode
+    let (vCode, vSSA, _) := emitDense3D s!"{tag}_v" xSSA shape wvSSA bvSSA d
+    s := s ++ vCode
+    -- Reshape to (B, N, heads, dh), transpose to (B, heads, N, dh)
+    s := s ++ s!"    %mh_qr{tag} = stablehlo.reshape {qSSA} : ({ty}) -> {heTy}\n"
+    s := s ++ s!"    %mh_q{tag} = stablehlo.transpose %mh_qr{tag}, dims = [0, 2, 1, 3] : ({heTy}) -> {hTy}\n"
+    s := s ++ s!"    %mh_kr{tag} = stablehlo.reshape {kSSA} : ({ty}) -> {heTy}\n"
+    s := s ++ s!"    %mh_k{tag} = stablehlo.transpose %mh_kr{tag}, dims = [0, 2, 1, 3] : ({heTy}) -> {hTy}\n"
+    s := s ++ s!"    %mh_vr{tag} = stablehlo.reshape {vSSA} : ({ty}) -> {heTy}\n"
+    s := s ++ s!"    %mh_v{tag} = stablehlo.transpose %mh_vr{tag}, dims = [0, 2, 1, 3] : ({heTy}) -> {hTy}\n"
+    -- Scores = Q @ K^T : (B, heads, N, dh) x (B, heads, N, dh) → (B, heads, N, N)
+    s := s ++ s!"    %mh_sc{tag} = stablehlo.dot_general %mh_q{tag}, %mh_k{tag},\n"
+    s := s ++ "              batching_dims = [0, 1] x [0, 1],\n"
+    s := s ++ "              contracting_dims = [3] x [3],\n"
+    s := s ++ "              precision = [DEFAULT, DEFAULT]\n"
+    s := s ++ s!"            : ({hTy}, {hTy}) -> {sTy}\n"
+    -- Scale by 1/sqrt(dh)
+    let invSqrtDh : Float := 1.0 / Float.sqrt dh.toFloat
+    s := s ++ s!"    %mh_scale{tag} = stablehlo.constant dense<{invSqrtDh}> : {sTy}\n"
+    s := s ++ s!"    %mh_ss{tag} = stablehlo.multiply %mh_sc{tag}, %mh_scale{tag} : {sTy}\n"
+    -- Softmax: max, shift, exp, sum, divide
+    let bhnTy := tensorTy [b, heads, n]
+    s := s ++ s!"    %mh_neginf{tag} = stablehlo.constant dense<0xFF800000> : tensor<f32>\n"
+    s := s ++ s!"    %mh_max{tag} = stablehlo.reduce(%mh_ss{tag} init: %mh_neginf{tag}) applies stablehlo.maximum across dimensions = [3]\n"
+    s := s ++ s!"          : ({sTy}, tensor<f32>) -> {bhnTy}\n"
+    s := s ++ s!"    %mh_max_bc{tag} = stablehlo.broadcast_in_dim %mh_max{tag}, dims = [0, 1, 2] : ({bhnTy}) -> {sTy}\n"
+    s := s ++ s!"    %mh_shift{tag} = stablehlo.subtract %mh_ss{tag}, %mh_max_bc{tag} : {sTy}\n"
+    s := s ++ s!"    %mh_exp{tag} = stablehlo.exponential %mh_shift{tag} : {sTy}\n"
+    s := s ++ s!"    %mh_zf{tag} = stablehlo.constant dense<0.0> : tensor<f32>\n"
+    s := s ++ s!"    %mh_sumE{tag} = stablehlo.reduce(%mh_exp{tag} init: %mh_zf{tag}) applies stablehlo.add across dimensions = [3]\n"
+    s := s ++ s!"          : ({sTy}, tensor<f32>) -> {bhnTy}\n"
+    s := s ++ s!"    %mh_sumE_bc{tag} = stablehlo.broadcast_in_dim %mh_sumE{tag}, dims = [0, 1, 2] : ({bhnTy}) -> {sTy}\n"
+    s := s ++ s!"    %mh_sm{tag} = stablehlo.divide %mh_exp{tag}, %mh_sumE_bc{tag} : {sTy}\n"
+    -- out = softmax @ V : (B, heads, N, N) x (B, heads, N, dh) → (B, heads, N, dh)
+    s := s ++ s!"    %mh_av{tag} = stablehlo.dot_general %mh_sm{tag}, %mh_v{tag},\n"
+    s := s ++ "              batching_dims = [0, 1] x [0, 1],\n"
+    s := s ++ "              contracting_dims = [3] x [2],\n"
+    s := s ++ "              precision = [DEFAULT, DEFAULT]\n"
+    s := s ++ s!"            : ({sTy}, {hTy}) -> {hTy}\n"
+    -- Transpose back (B, heads, N, dh) → (B, N, heads, dh), reshape → (B, N, D)
+    s := s ++ s!"    %mh_avT{tag} = stablehlo.transpose %mh_av{tag}, dims = [0, 2, 1, 3] : ({hTy}) -> {heTy}\n"
+    s := s ++ s!"    %mh_pp{tag} = stablehlo.reshape %mh_avT{tag} : ({heTy}) -> {ty}\n"
+    -- Output projection
+    let (oCode, oSSA, _) := emitDense3D s!"{tag}_o" s!"%mh_pp{tag}" shape woSSA boSSA d
+    s := s ++ oCode
+    return (s, oSSA, s!"%mh_q{tag}", s!"%mh_k{tag}", s!"%mh_v{tag}", s!"%mh_sm{tag}", s!"%mh_pp{tag}")
+  | _ => return ("    // mhsa error\n", xSSA, "", "", "", "", "")
+
+/-- Emit a transformer encoder block forward pass.
+    Layout: LN1 → MHSA → + → LN2 → fc1 → GELU → fc2 → +
+    Uses pidx starting at `startP` and 8 param pairs per block:
+    LN1(g,b), Wq,bq, Wk,bk, Wv,bv, Wo,bo, LN2(g,b), Wfc1,bfc1, Wfc2,bfc2.
+    Returns (code, outSSA, newPidx). -/
+private def emitTransformerBlockForward (tag : String) (startP : Nat) (xSSA : String) (shape : List Nat)
+    (heads mlpDim : Nat) : String × String × Nat := Id.run do
+  match shape with
+  | [_b, _n, d] =>
+    let ty := tensorTy shape
+    let mut s := ""
+    let mut p := startP
+    -- LN1
+    let g1 := s!"%W{p}"; let b1 := s!"%b{p}"; p := p + 1
+    let (ln1Code, ln1Out, _, _, _) := emitLayerNormForward s!"{tag}_ln1" xSSA shape g1 b1
+    s := s ++ ln1Code
+    -- MHSA
+    let wq := s!"%W{p}"; let bq := s!"%b{p}"; p := p + 1
+    let wk := s!"%W{p}"; let bk := s!"%b{p}"; p := p + 1
+    let wv := s!"%W{p}"; let bv := s!"%b{p}"; p := p + 1
+    let wo := s!"%W{p}"; let bo := s!"%b{p}"; p := p + 1
+    let (mhsaCode, mhsaOut, _, _, _, _, _) := emitMHSAForward s!"{tag}_mh" ln1Out shape heads wq bq wk bk wv bv wo bo
+    s := s ++ mhsaCode
+    -- Residual
+    s := s ++ s!"    %tb_r1{tag} = stablehlo.add {xSSA}, {mhsaOut} : {ty}\n"
+    let r1 := s!"%tb_r1{tag}"
+    -- LN2
+    let g2 := s!"%W{p}"; let b2 := s!"%b{p}"; p := p + 1
+    let (ln2Code, ln2Out, _, _, _) := emitLayerNormForward s!"{tag}_ln2" r1 shape g2 b2
+    s := s ++ ln2Code
+    -- fc1 (D → mlpDim)
+    let wf1 := s!"%W{p}"; let bf1 := s!"%b{p}"; p := p + 1
+    let (fc1Code, fc1Out, fc1Shape) := emitDense3D s!"{tag}_fc1" ln2Out shape wf1 bf1 mlpDim
+    s := s ++ fc1Code
+    -- GELU
+    let (geCode, geOut, _) := emitGeluForward s!"{tag}_ge" fc1Out fc1Shape
+    s := s ++ geCode
+    -- fc2 (mlpDim → D)
+    let wf2 := s!"%W{p}"; let bf2 := s!"%b{p}"; p := p + 1
+    let (fc2Code, fc2Out, _) := emitDense3D s!"{tag}_fc2" geOut fc1Shape wf2 bf2 d
+    s := s ++ fc2Code
+    -- Residual
+    s := s ++ s!"    %tb_r2{tag} = stablehlo.add {r1}, {fc2Out} : {ty}\n"
+    return (s, s!"%tb_r2{tag}", p)
+  | _ => return ("    // transformerBlock error\n", xSSA, startP)
+
 /-- Emit a residual block stage: nBlocks basic blocks, first may downsample.
     Returns (code, newSSA, newShape, newPidx). -/
 private def emitResidualBlock (startPidx : Nat) (curSSA : String) (curShape : List Nat)
@@ -768,6 +1003,40 @@ private def emitForwardBody (spec : NetSpec) (batchSize : Nat) (fixedBN : Bool :
       curSSA := newSSA
       curShape := newShape
       pidx := newPidx
+    | .patchEmbed ic dim pSize nP =>
+      let pW := s!"%W{pidx}"
+      let pB := s!"%b{pidx}"; pidx := pidx + 1
+      let pCls := s!"%W{pidx}"; pidx := pidx + 1
+      let pPos := s!"%W{pidx}"; pidx := pidx + 1
+      let (snip, newSSA, newShape) := emitPatchEmbedForward s!"{pos}" curSSA curShape ic dim pSize nP pW pB pCls pPos
+      code := code ++ snip
+      curSSA := newSSA
+      curShape := newShape
+    | .transformerEncoder dim heads mlpDim nBlocks =>
+      let mut cs := curSSA
+      let mut p := pidx
+      for bi in [:nBlocks] do
+        let (snip, newSSA, newP) := emitTransformerBlockForward s!"{pos}_{bi}" p cs curShape heads mlpDim
+        code := code ++ snip
+        cs := newSSA
+        p := newP
+      -- Final LN
+      let g := s!"%W{p}"; let bS := s!"%b{p}"; p := p + 1
+      let (lnCode, lnOut, _, _, _) := emitLayerNormForward s!"{pos}_finalln" cs curShape g bS
+      code := code ++ lnCode
+      cs := lnOut
+      -- Slice CLS token: x[:, 0, :] → (B, D)
+      match curShape with
+      | [b, _, _] =>
+        let clsShape := [b, 1, dim]
+        let outShape := [b, dim]
+        code := code ++ s!"    %te_cls{pos} = \"stablehlo.slice\"({cs}) " ++ "{" ++ s!" start_indices = array<i64: 0, 0, 0>, limit_indices = array<i64: {b}, 1, {dim}>, strides = array<i64: 1, 1, 1>" ++ "}" ++ s!" : ({tensorTy curShape}) -> {tensorTy clsShape}\n"
+        code := code ++ s!"    %te_out{pos} = stablehlo.reshape %te_cls{pos} : ({tensorTy clsShape}) -> {tensorTy outShape}\n"
+        curSSA := s!"%te_out{pos}"
+        curShape := outShape
+      | _ => pure ()
+      let _ := dim
+      pidx := p
     | _ =>
       code := code ++ "    // UNSUPPORTED LAYER\n"
     pos := pos + 1
@@ -930,6 +1199,52 @@ private def emitForwardSig (spec : NetSpec) (batchSize : Nat) : String := Id.run
     | .flatten =>
       match curShape with
       | [b, c, h, w] => curShape := [b, c * h * w]
+      | _ => pure ()
+      outShape := curShape
+    | .patchEmbed ic dim pSize nP =>
+      -- 3 parameter slots: W (dim, ic, p, p), b (dim,) with name %b{pidx},
+      -- then cls as %W{pidx+1} (dim,), and pos as %W{pidx+2} ((nP+1), dim)
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, ic, pSize, pSize]}, %b{pidx}: {tensorTy [dim]}"
+      pidx := pidx + 1
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [dim]}"
+      pidx := pidx + 1
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [nP + 1, dim]}"
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, _, _] => curShape := [b, nP + 1, dim]
+      | _ => pure ()
+      outShape := curShape
+    | .transformerEncoder dim _heads mlpDim nBlocks =>
+      for _bi in [:nBlocks] do
+        -- LN1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        -- Wq, bq
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        -- Wk, bk
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        -- Wv, bv
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        -- Wo, bo
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        -- LN2
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        -- Wfc1 (dim, mlpDim), bfc1 (mlpDim,)
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, mlpDim]}, %b{pidx}: {tensorTy [mlpDim]}"
+        pidx := pidx + 1
+        -- Wfc2 (mlpDim, dim), bfc2 (dim,)
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [mlpDim, dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+      -- Final LN
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [dim]}, %b{pidx}: {tensorTy [dim]}"
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, _] => curShape := [b, dim]
       | _ => pure ()
       outShape := curShape
     | _ => pure ()
@@ -1182,6 +1497,41 @@ private def emitForwardEvalSig (spec : NetSpec) (batchSize : Nat) : String := Id
       | [b, c, h, w] => curShape := [b, c * h * w]
       | _ => pure ()
       outShape := curShape
+    | .patchEmbed ic dim pSize nP =>
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, ic, pSize, pSize]}, %b{pidx}: {tensorTy [dim]}"
+      pidx := pidx + 1
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [dim]}"
+      pidx := pidx + 1
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [nP + 1, dim]}"
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, _, _] => curShape := [b, nP + 1, dim]
+      | _ => pure ()
+      outShape := curShape
+    | .transformerEncoder dim _heads mlpDim nBlocks =>
+      for _bi in [:nBlocks] do
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [dim, mlpDim]}, %b{pidx}: {tensorTy [mlpDim]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [mlpDim, dim]}, %b{pidx}: {tensorTy [dim]}"
+        pidx := pidx + 1
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [dim]}, %b{pidx}: {tensorTy [dim]}"
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, _] => curShape := [b, dim]
+      | _ => pure ()
+      outShape := curShape
     | _ => pure ()
   -- Append bn_mean / bn_var params for each BN layer
   let bnLayers := collectBnLayers spec
@@ -1244,6 +1594,52 @@ private structure FwdRec where
   -- SE variant: if true, SE block uses ReLU + h-sigmoid (MobileNetV3);
   -- otherwise swish + sigmoid (EfficientNet).
   seVariant  : Bool := false
+  -- ═════════ ViT/Transformer intermediates ═════════
+  -- patchEmbed fields (layer marked with isPatchEmbed)
+  isPatchEmbed : Bool := false
+  pePWPidx     : Nat := 0   -- base pidx for W (conv weight)
+  pePBPidx     : Nat := 0   -- pidx for b (conv bias)
+  peClsPidx    : Nat := 0   -- pidx for cls token (stored as W{pidx})
+  pePosPidx    : Nat := 0   -- pidx for positional embedding
+  pePSize      : Nat := 0
+  pePIc        : Nat := 0
+  pePDim       : Nat := 0
+  pePNp        : Nat := 0
+  -- Transformer block fields (layer marked with isTransformerBlock)
+  isTransformerBlock : Bool := false
+  tbBasePidx     : Nat := 0  -- starting pidx for this block's 8 param pairs
+  tbHeads        : Nat := 0
+  tbMlpDim       : Nat := 0
+  tbDim          : Nat := 0
+  -- Saved intermediates for each block's backward:
+  tbLn1XSSA      : String := ""  -- input to LN1 (block input)
+  tbLn1OutSSA    : String := ""
+  tbLn1NormSSA   : String := ""
+  tbLn1IstdSSA   : String := ""
+  tbMhsaOutSSA   : String := ""
+  tbR1SSA        : String := ""  -- after first residual (block input)
+  tbLn2OutSSA    : String := ""
+  tbLn2NormSSA   : String := ""
+  tbLn2IstdSSA   : String := ""
+  tbMhQSSA       : String := ""
+  tbMhKSSA       : String := ""
+  tbMhVSSA       : String := ""
+  tbMhSmSSA      : String := ""
+  tbMhPpSSA      : String := ""  -- pre-projection MHSA output (B, N, D)
+  tbFc1OutSSA    : String := ""  -- pre-GELU (B, N, mlpDim)
+  tbGeluTSSA     : String := ""  -- saved tanh value for GELU backward
+  tbGeluOutSSA   : String := ""  -- post-GELU (B, N, mlpDim)
+  -- Final LN (after all blocks) record
+  isFinalLn       : Bool := false
+  finalLnPidx     : Nat := 0
+  finalLnNormSSA  : String := ""
+  finalLnIstdSSA  : String := ""
+  finalLnInSSA    : String := ""
+  finalLnOutSSA   : String := ""
+  -- CLS slice record (between final LN and classifier dense)
+  isClsSlice      : Bool := false
+  clsInShape      : List Nat := []
+  clsInSSA        : String := ""
 instance : Inhabited FwdRec where
   default := { layer := .flatten, pidx := none, pos := 0,
                inputSSA := "", preActSSA := "", outputSSA := "",
@@ -2497,6 +2893,104 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
           addSkipGrad := "identity"
         }
 
+    | .patchEmbed ic dim pSize nP =>
+      let pWIdx := pidx
+      let pBIdx := pidx  -- shared pidx (W + b of conv)
+      let pClsIdx := pidx + 1
+      let pPosIdx := pidx + 2
+      let pWSSA := s!"%W{pWIdx}"
+      let pBSSA := s!"%b{pBIdx}"
+      let pClsSSA := s!"%W{pClsIdx}"
+      let pPosSSA := s!"%W{pPosIdx}"
+      let (snip, newSSA, newShape) := emitPatchEmbedForward s!"{pos}" curSSA curShape ic dim pSize nP pWSSA pBSSA pClsSSA pPosSSA
+      code := code ++ snip
+      let mut peRec : FwdRec := default
+      peRec := { peRec with layer := l, pidx := none, pos, inputSSA := inSSA, outputSSA := newSSA, inShape := curShape, outShape := newShape }
+      peRec := { peRec with isPatchEmbed := true, pePWPidx := pWIdx, pePBPidx := pBIdx, peClsPidx := pClsIdx, pePosPidx := pPosIdx }
+      peRec := { peRec with pePSize := pSize, pePIc := ic, pePDim := dim, pePNp := nP }
+      records := records.push peRec
+      curSSA := newSSA
+      curShape := newShape
+      pidx := pidx + 3
+
+    | .transformerEncoder dim heads mlpDim nBlocks =>
+      for bi in [:nBlocks] do
+        let blockIn := curSSA
+        let blockShape := curShape
+        let basePidx := pidx
+        let tag := s!"{pos}_{bi}"
+        let ty := tensorTy blockShape
+        -- LN1
+        let g1 := s!"%W{pidx}"; let b1 := s!"%b{pidx}"
+        let (ln1Code, ln1Out, ln1Norm, ln1Istd, _ln1Mean) := emitLayerNormForward s!"{tag}_ln1" blockIn blockShape g1 b1
+        code := code ++ ln1Code
+        pidx := pidx + 1
+        -- MHSA
+        let wq := s!"%W{pidx}"; let bq := s!"%b{pidx}"; pidx := pidx + 1
+        let wk := s!"%W{pidx}"; let bk := s!"%b{pidx}"; pidx := pidx + 1
+        let wv := s!"%W{pidx}"; let bv := s!"%b{pidx}"; pidx := pidx + 1
+        let wo := s!"%W{pidx}"; let bo := s!"%b{pidx}"; pidx := pidx + 1
+        let (mhCode, mhOut, mhQ, mhK, mhV, mhSm, mhPp) := emitMHSAForward s!"{tag}_mh" ln1Out blockShape heads wq bq wk bk wv bv wo bo
+        code := code ++ mhCode
+        -- Residual
+        code := code ++ s!"    %tb_r1{tag} = stablehlo.add {blockIn}, {mhOut} : {ty}\n"
+        let r1 := s!"%tb_r1{tag}"
+        -- LN2
+        let g2 := s!"%W{pidx}"; let b2 := s!"%b{pidx}"; pidx := pidx + 1
+        let (ln2Code, ln2Out, ln2Norm, ln2Istd, _ln2Mean) := emitLayerNormForward s!"{tag}_ln2" r1 blockShape g2 b2
+        code := code ++ ln2Code
+        -- fc1
+        let wf1 := s!"%W{pidx}"; let bf1 := s!"%b{pidx}"; pidx := pidx + 1
+        let (fc1Code, fc1Out, fc1Shape) := emitDense3D s!"{tag}_fc1" ln2Out blockShape wf1 bf1 mlpDim
+        code := code ++ fc1Code
+        -- GELU
+        let (geCode, geOut, geT) := emitGeluForward s!"{tag}_ge" fc1Out fc1Shape
+        code := code ++ geCode
+        -- fc2
+        let wf2 := s!"%W{pidx}"; let bf2 := s!"%b{pidx}"; pidx := pidx + 1
+        let (fc2Code, fc2Out, _) := emitDense3D s!"{tag}_fc2" geOut fc1Shape wf2 bf2 dim
+        code := code ++ fc2Code
+        -- Residual
+        code := code ++ s!"    %tb_r2{tag} = stablehlo.add {r1}, {fc2Out} : {ty}\n"
+        let blockOut := s!"%tb_r2{tag}"
+        -- Record block
+        let mut tbRec : FwdRec := default
+        tbRec := { tbRec with layer := l, pidx := none, pos, inputSSA := blockIn, outputSSA := blockOut, inShape := blockShape, outShape := blockShape }
+        tbRec := { tbRec with isTransformerBlock := true, tbBasePidx := basePidx, tbHeads := heads, tbMlpDim := mlpDim, tbDim := dim }
+        tbRec := { tbRec with tbLn1XSSA := blockIn, tbLn1OutSSA := ln1Out, tbLn1NormSSA := ln1Norm, tbLn1IstdSSA := ln1Istd }
+        tbRec := { tbRec with tbMhsaOutSSA := mhOut, tbR1SSA := r1 }
+        tbRec := { tbRec with tbLn2OutSSA := ln2Out, tbLn2NormSSA := ln2Norm, tbLn2IstdSSA := ln2Istd }
+        tbRec := { tbRec with tbMhQSSA := mhQ, tbMhKSSA := mhK, tbMhVSSA := mhV, tbMhSmSSA := mhSm, tbMhPpSSA := mhPp }
+        tbRec := { tbRec with tbFc1OutSSA := fc1Out, tbGeluTSSA := geT, tbGeluOutSSA := geOut }
+        records := records.push tbRec
+        curSSA := blockOut
+      -- Final LN
+      let gF := s!"%W{pidx}"; let bF := s!"%b{pidx}"
+      let finalLnPidxV := pidx
+      let (lnfCode, lnfOut, lnfNorm, lnfIstd, _) := emitLayerNormForward s!"{pos}_fln" curSSA curShape gF bF
+      code := code ++ lnfCode
+      pidx := pidx + 1
+      let mut flnRec : FwdRec := default
+      flnRec := { flnRec with layer := l, pidx := none, pos, inputSSA := curSSA, outputSSA := lnfOut, inShape := curShape, outShape := curShape }
+      flnRec := { flnRec with isFinalLn := true, finalLnPidx := finalLnPidxV, finalLnNormSSA := lnfNorm, finalLnIstdSSA := lnfIstd, finalLnInSSA := curSSA, finalLnOutSSA := lnfOut }
+      records := records.push flnRec
+      curSSA := lnfOut
+      -- CLS slice
+      match curShape with
+      | [b, _, _] =>
+        let clsShape := [b, 1, dim]
+        let outShape := [b, dim]
+        code := code ++ s!"    %te_cls{pos} = \"stablehlo.slice\"({curSSA}) " ++ "{" ++ s!" start_indices = array<i64: 0, 0, 0>, limit_indices = array<i64: {b}, 1, {dim}>, strides = array<i64: 1, 1, 1>" ++ "}" ++ s!" : ({tensorTy curShape}) -> {tensorTy clsShape}\n"
+        code := code ++ s!"    %te_out{pos} = stablehlo.reshape %te_cls{pos} : ({tensorTy clsShape}) -> {tensorTy outShape}\n"
+        let clsOut := s!"%te_out{pos}"
+        let mut csRec : FwdRec := default
+        csRec := { csRec with layer := l, pidx := none, pos, inputSSA := curSSA, outputSSA := clsOut, inShape := curShape, outShape := outShape }
+        csRec := { csRec with isClsSlice := true, clsInShape := curShape, clsInSSA := curSSA }
+        records := records.push csRec
+        curSSA := clsOut
+        curShape := outShape
+      | _ => pure ()
+
     | _ => code := code ++ "    // UNSUPPORTED\n"
     pos := pos + 1
 
@@ -2799,6 +3293,308 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
       gradSSA := s!"%ufl{r.pos}"
       gradShape := r.inShape
 
+    | .patchEmbed _ic _dim _p _nP =>
+      if r.isPatchEmbed then
+        -- Patch embedding backward
+        match r.inShape with
+        | [b, ic, h, w] =>
+          let dim := r.pePDim
+          let pSize := r.pePSize
+          let nP := r.pePNp
+          let nT := nP + 1
+          let pW := r.pePWPidx
+          let pB := r.pePBPidx
+          let pCls := r.peClsPidx
+          let pPos := r.pePosPidx
+          let outTy := tensorTy r.outShape
+          let tag := s!"peb{r.pos}"
+          code := code ++ s!"    %d_W{pPos} = stablehlo.reduce({gradSSA} init: %zf) applies stablehlo.add across dimensions = [0]\n"
+          code := code ++ s!"          : ({outTy}, tensor<f32>) -> {tensorTy [nT, dim]}\n"
+          let clsShape := [b, 1, dim]
+          code := code ++ s!"    %{tag}_cls_sl = \"stablehlo.slice\"({gradSSA}) " ++ "{" ++ s!" start_indices = array<i64: 0, 0, 0>, limit_indices = array<i64: {b}, 1, {dim}>, strides = array<i64: 1, 1, 1>" ++ "}" ++ s!" : ({outTy}) -> {tensorTy clsShape}\n"
+          code := code ++ s!"    %d_W{pCls} = stablehlo.reduce(%{tag}_cls_sl init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({tensorTy clsShape}, tensor<f32>) -> {tensorTy [dim]}\n"
+          let patchShape := [b, nP, dim]
+          code := code ++ s!"    %{tag}_pat_sl = \"stablehlo.slice\"({gradSSA}) " ++ "{" ++ s!" start_indices = array<i64: 0, 1, 0>, limit_indices = array<i64: {b}, {nT}, {dim}>, strides = array<i64: 1, 1, 1>" ++ "}" ++ s!" : ({outTy}) -> {tensorTy patchShape}\n"
+          code := code ++ s!"    %{tag}_pat_tr = stablehlo.transpose %{tag}_pat_sl, dims = [0, 2, 1] : ({tensorTy patchShape}) -> {tensorTy [b, dim, nP]}\n"
+          let oH := h / pSize
+          let oW := w / pSize
+          let convOut := [b, dim, oH, oW]
+          code := code ++ s!"    %{tag}_grad = stablehlo.reshape %{tag}_pat_tr : ({tensorTy [b, dim, nP]}) -> {tensorTy convOut}\n"
+          code := code ++ s!"    %d_b{pB} = stablehlo.reduce(%{tag}_grad init: %zf) applies stablehlo.add across dimensions = [0, 2, 3]\n"
+          code := code ++ s!"          : ({tensorTy convOut}, tensor<f32>) -> {tensorTy [dim]}\n"
+          code := code ++ s!"    %{tag}_bt_in = stablehlo.transpose {r.inputSSA}, dims = [1, 0, 2, 3] : ({tensorTy r.inShape}) -> {tensorTy [ic, b, h, w]}\n"
+          code := code ++ s!"    %{tag}_bt_g = stablehlo.transpose %{tag}_grad, dims = [1, 0, 2, 3] : ({tensorTy convOut}) -> {tensorTy [dim, b, oH, oW]}\n"
+          code := code ++ s!"    %{tag}_dWr = \"stablehlo.convolution\"(%{tag}_bt_in, %{tag}_bt_g) " ++ "{\n"
+          code := code ++ convAttrBlockFull 0 0 0 0 1 1 1 1 pSize pSize
+          code := code ++ s!"      " ++ "}" ++ s!" : ({tensorTy [ic, b, h, w]}, {tensorTy [dim, b, oH, oW]}) -> {tensorTy [ic, dim, pSize, pSize]}\n"
+          code := code ++ s!"    %d_W{pW} = stablehlo.transpose %{tag}_dWr, dims = [1, 0, 2, 3] : ({tensorTy [ic, dim, pSize, pSize]}) -> {tensorTy [dim, ic, pSize, pSize]}\n"
+          -- Input layer: no dx needed
+          gradSSA := "// no_grad_needed"
+          gradShape := r.inShape
+        | _ => pure ()
+      else pure ()
+    | .transformerEncoder _dim _heads _mlpDim _nBlocks =>
+      -- For records emitted during forward of a transformerEncoder layer:
+      -- CLS slice, final LN, or transformer block (each discriminated by flags).
+      if r.isClsSlice then
+        match r.clsInShape with
+        | [b, n, d] =>
+          let preTy := tensorTy r.clsInShape
+          let postTy := tensorTy r.outShape
+          let slShape := [b, 1, d]
+          code := code ++ s!"    %clsb_r{r.pos} = stablehlo.reshape {gradSSA} : ({postTy}) -> {tensorTy slShape}\n"
+          let rest := n - 1
+          let restShape := [b, rest, d]
+          code := code ++ s!"    %clsb_z{r.pos} = stablehlo.constant dense<0.0> : {tensorTy restShape}\n"
+          code := code ++ s!"    %clsb_cc{r.pos} = stablehlo.concatenate %clsb_r{r.pos}, %clsb_z{r.pos}, dim = 1 : ({tensorTy slShape}, {tensorTy restShape}) -> {preTy}\n"
+          gradSSA := s!"%clsb_cc{r.pos}"
+          gradShape := r.clsInShape
+        | _ => pure ()
+      else if r.isFinalLn then
+        match r.inShape with
+        | [b, n, d] =>
+          let p := r.finalLnPidx
+          let ty := tensorTy r.inShape
+          let bnTy := tensorTy [b, n]
+          let dTy := tensorTy [d]
+          let dF := d.toFloat
+          code := code ++ s!"    %flnb_gn{p} = stablehlo.multiply {gradSSA}, {r.finalLnNormSSA} : {ty}\n"
+          code := code ++ s!"    %d_b{p} = stablehlo.reduce({gradSSA} init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {dTy}\n"
+          code := code ++ s!"    %d_W{p} = stablehlo.reduce(%flnb_gn{p} init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {dTy}\n"
+          code := code ++ s!"    %flnb_g_bc{p} = stablehlo.broadcast_in_dim %W{p}, dims = [2] : ({dTy}) -> {ty}\n"
+          code := code ++ s!"    %flnb_dn{p} = stablehlo.multiply {gradSSA}, %flnb_g_bc{p} : {ty}\n"
+          code := code ++ s!"    %flnb_sdn{p} = stablehlo.reduce(%flnb_dn{p} init: %zf) applies stablehlo.add across dimensions = [2]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {bnTy}\n"
+          code := code ++ s!"    %flnb_dnn{p} = stablehlo.multiply %flnb_dn{p}, {r.finalLnNormSSA} : {ty}\n"
+          code := code ++ s!"    %flnb_sdnn{p} = stablehlo.reduce(%flnb_dnn{p} init: %zf) applies stablehlo.add across dimensions = [2]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {bnTy}\n"
+          code := code ++ s!"    %flnb_sdn_bc{p} = stablehlo.broadcast_in_dim %flnb_sdn{p}, dims = [0, 1] : ({bnTy}) -> {ty}\n"
+          code := code ++ s!"    %flnb_sdnn_bc{p} = stablehlo.broadcast_in_dim %flnb_sdnn{p}, dims = [0, 1] : ({bnTy}) -> {ty}\n"
+          code := code ++ s!"    %flnb_Nc{p} = stablehlo.constant dense<{dF}> : {ty}\n"
+          code := code ++ s!"    %flnb_t1{p} = stablehlo.multiply %flnb_Nc{p}, %flnb_dn{p} : {ty}\n"
+          code := code ++ s!"    %flnb_t2{p} = stablehlo.subtract %flnb_t1{p}, %flnb_sdn_bc{p} : {ty}\n"
+          code := code ++ s!"    %flnb_t3{p} = stablehlo.multiply {r.finalLnNormSSA}, %flnb_sdnn_bc{p} : {ty}\n"
+          code := code ++ s!"    %flnb_t4{p} = stablehlo.subtract %flnb_t2{p}, %flnb_t3{p} : {ty}\n"
+          code := code ++ s!"    %flnb_istd_bc{p} = stablehlo.broadcast_in_dim {r.finalLnIstdSSA}, dims = [0, 1] : ({bnTy}) -> {ty}\n"
+          code := code ++ s!"    %flnb_invN{p} = stablehlo.constant dense<{1.0 / dF}> : {ty}\n"
+          code := code ++ s!"    %flnb_scale{p} = stablehlo.multiply %flnb_istd_bc{p}, %flnb_invN{p} : {ty}\n"
+          code := code ++ s!"    %flnb_dx{p} = stablehlo.multiply %flnb_scale{p}, %flnb_t4{p} : {ty}\n"
+          gradSSA := s!"%flnb_dx{p}"
+          gradShape := r.inShape
+        | _ => pure ()
+      else if r.isTransformerBlock then
+        match r.inShape with
+        | [b, n, d] =>
+          let basePidx := r.tbBasePidx
+          let pLn1   := basePidx
+          let pWq    := basePidx + 1
+          let pWk    := basePidx + 2
+          let pWv    := basePidx + 3
+          let pWo    := basePidx + 4
+          let pLn2   := basePidx + 5
+          let pFc1   := basePidx + 6
+          let pFc2   := basePidx + 7
+          let heads := r.tbHeads
+          let mlpDim := r.tbMlpDim
+          let dh := d / heads
+          let ty := tensorTy r.inShape
+          let mlpTy := tensorTy [b, n, mlpDim]
+          let bnTy := tensorTy [b, n]
+          let dTy := tensorTy [d]
+          let mlpDTy := tensorTy [mlpDim]
+          let dF := d.toFloat
+          let tag := s!"tb{basePidx}"
+          let dy := gradSSA
+          -- fc2 backward
+          code := code ++ s!"    %{tag}_dwfc2 = stablehlo.dot_general {r.tbGeluOutSSA}, {dy},\n"
+          code := code ++ s!"              contracting_dims = [0, 1] x [0, 1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({mlpTy}, {ty}) -> {tensorTy [mlpDim, d]}\n"
+          code := code ++ s!"    %d_W{pFc2} = stablehlo.reshape %{tag}_dwfc2 : ({tensorTy [mlpDim, d]}) -> {tensorTy [mlpDim, d]}\n"
+          code := code ++ s!"    %d_b{pFc2} = stablehlo.reduce({dy} init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {dTy}\n"
+          code := code ++ s!"    %{tag}_dge = stablehlo.dot_general {dy}, %W{pFc2},\n"
+          code := code ++ s!"              contracting_dims = [2] x [1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({ty}, {tensorTy [mlpDim, d]}) -> {mlpTy}\n"
+          -- GELU backward
+          code := code ++ s!"    %{tag}_t2 = stablehlo.multiply {r.tbGeluTSSA}, {r.tbGeluTSSA} : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_one = stablehlo.constant dense<1.0> : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_1mt2 = stablehlo.subtract %{tag}_one, %{tag}_t2 : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_c134 = stablehlo.constant dense<0.134145> : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_xsq = stablehlo.multiply {r.tbFc1OutSSA}, {r.tbFc1OutSSA} : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_cx2 = stablehlo.multiply %{tag}_c134, %{tag}_xsq : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_idu = stablehlo.add %{tag}_one, %{tag}_cx2 : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_csq = stablehlo.constant dense<0.7978845608028654> : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_du = stablehlo.multiply %{tag}_idu, %{tag}_csq : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_term2a = stablehlo.multiply %{tag}_1mt2, %{tag}_du : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_c05 = stablehlo.constant dense<0.5> : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_hx = stablehlo.multiply %{tag}_c05, {r.tbFc1OutSSA} : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_term2 = stablehlo.multiply %{tag}_hx, %{tag}_term2a : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_1pt = stablehlo.add %{tag}_one, {r.tbGeluTSSA} : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_term1 = stablehlo.multiply %{tag}_c05, %{tag}_1pt : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_dgdx = stablehlo.add %{tag}_term1, %{tag}_term2 : {mlpTy}\n"
+          code := code ++ s!"    %{tag}_dfc1 = stablehlo.multiply %{tag}_dge, %{tag}_dgdx : {mlpTy}\n"
+          -- fc1 backward
+          code := code ++ s!"    %{tag}_dwfc1 = stablehlo.dot_general {r.tbLn2OutSSA}, %{tag}_dfc1,\n"
+          code := code ++ s!"              contracting_dims = [0, 1] x [0, 1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({ty}, {mlpTy}) -> {tensorTy [d, mlpDim]}\n"
+          code := code ++ s!"    %d_W{pFc1} = stablehlo.reshape %{tag}_dwfc1 : ({tensorTy [d, mlpDim]}) -> {tensorTy [d, mlpDim]}\n"
+          code := code ++ s!"    %d_b{pFc1} = stablehlo.reduce(%{tag}_dfc1 init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({mlpTy}, tensor<f32>) -> {mlpDTy}\n"
+          code := code ++ s!"    %{tag}_dln2 = stablehlo.dot_general %{tag}_dfc1, %W{pFc1},\n"
+          code := code ++ s!"              contracting_dims = [2] x [1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({mlpTy}, {tensorTy [d, mlpDim]}) -> {ty}\n"
+          -- LN2 backward
+          code := code ++ s!"    %{tag}_ln2_gn = stablehlo.multiply %{tag}_dln2, {r.tbLn2NormSSA} : {ty}\n"
+          code := code ++ s!"    %d_b{pLn2} = stablehlo.reduce(%{tag}_dln2 init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {dTy}\n"
+          code := code ++ s!"    %d_W{pLn2} = stablehlo.reduce(%{tag}_ln2_gn init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {dTy}\n"
+          code := code ++ s!"    %{tag}_ln2gbc = stablehlo.broadcast_in_dim %W{pLn2}, dims = [2] : ({dTy}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_dn = stablehlo.multiply %{tag}_dln2, %{tag}_ln2gbc : {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_sdn = stablehlo.reduce(%{tag}_ln2_dn init: %zf) applies stablehlo.add across dimensions = [2]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {bnTy}\n"
+          code := code ++ s!"    %{tag}_ln2_dnn = stablehlo.multiply %{tag}_ln2_dn, {r.tbLn2NormSSA} : {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_sdnn = stablehlo.reduce(%{tag}_ln2_dnn init: %zf) applies stablehlo.add across dimensions = [2]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {bnTy}\n"
+          code := code ++ s!"    %{tag}_ln2_sdn_bc = stablehlo.broadcast_in_dim %{tag}_ln2_sdn, dims = [0, 1] : ({bnTy}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_sdnn_bc = stablehlo.broadcast_in_dim %{tag}_ln2_sdnn, dims = [0, 1] : ({bnTy}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_Nc = stablehlo.constant dense<{dF}> : {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_t1 = stablehlo.multiply %{tag}_ln2_Nc, %{tag}_ln2_dn : {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_t2 = stablehlo.subtract %{tag}_ln2_t1, %{tag}_ln2_sdn_bc : {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_t3 = stablehlo.multiply {r.tbLn2NormSSA}, %{tag}_ln2_sdnn_bc : {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_t4 = stablehlo.subtract %{tag}_ln2_t2, %{tag}_ln2_t3 : {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_istdbc = stablehlo.broadcast_in_dim {r.tbLn2IstdSSA}, dims = [0, 1] : ({bnTy}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_invN = stablehlo.constant dense<{1.0 / dF}> : {ty}\n"
+          code := code ++ s!"    %{tag}_ln2_scale = stablehlo.multiply %{tag}_ln2_istdbc, %{tag}_ln2_invN : {ty}\n"
+          code := code ++ s!"    %{tag}_dln2_in = stablehlo.multiply %{tag}_ln2_scale, %{tag}_ln2_t4 : {ty}\n"
+          -- Residual 2 accumulate
+          code := code ++ s!"    %{tag}_dr1 = stablehlo.add {dy}, %{tag}_dln2_in : {ty}\n"
+          -- MHSA backward
+          code := code ++ s!"    %{tag}_dwo = stablehlo.dot_general {r.tbMhPpSSA}, %{tag}_dr1,\n"
+          code := code ++ s!"              contracting_dims = [0, 1] x [0, 1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({ty}, {ty}) -> {tensorTy [d, d]}\n"
+          code := code ++ s!"    %d_W{pWo} = stablehlo.reshape %{tag}_dwo : ({tensorTy [d, d]}) -> {tensorTy [d, d]}\n"
+          code := code ++ s!"    %d_b{pWo} = stablehlo.reduce(%{tag}_dr1 init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {dTy}\n"
+          code := code ++ s!"    %{tag}_dpp = stablehlo.dot_general %{tag}_dr1, %W{pWo},\n"
+          code := code ++ s!"              contracting_dims = [2] x [1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({ty}, {tensorTy [d, d]}) -> {ty}\n"
+          let heTy := tensorTy [b, n, heads, dh]
+          let hTy := tensorTy [b, heads, n, dh]
+          let sTy := tensorTy [b, heads, n, n]
+          code := code ++ s!"    %{tag}_dppr = stablehlo.reshape %{tag}_dpp : ({ty}) -> {heTy}\n"
+          code := code ++ s!"    %{tag}_dattn = stablehlo.transpose %{tag}_dppr, dims = [0, 2, 1, 3] : ({heTy}) -> {hTy}\n"
+          code := code ++ s!"    %{tag}_dsm = stablehlo.dot_general %{tag}_dattn, {r.tbMhVSSA},\n"
+          code := code ++ s!"              batching_dims = [0, 1] x [0, 1],\n"
+          code := code ++ s!"              contracting_dims = [3] x [3],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({hTy}, {hTy}) -> {sTy}\n"
+          code := code ++ s!"    %{tag}_dv = stablehlo.dot_general {r.tbMhSmSSA}, %{tag}_dattn,\n"
+          code := code ++ s!"              batching_dims = [0, 1] x [0, 1],\n"
+          code := code ++ s!"              contracting_dims = [2] x [2],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({sTy}, {hTy}) -> {hTy}\n"
+          code := code ++ s!"    %{tag}_smdsm = stablehlo.multiply {r.tbMhSmSSA}, %{tag}_dsm : {sTy}\n"
+          let bhnTy := tensorTy [b, heads, n]
+          code := code ++ s!"    %{tag}_sumds = stablehlo.reduce(%{tag}_smdsm init: %zf) applies stablehlo.add across dimensions = [3]\n"
+          code := code ++ s!"          : ({sTy}, tensor<f32>) -> {bhnTy}\n"
+          code := code ++ s!"    %{tag}_sumds_bc = stablehlo.broadcast_in_dim %{tag}_sumds, dims = [0, 1, 2] : ({bhnTy}) -> {sTy}\n"
+          code := code ++ s!"    %{tag}_dsms = stablehlo.subtract %{tag}_dsm, %{tag}_sumds_bc : {sTy}\n"
+          code := code ++ s!"    %{tag}_dscaled = stablehlo.multiply {r.tbMhSmSSA}, %{tag}_dsms : {sTy}\n"
+          let invSqrtDh : Float := 1.0 / Float.sqrt dh.toFloat
+          code := code ++ s!"    %{tag}_scale = stablehlo.constant dense<{invSqrtDh}> : {sTy}\n"
+          code := code ++ s!"    %{tag}_dscores = stablehlo.multiply %{tag}_dscaled, %{tag}_scale : {sTy}\n"
+          code := code ++ s!"    %{tag}_dq = stablehlo.dot_general %{tag}_dscores, {r.tbMhKSSA},\n"
+          code := code ++ s!"              batching_dims = [0, 1] x [0, 1],\n"
+          code := code ++ s!"              contracting_dims = [3] x [2],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({sTy}, {hTy}) -> {hTy}\n"
+          code := code ++ s!"    %{tag}_dk = stablehlo.dot_general %{tag}_dscores, {r.tbMhQSSA},\n"
+          code := code ++ s!"              batching_dims = [0, 1] x [0, 1],\n"
+          code := code ++ s!"              contracting_dims = [2] x [2],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({sTy}, {hTy}) -> {hTy}\n"
+          code := code ++ s!"    %{tag}_dqt = stablehlo.transpose %{tag}_dq, dims = [0, 2, 1, 3] : ({hTy}) -> {heTy}\n"
+          code := code ++ s!"    %{tag}_dqr = stablehlo.reshape %{tag}_dqt : ({heTy}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_dkt = stablehlo.transpose %{tag}_dk, dims = [0, 2, 1, 3] : ({hTy}) -> {heTy}\n"
+          code := code ++ s!"    %{tag}_dkr = stablehlo.reshape %{tag}_dkt : ({heTy}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_dvt = stablehlo.transpose %{tag}_dv, dims = [0, 2, 1, 3] : ({hTy}) -> {heTy}\n"
+          code := code ++ s!"    %{tag}_dvr = stablehlo.reshape %{tag}_dvt : ({heTy}) -> {ty}\n"
+          -- QKV projection backwards
+          code := code ++ s!"    %{tag}_dwq = stablehlo.dot_general {r.tbLn1OutSSA}, %{tag}_dqr,\n"
+          code := code ++ s!"              contracting_dims = [0, 1] x [0, 1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({ty}, {ty}) -> {tensorTy [d, d]}\n"
+          code := code ++ s!"    %d_W{pWq} = stablehlo.reshape %{tag}_dwq : ({tensorTy [d, d]}) -> {tensorTy [d, d]}\n"
+          code := code ++ s!"    %d_b{pWq} = stablehlo.reduce(%{tag}_dqr init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {dTy}\n"
+          code := code ++ s!"    %{tag}_dxq = stablehlo.dot_general %{tag}_dqr, %W{pWq},\n"
+          code := code ++ s!"              contracting_dims = [2] x [1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({ty}, {tensorTy [d, d]}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_dwk = stablehlo.dot_general {r.tbLn1OutSSA}, %{tag}_dkr,\n"
+          code := code ++ s!"              contracting_dims = [0, 1] x [0, 1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({ty}, {ty}) -> {tensorTy [d, d]}\n"
+          code := code ++ s!"    %d_W{pWk} = stablehlo.reshape %{tag}_dwk : ({tensorTy [d, d]}) -> {tensorTy [d, d]}\n"
+          code := code ++ s!"    %d_b{pWk} = stablehlo.reduce(%{tag}_dkr init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {dTy}\n"
+          code := code ++ s!"    %{tag}_dxk = stablehlo.dot_general %{tag}_dkr, %W{pWk},\n"
+          code := code ++ s!"              contracting_dims = [2] x [1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({ty}, {tensorTy [d, d]}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_dwv = stablehlo.dot_general {r.tbLn1OutSSA}, %{tag}_dvr,\n"
+          code := code ++ s!"              contracting_dims = [0, 1] x [0, 1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({ty}, {ty}) -> {tensorTy [d, d]}\n"
+          code := code ++ s!"    %d_W{pWv} = stablehlo.reshape %{tag}_dwv : ({tensorTy [d, d]}) -> {tensorTy [d, d]}\n"
+          code := code ++ s!"    %d_b{pWv} = stablehlo.reduce(%{tag}_dvr init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {dTy}\n"
+          code := code ++ s!"    %{tag}_dxv = stablehlo.dot_general %{tag}_dvr, %W{pWv},\n"
+          code := code ++ s!"              contracting_dims = [2] x [1],\n"
+          code := code ++ s!"              precision = [DEFAULT, DEFAULT]\n"
+          code := code ++ s!"            : ({ty}, {tensorTy [d, d]}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_dln1a = stablehlo.add %{tag}_dxq, %{tag}_dxk : {ty}\n"
+          code := code ++ s!"    %{tag}_dln1 = stablehlo.add %{tag}_dln1a, %{tag}_dxv : {ty}\n"
+          -- LN1 backward
+          code := code ++ s!"    %{tag}_ln1_gn = stablehlo.multiply %{tag}_dln1, {r.tbLn1NormSSA} : {ty}\n"
+          code := code ++ s!"    %d_b{pLn1} = stablehlo.reduce(%{tag}_dln1 init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {dTy}\n"
+          code := code ++ s!"    %d_W{pLn1} = stablehlo.reduce(%{tag}_ln1_gn init: %zf) applies stablehlo.add across dimensions = [0, 1]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {dTy}\n"
+          code := code ++ s!"    %{tag}_ln1gbc = stablehlo.broadcast_in_dim %W{pLn1}, dims = [2] : ({dTy}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_dn = stablehlo.multiply %{tag}_dln1, %{tag}_ln1gbc : {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_sdn = stablehlo.reduce(%{tag}_ln1_dn init: %zf) applies stablehlo.add across dimensions = [2]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {bnTy}\n"
+          code := code ++ s!"    %{tag}_ln1_dnn = stablehlo.multiply %{tag}_ln1_dn, {r.tbLn1NormSSA} : {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_sdnn = stablehlo.reduce(%{tag}_ln1_dnn init: %zf) applies stablehlo.add across dimensions = [2]\n"
+          code := code ++ s!"          : ({ty}, tensor<f32>) -> {bnTy}\n"
+          code := code ++ s!"    %{tag}_ln1_sdn_bc = stablehlo.broadcast_in_dim %{tag}_ln1_sdn, dims = [0, 1] : ({bnTy}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_sdnn_bc = stablehlo.broadcast_in_dim %{tag}_ln1_sdnn, dims = [0, 1] : ({bnTy}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_Nc = stablehlo.constant dense<{dF}> : {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_t1 = stablehlo.multiply %{tag}_ln1_Nc, %{tag}_ln1_dn : {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_t2 = stablehlo.subtract %{tag}_ln1_t1, %{tag}_ln1_sdn_bc : {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_t3 = stablehlo.multiply {r.tbLn1NormSSA}, %{tag}_ln1_sdnn_bc : {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_t4 = stablehlo.subtract %{tag}_ln1_t2, %{tag}_ln1_t3 : {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_istdbc = stablehlo.broadcast_in_dim {r.tbLn1IstdSSA}, dims = [0, 1] : ({bnTy}) -> {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_invN = stablehlo.constant dense<{1.0 / dF}> : {ty}\n"
+          code := code ++ s!"    %{tag}_ln1_scale = stablehlo.multiply %{tag}_ln1_istdbc, %{tag}_ln1_invN : {ty}\n"
+          code := code ++ s!"    %{tag}_dln1_in = stablehlo.multiply %{tag}_ln1_scale, %{tag}_ln1_t4 : {ty}\n"
+          code := code ++ s!"    %{tag}_dblockin = stablehlo.add %{tag}_dr1, %{tag}_dln1_in : {ty}\n"
+          gradSSA := s!"%{tag}_dblockin"
+          gradShape := r.inShape
+        | _ => pure ()
+      else pure ()
+
     | _ => pure ()
 
   -- ═══════════════ ADAM UPDATES ═══════════════
@@ -2883,6 +3679,76 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
         mRetTypes := mRetTypes.push (tensorTy wShapeE) |>.push (tensorTy bShapeE)
         vRetNames := vRetNames.push vwN2 |>.push vbN2
         vRetTypes := vRetTypes.push (tensorTy wShapeE) |>.push (tensorTy bShapeE)
+      -- ViT patch embedding: 3 param tensors
+      if r.isPatchEmbed then
+        let dim := r.pePDim
+        let ic := r.pePIc
+        let pSize := r.pePSize
+        let nP := r.pePNp
+        let pW := r.pePWPidx
+        let pB := r.pePBPidx
+        let pCls := r.peClsPidx
+        let pPos := r.pePosPidx
+        let wShape := [dim, ic, pSize, pSize]
+        let bShape := [dim]
+        let clsShape := [dim]
+        let posShape := [nP + 1, dim]
+        let (sa1, wN, mwN, vwN) := emitAdamUpdate s!"%W{pW}" s!"%d_W{pW}" s!"%m_W{pW}" s!"%v_W{pW}" wShape s!"peW{pW}" (applyWeightDecay := true)
+        let (sa2, bN, mbN, vbN) := emitAdamUpdate s!"%b{pB}" s!"%d_b{pB}" s!"%m_b{pB}" s!"%v_b{pB}" bShape s!"peb{pB}"
+        let (sa3, clsN, mclsN, vclsN) := emitAdamUpdate s!"%W{pCls}" s!"%d_W{pCls}" s!"%m_W{pCls}" s!"%v_W{pCls}" clsShape s!"peCls{pCls}"
+        let (sa4, posN, mposN, vposN) := emitAdamUpdate s!"%W{pPos}" s!"%d_W{pPos}" s!"%m_W{pPos}" s!"%v_W{pPos}" posShape s!"pePos{pPos}"
+        code := code ++ sa1 ++ sa2 ++ sa3 ++ sa4
+        paramRetNames := paramRetNames.push wN |>.push bN |>.push clsN |>.push posN
+        paramRetTypes := paramRetTypes.push (tensorTy wShape) |>.push (tensorTy bShape) |>.push (tensorTy clsShape) |>.push (tensorTy posShape)
+        mRetNames := mRetNames.push mwN |>.push mbN |>.push mclsN |>.push mposN
+        mRetTypes := mRetTypes.push (tensorTy wShape) |>.push (tensorTy bShape) |>.push (tensorTy clsShape) |>.push (tensorTy posShape)
+        vRetNames := vRetNames.push vwN |>.push vbN |>.push vclsN |>.push vposN
+        vRetTypes := vRetTypes.push (tensorTy wShape) |>.push (tensorTy bShape) |>.push (tensorTy clsShape) |>.push (tensorTy posShape)
+      -- ViT transformer block: 8 param pairs (each W + b)
+      if r.isTransformerBlock then
+        let dim := r.tbDim
+        let mlpDim := r.tbMlpDim
+        let basePidx := r.tbBasePidx
+        -- Shapes for each param pair:
+        -- LN1: (dim,), (dim,); Wq,Wk,Wv,Wo: (dim, dim), (dim,); LN2: (dim,), (dim,); Wfc1: (dim, mlpDim), (mlpDim,); Wfc2: (mlpDim, dim), (dim,)
+        let paramShapes : Array (List Nat × List Nat) := #[
+          ([dim], [dim]),            -- LN1
+          ([dim, dim], [dim]),       -- Wq
+          ([dim, dim], [dim]),       -- Wk
+          ([dim, dim], [dim]),       -- Wv
+          ([dim, dim], [dim]),       -- Wo
+          ([dim], [dim]),            -- LN2
+          ([dim, mlpDim], [mlpDim]), -- Wfc1
+          ([mlpDim, dim], [dim])     -- Wfc2
+        ]
+        let decayW : Array Bool := #[false, true, true, true, true, false, true, true]
+        for i in [:8] do
+          let pp := basePidx + i
+          let (wShape, bShape) := paramShapes[i]!
+          let decay := decayW[i]!
+          let (sa1, wN, mwN, vwN) := emitAdamUpdate s!"%W{pp}" s!"%d_W{pp}" s!"%m_W{pp}" s!"%v_W{pp}" wShape s!"tb_w{pp}" (applyWeightDecay := decay)
+          let (sa2, bN, mbN, vbN) := emitAdamUpdate s!"%b{pp}" s!"%d_b{pp}" s!"%m_b{pp}" s!"%v_b{pp}" bShape s!"tb_b{pp}"
+          code := code ++ sa1 ++ sa2
+          paramRetNames := paramRetNames.push wN |>.push bN
+          paramRetTypes := paramRetTypes.push (tensorTy wShape) |>.push (tensorTy bShape)
+          mRetNames := mRetNames.push mwN |>.push mbN
+          mRetTypes := mRetTypes.push (tensorTy wShape) |>.push (tensorTy bShape)
+          vRetNames := vRetNames.push vwN |>.push vbN
+          vRetTypes := vRetTypes.push (tensorTy wShape) |>.push (tensorTy bShape)
+      -- ViT final LN (after all transformer blocks)
+      if r.isFinalLn then
+        let dim := r.inShape[2]!
+        let p := r.finalLnPidx
+        let shape := [dim]
+        let (sa1, wN, mwN, vwN) := emitAdamUpdate s!"%W{p}" s!"%d_W{p}" s!"%m_W{p}" s!"%v_W{p}" shape s!"fln_w{p}"
+        let (sa2, bN, mbN, vbN) := emitAdamUpdate s!"%b{p}" s!"%d_b{p}" s!"%m_b{p}" s!"%v_b{p}" shape s!"fln_b{p}"
+        code := code ++ sa1 ++ sa2
+        paramRetNames := paramRetNames.push wN |>.push bN
+        paramRetTypes := paramRetTypes.push (tensorTy shape) |>.push (tensorTy shape)
+        mRetNames := mRetNames.push mwN |>.push mbN
+        mRetTypes := mRetTypes.push (tensorTy shape) |>.push (tensorTy shape)
+        vRetNames := vRetNames.push vwN |>.push vbN
+        vRetTypes := vRetTypes.push (tensorTy shape) |>.push (tensorTy shape)
   -- Return order: params, m, v, loss, then BN stats (mean0, var0, mean1, var1, ...)
   let mut retNames := paramRetNames ++ mRetNames ++ vRetNames |>.push "%loss"
   let mut retTypes := paramRetTypes ++ mRetTypes ++ vRetTypes |>.push "tensor<f32>"
@@ -3142,6 +4008,91 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat) : String := Id.r
       match curShape with
       | [b, c, h, w] => curShape := [b, c * h * w]
       | _ => pure ()
+    | .patchEmbed ic dim pSize nP =>
+      let wTy := tensorTy [dim, ic, pSize, pSize]; let bTy := tensorTy [dim]
+      let clsTy := tensorTy [dim]; let posTy := tensorTy [nP + 1, dim]
+      params := params ++ s!"      %W{pidx}: {wTy}, %b{pidx}: {bTy},\n"
+      paramRetTypes := paramRetTypes.push wTy |>.push bTy
+      mRetTypes := mRetTypes.push wTy |>.push bTy
+      vRetTypes := vRetTypes.push wTy |>.push bTy
+      pidx := pidx + 1
+      params := params ++ s!"      %W{pidx}: {clsTy},\n"
+      paramRetTypes := paramRetTypes.push clsTy
+      mRetTypes := mRetTypes.push clsTy
+      vRetTypes := vRetTypes.push clsTy
+      pidx := pidx + 1
+      params := params ++ s!"      %W{pidx}: {posTy},\n"
+      paramRetTypes := paramRetTypes.push posTy
+      mRetTypes := mRetTypes.push posTy
+      vRetTypes := vRetTypes.push posTy
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, _, _] => curShape := [b, nP + 1, dim]
+      | _ => pure ()
+    | .transformerEncoder dim _heads mlpDim nBlocks =>
+      let dTy := tensorTy [dim]
+      let ddTy := tensorTy [dim, dim]
+      let fc1Ty := tensorTy [dim, mlpDim]
+      let fc2Ty := tensorTy [mlpDim, dim]
+      let mlpBTy := tensorTy [mlpDim]
+      for _bi in [:nBlocks] do
+        -- LN1
+        params := params ++ s!"      %W{pidx}: {dTy}, %b{pidx}: {dTy},\n"
+        paramRetTypes := paramRetTypes.push dTy |>.push dTy
+        mRetTypes := mRetTypes.push dTy |>.push dTy
+        vRetTypes := vRetTypes.push dTy |>.push dTy
+        pidx := pidx + 1
+        -- Wq, bq
+        params := params ++ s!"      %W{pidx}: {ddTy}, %b{pidx}: {dTy},\n"
+        paramRetTypes := paramRetTypes.push ddTy |>.push dTy
+        mRetTypes := mRetTypes.push ddTy |>.push dTy
+        vRetTypes := vRetTypes.push ddTy |>.push dTy
+        pidx := pidx + 1
+        -- Wk, bk
+        params := params ++ s!"      %W{pidx}: {ddTy}, %b{pidx}: {dTy},\n"
+        paramRetTypes := paramRetTypes.push ddTy |>.push dTy
+        mRetTypes := mRetTypes.push ddTy |>.push dTy
+        vRetTypes := vRetTypes.push ddTy |>.push dTy
+        pidx := pidx + 1
+        -- Wv, bv
+        params := params ++ s!"      %W{pidx}: {ddTy}, %b{pidx}: {dTy},\n"
+        paramRetTypes := paramRetTypes.push ddTy |>.push dTy
+        mRetTypes := mRetTypes.push ddTy |>.push dTy
+        vRetTypes := vRetTypes.push ddTy |>.push dTy
+        pidx := pidx + 1
+        -- Wo, bo
+        params := params ++ s!"      %W{pidx}: {ddTy}, %b{pidx}: {dTy},\n"
+        paramRetTypes := paramRetTypes.push ddTy |>.push dTy
+        mRetTypes := mRetTypes.push ddTy |>.push dTy
+        vRetTypes := vRetTypes.push ddTy |>.push dTy
+        pidx := pidx + 1
+        -- LN2
+        params := params ++ s!"      %W{pidx}: {dTy}, %b{pidx}: {dTy},\n"
+        paramRetTypes := paramRetTypes.push dTy |>.push dTy
+        mRetTypes := mRetTypes.push dTy |>.push dTy
+        vRetTypes := vRetTypes.push dTy |>.push dTy
+        pidx := pidx + 1
+        -- Wfc1, bfc1
+        params := params ++ s!"      %W{pidx}: {fc1Ty}, %b{pidx}: {mlpBTy},\n"
+        paramRetTypes := paramRetTypes.push fc1Ty |>.push mlpBTy
+        mRetTypes := mRetTypes.push fc1Ty |>.push mlpBTy
+        vRetTypes := vRetTypes.push fc1Ty |>.push mlpBTy
+        pidx := pidx + 1
+        -- Wfc2, bfc2
+        params := params ++ s!"      %W{pidx}: {fc2Ty}, %b{pidx}: {dTy},\n"
+        paramRetTypes := paramRetTypes.push fc2Ty |>.push dTy
+        mRetTypes := mRetTypes.push fc2Ty |>.push dTy
+        vRetTypes := vRetTypes.push fc2Ty |>.push dTy
+        pidx := pidx + 1
+      -- Final LN
+      params := params ++ s!"      %W{pidx}: {dTy}, %b{pidx}: {dTy},\n"
+      paramRetTypes := paramRetTypes.push dTy |>.push dTy
+      mRetTypes := mRetTypes.push dTy |>.push dTy
+      vRetTypes := vRetTypes.push dTy |>.push dTy
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, _] => curShape := [b, dim]
+      | _ => pure ()
     | _ => pure ()
   -- m_ params (1st moment, same shapes)
   let mut mpidx : Nat := 0
@@ -3223,6 +4174,38 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat) : String := Id.r
         mpidx := mpidx + 1
       params := params ++ s!"      %m_W{mpidx}: {tensorTy [oc, mid, 1, 1]}, %m_g{mpidx}: {gTyO}, %m_bt{mpidx}: {gTyO},\n"
       mpidx := mpidx + 1
+    | .patchEmbed ic dim pSize nP =>
+      params := params ++ s!"      %m_W{mpidx}: {tensorTy [dim, ic, pSize, pSize]}, %m_b{mpidx}: {tensorTy [dim]},\n"
+      mpidx := mpidx + 1
+      params := params ++ s!"      %m_W{mpidx}: {tensorTy [dim]},\n"
+      mpidx := mpidx + 1
+      params := params ++ s!"      %m_W{mpidx}: {tensorTy [nP + 1, dim]},\n"
+      mpidx := mpidx + 1
+    | .transformerEncoder dim _heads mlpDim nBlocks =>
+      let dTy := tensorTy [dim]
+      let ddTy := tensorTy [dim, dim]
+      let fc1Ty := tensorTy [dim, mlpDim]
+      let fc2Ty := tensorTy [mlpDim, dim]
+      let mlpBTy := tensorTy [mlpDim]
+      for _bi in [:nBlocks] do
+        params := params ++ s!"      %m_W{mpidx}: {dTy}, %m_b{mpidx}: {dTy},\n"
+        mpidx := mpidx + 1
+        params := params ++ s!"      %m_W{mpidx}: {ddTy}, %m_b{mpidx}: {dTy},\n"
+        mpidx := mpidx + 1
+        params := params ++ s!"      %m_W{mpidx}: {ddTy}, %m_b{mpidx}: {dTy},\n"
+        mpidx := mpidx + 1
+        params := params ++ s!"      %m_W{mpidx}: {ddTy}, %m_b{mpidx}: {dTy},\n"
+        mpidx := mpidx + 1
+        params := params ++ s!"      %m_W{mpidx}: {ddTy}, %m_b{mpidx}: {dTy},\n"
+        mpidx := mpidx + 1
+        params := params ++ s!"      %m_W{mpidx}: {dTy}, %m_b{mpidx}: {dTy},\n"
+        mpidx := mpidx + 1
+        params := params ++ s!"      %m_W{mpidx}: {fc1Ty}, %m_b{mpidx}: {mlpBTy},\n"
+        mpidx := mpidx + 1
+        params := params ++ s!"      %m_W{mpidx}: {fc2Ty}, %m_b{mpidx}: {dTy},\n"
+        mpidx := mpidx + 1
+      params := params ++ s!"      %m_W{mpidx}: {dTy}, %m_b{mpidx}: {dTy},\n"
+      mpidx := mpidx + 1
     | _ => pure ()
   -- v_ params (2nd moment, same shapes)
   let mut vpidx2 : Nat := 0
@@ -3302,6 +4285,38 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat) : String := Id.r
         params := params ++ s!"      %v_W{vpidx2}: {tensorTy [mid, seMid, 1, 1]}, %v_b{vpidx2}: {tensorTy [mid]},\n"
         vpidx2 := vpidx2 + 1
       params := params ++ s!"      %v_W{vpidx2}: {tensorTy [oc, mid, 1, 1]}, %v_g{vpidx2}: {gTyO}, %v_bt{vpidx2}: {gTyO},\n"
+      vpidx2 := vpidx2 + 1
+    | .patchEmbed ic dim pSize nP =>
+      params := params ++ s!"      %v_W{vpidx2}: {tensorTy [dim, ic, pSize, pSize]}, %v_b{vpidx2}: {tensorTy [dim]},\n"
+      vpidx2 := vpidx2 + 1
+      params := params ++ s!"      %v_W{vpidx2}: {tensorTy [dim]},\n"
+      vpidx2 := vpidx2 + 1
+      params := params ++ s!"      %v_W{vpidx2}: {tensorTy [nP + 1, dim]},\n"
+      vpidx2 := vpidx2 + 1
+    | .transformerEncoder dim _heads mlpDim nBlocks =>
+      let dTy := tensorTy [dim]
+      let ddTy := tensorTy [dim, dim]
+      let fc1Ty := tensorTy [dim, mlpDim]
+      let fc2Ty := tensorTy [mlpDim, dim]
+      let mlpBTy := tensorTy [mlpDim]
+      for _bi in [:nBlocks] do
+        params := params ++ s!"      %v_W{vpidx2}: {dTy}, %v_b{vpidx2}: {dTy},\n"
+        vpidx2 := vpidx2 + 1
+        params := params ++ s!"      %v_W{vpidx2}: {ddTy}, %v_b{vpidx2}: {dTy},\n"
+        vpidx2 := vpidx2 + 1
+        params := params ++ s!"      %v_W{vpidx2}: {ddTy}, %v_b{vpidx2}: {dTy},\n"
+        vpidx2 := vpidx2 + 1
+        params := params ++ s!"      %v_W{vpidx2}: {ddTy}, %v_b{vpidx2}: {dTy},\n"
+        vpidx2 := vpidx2 + 1
+        params := params ++ s!"      %v_W{vpidx2}: {ddTy}, %v_b{vpidx2}: {dTy},\n"
+        vpidx2 := vpidx2 + 1
+        params := params ++ s!"      %v_W{vpidx2}: {dTy}, %v_b{vpidx2}: {dTy},\n"
+        vpidx2 := vpidx2 + 1
+        params := params ++ s!"      %v_W{vpidx2}: {fc1Ty}, %v_b{vpidx2}: {mlpBTy},\n"
+        vpidx2 := vpidx2 + 1
+        params := params ++ s!"      %v_W{vpidx2}: {fc2Ty}, %v_b{vpidx2}: {dTy},\n"
+        vpidx2 := vpidx2 + 1
+      params := params ++ s!"      %v_W{vpidx2}: {dTy}, %v_b{vpidx2}: {dTy},\n"
       vpidx2 := vpidx2 + 1
     | _ => pure ()
   params := params ++ s!"      %x_flat: {tensorTy [B, inDim]}, %y: tensor<{B}xi32>,\n"
