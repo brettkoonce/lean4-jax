@@ -105,6 +105,12 @@ lean_exe «squeezenet» where
 lean_exe «vgg16bn» where
   root := `MainVgg
 
+lean_exe «vgg-train» where
+  root := `MainVggTrain
+  moreLinkArgs := #["-L", "/home/skoonce/lean/claude_max/lean4-jax/ffi",
+    "-liree_ffi", "-Wl,-rpath,/home/skoonce/lean/claude_max/lean4-jax/ffi",
+    "-Wl,--allow-shlib-undefined"]
+
 lean_exe «vit-tiny» where
   root := `MainVit
 
