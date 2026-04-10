@@ -17,6 +17,7 @@ Hardware: AMD Radeon 7900 XTX (gfx1100) via ROCm 7.2 / IREE.
 | EfficientNet-B0 | 7.2M | **87.58%** | MBConv with swish + sigmoid SE |
 | MobileNetV2 | 2.2M | **87.09%** | depthwise separable + inverted residual |
 | MobileNetV3-Large | 3.0M | **86.48%** | exact h-swish + h-sigmoid SE |
+| MobileNetV4-Medium | 4.1M | **84.58%** | Universal Inverted Bottleneck (15 blocks, 4 variants from 1 primitive) |
 | ViT-Tiny | 5.5M | **71.70%** | patch embed + 12 transformer blocks (data-hungry) |
 | EfficientNetV2-S | 38.2M | _in progress_ | fusedMbConv + MBConv stages |
 
@@ -111,6 +112,24 @@ GELU. 5-epoch warmup. Imagenette is too small for ViT to really shine
 | 60 | 71.18% |
 | 70 | 71.75% |
 | 80 | **71.70%** |
+
+### MobileNetV4-Medium
+
+15 Universal Inverted Bottleneck (UIB) blocks expressing all four
+block types (ExtraDW, IB / standard MBConv, ConvNeXt, FFN) from a
+single parameterized primitive. The "stop adding new block types"
+philosophy in action.
+
+| Epoch | Val acc |
+|---|---|
+| 10 | 75.00% |
+| 20 | 79.18% |
+| 30 | 82.22% |
+| 40 | 82.48% |
+| 50 | 83.15% |
+| 60 | 84.43% |
+| 70 | 84.84% |
+| 80 | **84.58%** |
 
 ## Training recipe ablation (ResNet-34)
 
