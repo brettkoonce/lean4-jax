@@ -15,7 +15,7 @@ Hardware: AMD Radeon 7900 XTX (gfx1100) via ROCm 7.2 / IREE.
 | ResNet-34 | 21.3M | **90.29%** | basic residual blocks (3x3 + 3x3) |
 | ResNet-50 | 23.5M | **89.40%** | bottleneck blocks (1x1 → 3x3 → 1x1) |
 | MobileNetV2 | 2.2M | **87.09%** | depthwise separable + inverted residual |
-| MobileNetV3-Large | 3.0M | _in progress_ | exact h-swish + h-sigmoid SE |
+| MobileNetV3-Large | 3.0M | **86.48%** | exact h-swish + h-sigmoid SE |
 | EfficientNet-B0 | 7.2M | _in progress_ | MBConv with swish + sigmoid SE |
 
 ## Per-epoch eval history (running BN stats)
@@ -58,6 +58,23 @@ Hardware: AMD Radeon 7900 XTX (gfx1100) via ROCm 7.2 / IREE.
 | 60 | 86.76% |
 | 70 | 87.19% |
 | 80 | **87.09%** |
+
+### MobileNetV3-Large
+
+Exact h-swish (`x * ReLU6(x+3) / 6`) and h-sigmoid (`ReLU6(x+3) / 6`) with
+piecewise gradients. SE block uses ReLU on reduce + h-sigmoid on gate (V3
+variant), not swish + sigmoid (EfficientNet variant).
+
+| Epoch | Val acc |
+|---|---|
+| 10 | 77.72% |
+| 20 | 82.10% |
+| 30 | 83.63% |
+| 40 | 84.68% |
+| 50 | 85.76% |
+| 60 | 85.96% |
+| 70 | 86.35% |
+| 80 | **86.48%** |
 
 ## Training recipe ablation (ResNet-34)
 
