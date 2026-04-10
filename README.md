@@ -11,7 +11,7 @@ This project went through three implementations of the same idea — "Lean 4 as 
 specification language for deep learning" — each shedding more dependencies
 than the last.
 
-**Phase 1 — Pure Lean 4.** [mnist-lean4](../mnist-lean4): everything in Lean,
+**Phase 1 — Pure Lean 4.** [`mnist-lean4/`](mnist-lean4/): everything in Lean,
 `Float64` as the only datatype, hand-written gradients, C FFI to OpenBLAS /
 hipBLAS for the matmuls. Worked end-to-end on MNIST through ResNet-34 but
 performance was poor — every operation crossed the FFI boundary, no fusion,
