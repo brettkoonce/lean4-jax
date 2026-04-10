@@ -132,6 +132,12 @@ lean_exe «efficientnet-v2s» where
 lean_exe «mobilenet-v4» where
   root := `MainMobilenetV4
 
+lean_exe «mobilenet-v4-train» where
+  root := `MainMobilenetV4Train
+  moreLinkArgs := #["-L", "/home/skoonce/lean/claude_max/lean4-jax/ffi",
+    "-liree_ffi", "-Wl,-rpath,/home/skoonce/lean/claude_max/lean4-jax/ffi",
+    "-Wl,--allow-shlib-undefined"]
+
 lean_exe «mnist-cnn-mlir» where
   root := `MainCnnMlir
 
