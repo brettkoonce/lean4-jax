@@ -37,6 +37,13 @@ def buildPrefix (spec : NetSpec) : String :=
 def trainFnName (spec : NetSpec) : String :=
   "jit_" ++ spec.sanitizedName ++ "_train_step.main"
 
+/-- Cache key for an MLIR string under the current IREE backend.
+    Combines the MLIR content with the backend env var so switching
+    `IREE_BACKEND=rocm` ↔ `cuda` invalidates the cache. -/
+private def cacheKey (mlir : String) : IO String := do
+  let backend ← (IO.getEnv "IREE_BACKEND").map (·.getD "cuda")
+  return toString (mlir ++ "::" ++ backend).hash
+
 private def runIree (mlirPath outPath : String) : IO Bool := do
   let args ← ireeCompileArgs mlirPath outPath
   let r ← IO.Process.output { cmd := ".venv/bin/iree-compile", args := args }
@@ -45,18 +52,38 @@ private def runIree (mlirPath outPath : String) : IO Bool := do
     return false
   return true
 
+/-- Compile `mlirPath` to `outPath` via iree-compile, but skip the work
+    if `outPath` exists and `outPath ++ ".hash"` matches the cache key
+    for the current MLIR + IREE backend. Returns (compiledNewly, success). -/
+private def runIreeCached (mlirPath outPath mlir : String) : IO (Bool × Bool) := do
+  let key ← cacheKey mlir
+  let hashPath := outPath ++ ".hash"
+  let vmfbExists ← System.FilePath.pathExists outPath
+  let hashExists ← System.FilePath.pathExists hashPath
+  if vmfbExists && hashExists then
+    let cached ← IO.FS.readFile hashPath
+    if cached.trim == key then
+      return (false, true)  -- cache hit, skip the slow path
+  -- Cache miss → compile and write the sidecar.
+  let ok ← runIree mlirPath outPath
+  if ok then
+    IO.FS.writeFile hashPath key
+  return (true, ok)
+
 /-- Generate forward / eval-forward / train-step MLIR for `spec`,
     write them to `.lake/build/<sanitized>_*.mlir`, and compile each
-    to a `.vmfb`. Returns the path to the train-step vmfb (used to
-    create the IreeSession). -/
+    to a `.vmfb`. Cached on the MLIR content + IREE backend so a
+    second run with no codegen changes skips iree-compile entirely
+    (saves ~10-15 min for ResNet-sized models). Returns the path to
+    the train-step vmfb. -/
 def compileVmfbs (spec : NetSpec) (cfg : TrainConfig) : IO String := do
   IO.FS.createDirAll ".lake/build"
   let pfx := spec.buildPrefix
 
   IO.eprintln "Generating train step MLIR..."
-  let mlir := MlirCodegen.generateTrainStep spec cfg.batchSize ("jit_" ++ spec.sanitizedName ++ "_train_step")
-  IO.FS.writeFile s!"{pfx}_train_step.mlir" mlir
-  IO.eprintln s!"  {mlir.length} chars"
+  let trainMlir := MlirCodegen.generateTrainStep spec cfg.batchSize ("jit_" ++ spec.sanitizedName ++ "_train_step")
+  IO.FS.writeFile s!"{pfx}_train_step.mlir" trainMlir
+  IO.eprintln s!"  {trainMlir.length} chars"
 
   let fwdMlir := MlirCodegen.generate spec cfg.batchSize
   IO.FS.writeFile s!"{pfx}_fwd.mlir" fwdMlir
@@ -65,12 +92,15 @@ def compileVmfbs (spec : NetSpec) (cfg : TrainConfig) : IO String := do
   IO.FS.writeFile s!"{pfx}_fwd_eval.mlir" evalFwdMlir
 
   IO.eprintln "Compiling vmfbs..."
-  if ← runIree s!"{pfx}_fwd.mlir" s!"{pfx}_fwd.vmfb" then
-    IO.eprintln "  forward compiled"
-  if ← runIree s!"{pfx}_fwd_eval.mlir" s!"{pfx}_fwd_eval.vmfb" then
-    IO.eprintln "  eval forward compiled"
-  if ← runIree s!"{pfx}_train_step.mlir" s!"{pfx}_train_step.vmfb" then
-    IO.eprintln "  train step compiled"
+  let (fwdNew, fwdOk) ← runIreeCached s!"{pfx}_fwd.mlir" s!"{pfx}_fwd.vmfb" fwdMlir
+  if fwdOk then IO.eprintln (if fwdNew then "  forward compiled" else "  forward (cached)")
+
+  let (evalNew, evalOk) ← runIreeCached s!"{pfx}_fwd_eval.mlir" s!"{pfx}_fwd_eval.vmfb" evalFwdMlir
+  if evalOk then IO.eprintln (if evalNew then "  eval forward compiled" else "  eval forward (cached)")
+
+  let (trainNew, trainOk) ← runIreeCached s!"{pfx}_train_step.mlir" s!"{pfx}_train_step.vmfb" trainMlir
+  if trainOk then
+    IO.eprintln (if trainNew then "  train step compiled" else "  train step (cached)")
   else
     IO.Process.exit 1
   return s!"{pfx}_train_step.vmfb"
