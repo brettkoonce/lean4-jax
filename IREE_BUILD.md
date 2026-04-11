@@ -140,6 +140,56 @@ Notes:
   where this command expects, `find "$IREE_BUILD" -name 'libflatcc*.a'`
   and substitute.
 
+### 4c. Fallback: rebuild flatcc verifier with default visibility (ROCm/HIP)
+
+On at least one ROCm 7.2 / IREE setup, the simple link in §4b produced
+a `.so` whose `flatcc_verify_*` symbols ended up as `GLOBAL HIDDEN` in
+the dynamic symbol table — meaning they're present in the `.text`
+section but absent from `.dynsym`. When the IREE runtime later tries
+to verify a `.vmfb` file at session-create time, it errors out with:
+
+```
+error while loading: undefined symbol: flatcc_verify_table_as_root
+```
+
+If you hit that, the fix is to recompile **just the flatcc verifier
+source** with `-fvisibility=default` and link the resulting object
+ahead of the archive (so the linker picks the visible version):
+
+```bash
+cd ffi
+
+# 4c-i. Compile the verifier source (NOT the prebuilt .a) with default visibility.
+gcc -fPIC -O2 -fvisibility=default \
+  -c "$IREE_SRC/third_party/flatcc/src/runtime/verifier.c" \
+  -I"$IREE_SRC/third_party/flatcc/include" \
+  -o flatcc_verifier_visible.o
+
+# 4c-ii. Link as before, but include flatcc_verifier_visible.o BEFORE
+#        the archives so its definitions win over the hidden ones.
+gcc -shared -o libiree_ffi.so iree_ffi.o flatcc_verifier_visible.o \
+  -Wl,--whole-archive \
+    "$IREE_BUILD/runtime/src/iree/runtime/libiree_runtime_unified.a" \
+  -Wl,--no-whole-archive \
+  -Wl,--start-group \
+    "$IREE_BUILD"/build_tools/third_party/flatcc/libflatcc_runtime.a \
+    "$IREE_BUILD"/build_tools/third_party/flatcc/libflatcc_parsing.a \
+  -Wl,--end-group \
+  -lm -lpthread -ldl
+
+rm flatcc_verifier_visible.o
+```
+
+After this, `readelf -Ws ffi/libiree_ffi.so | grep flatcc_verify_table_as_root`
+should show `GLOBAL DEFAULT` (not `GLOBAL HIDDEN`).
+
+Why this works: the IREE third-party flatcc build compiles its sources
+with `-fvisibility=hidden`. The resulting `.o` files in the archives
+have `GLOBAL HIDDEN` symbols which are stripped from `.dynsym` when
+linked into a shared library. We bypass that by recompiling just
+`verifier.c` with default visibility and putting it on the link line
+before the archive — the linker resolves to our visible copy.
+
 ## 5. Verify the result
 
 ```bash
@@ -177,6 +227,9 @@ from the repo root (not from `.lake/build/bin/`).
 | `no HAL driver matching 'cuda'` at runtime | `--whole-archive` was dropped | redo §4b with the wrap intact |
 | `--no-allow-shlib-undefined` errors when linking the Lean trainer | Lean's bundled lld is strict about transitive glibc symbols | already handled — every trainer in `lakefile.lean` passes `-Wl,--allow-shlib-undefined` |
 | `iree-compile` not found | venv not active in the shell that runs `lake build` | `source .venv/bin/activate` first |
+| `undefined symbol: flatcc_verify_table_as_root` *at runtime, not link time* | flatcc symbols built with `-fvisibility=hidden`, stripped from `.dynsym` | use the §4c fallback (rebuild `verifier.c` with `-fvisibility=default`) |
+| Trainer crashes with `device target "cuda"` error on a HIP machine (or vice versa) | `IREE_BACKEND` env var not propagated through tmux into the binary | set it via a shell wrapper script (see `run_*.sh` in the repo root for examples) — `IREE_BACKEND=cuda` is the default |
+| Eval call fails with `module 'foo_eval' not registered` after epoch 10 | the trainer's eval string is misspelled vs the sanitized spec name | sanitize lowercases and replaces non-alphanum with `_` — "EfficientNet V2-S" → `efficientnet_v2_s_eval`, NOT `efficient_net_v2_s_eval` |
 
 ## What this gets you
 
@@ -184,3 +237,56 @@ Once `libiree_ffi.so` exists in `ffi/`, every other target in
 `lakefile.lean` that links `-liree_ffi` (mnist, cifar, resnet, mobilenet,
 efficientnet, vit, vgg, …) builds without further setup. The runtime
 library is shared across all of them; only the `.vmfb` files differ.
+
+## Running a real trainer (operational notes)
+
+Building `libiree_ffi.so` is the hard part; running the bigger trainers
+afterwards has a few non-obvious gotchas worth knowing up front.
+
+**1. Use a shell wrapper to set env vars.** The trainers respect
+`IREE_BACKEND` (default: `cuda`; set to `rocm` for AMD) and
+`HIP_VISIBLE_DEVICES` / `CUDA_VISIBLE_DEVICES`. Setting these inline in
+`tmux send-keys "FOO=bar binary"` works *most* of the time but we hit
+cases where the env didn't propagate cleanly. The repo includes
+`run_effnet.sh`, `run_vit.sh`, `run_mnv4.sh` etc as examples — short
+shell scripts that `export` then `exec` the binary. Use one for any
+trainer you care about.
+
+```bash
+# run_resnet34.sh
+#!/bin/bash
+export HIP_VISIBLE_DEVICES=0      # or CUDA_VISIBLE_DEVICES
+export IREE_BACKEND=rocm          # or omit / set to cuda
+exec .lake/build/bin/resnet34-train 2>&1 | tee resnet34.log
+```
+
+**2. The first run compiles vmfbs.** Each trainer generates its
+StableHLO MLIR on launch and shells out to `iree-compile`. For
+ResNet-sized models the train step is 500 KB-2 MB of MLIR and IREE
+takes ~5-15 minutes to lower it to a `.vmfb`. You'll see:
+```
+Generating train step MLIR...
+  517912 chars
+Compiling vmfbs...
+  forward compiled
+  eval forward compiled
+  compiled
+```
+…and then training starts. The vmfbs are written to `.lake/build/`.
+Subsequent runs of the same binary regenerate the MLIR fresh each
+time (because the trainer always calls `generateTrainStep`), so
+expect the compile delay every launch unless you rip out that step.
+
+**3. First val eval is at epoch 10.** If the eval forward MLIR is
+wrong (or the eval call uses a misspelled module name) the trainer
+runs for ~10 epochs of training and then crashes. Watch the first
+val eval output before walking away from a long run.
+
+**4. Running BN stats are critical for eval accuracy.** Don't be
+surprised if epoch-10 val accuracy looks bad initially — running BN
+EMA needs ~1 epoch to stabilize. The numbers in `RESULTS.md` are
+real.
+
+**5. Big models eat a long time.** EfficientNetV2-S is 38M params
+and takes ~9 min/epoch on a single 7900 XTX, so 80 epochs = ~12 hours.
+Plan accordingly.
