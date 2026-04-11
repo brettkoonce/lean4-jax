@@ -35,14 +35,26 @@ def evalShapesBA : ByteArray := resnet50.evalShapesBA
 def xShape (batch : Nat) : ByteArray := resnet50.xShape batch
 end R50Layout
 
+def resnet50Config : TrainConfig where
+  learningRate := 0.001
+  batchSize    := 32
+  epochs       := 80
+  useAdam      := true
+  weightDecay  := 0.0001
+  cosineDecay  := true
+  warmupEpochs := 3
+  augment      := true
+
 def main (args : List String) : IO Unit := do
   let dataDir := args.head? |>.getD "data/imagenette"
   IO.eprintln s!"ResNet-50: {R50Layout.nParams} params"
 
   -- Generate + compile train step
+  let cfg := resnet50Config
+  let batchN : Nat := cfg.batchSize
+  let batch : USize := cfg.batchSize.toUSize
   IO.FS.createDirAll ".lake/build"
   IO.eprintln "Generating train step MLIR..."
-  let batchN : Nat := 32
   let mlir := MlirCodegen.generateTrainStep resnet50 batchN "jit_resnet50_train_step"
   IO.FS.writeFile ".lake/build/resnet50_train_step.mlir" mlir
   IO.eprintln s!"  {mlir.length} chars"
@@ -89,15 +101,14 @@ def main (args : List String) : IO Unit := do
   let adamV ← F32.const (F32.size p).toUSize 0.0
   IO.eprintln s!"  {F32.size p} params + m + v ({(p.size + adamM.size + adamV.size) / 1024 / 1024} MB)"
 
-  let batch : USize := 32
-  let epochs := 80
+  let epochs := cfg.epochs
   let bpE := nTrain / batchN
   let trainPixels := 3 * 256 * 256
   let allShapes := R50Layout.shapesBA
   let xSh := R50Layout.xShape batchN
   let nP := R50Layout.nParams
   let nT := R50Layout.nTotal
-  let baseLR : Float := 0.001
+  let baseLR : Float := cfg.learningRate
 
   let bnShapes := R50Layout.bnShapesBA
   let nBnStats := R50Layout.nBnStats
@@ -116,10 +127,11 @@ def main (args : List String) : IO Unit := do
     let (sImg, sLbl) ← F32.shuffle curImg curLbl nTrain.toUSize trainPixels.toUSize (epoch + 42).toUSize
     curImg := sImg; curLbl := sLbl
     -- Cosine LR with 3-epoch warmup
-    let lr : Float := if epoch < 3 then
-      baseLR * (epoch.toFloat + 1.0) / 3.0
+    let warmup : Nat := cfg.warmupEpochs
+    let lr : Float := if epoch < warmup then
+      baseLR * (epoch.toFloat + 1.0) / warmup.toFloat
     else
-      baseLR * 0.5 * (1.0 + Float.cos (3.14159265358979 * (epoch.toFloat - 3.0) / (epochs.toFloat - 3.0)))
+      baseLR * 0.5 * (1.0 + Float.cos (3.14159265358979 * (epoch.toFloat - warmup.toFloat) / (epochs.toFloat - warmup.toFloat)))
     let mut epochLoss : Float := 0.0
     let t0 ← IO.monoMsNow
     for bi in [:bpE] do

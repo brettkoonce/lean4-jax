@@ -38,12 +38,23 @@ def evalShapesBA : ByteArray        := resnet34.evalShapesBA
 def xShape (batch : Nat) : ByteArray := resnet34.xShape batch
 end ResnetLayout
 
+def resnet34Config : TrainConfig where
+  learningRate := 0.001
+  batchSize    := 32
+  epochs       := 80
+  useAdam      := true
+  weightDecay  := 0.0001
+  cosineDecay  := true
+  warmupEpochs := 3
+  augment      := true
+
 def main (args : List String) : IO Unit := do
   let dataDir := args.head? |>.getD "data/imagenette"
   IO.eprintln s!"ResNet-34: {ResnetLayout.nParams} params"
 
-  let batchN : Nat := 32
-  let batch : USize := 32
+  let cfg := resnet34Config
+  let batchN : Nat := cfg.batchSize
+  let batch : USize := cfg.batchSize.toUSize
 
   -- Generate + compile train step MLIR (self-compile like R50)
   IO.FS.createDirAll ".lake/build"
@@ -94,20 +105,21 @@ def main (args : List String) : IO Unit := do
   let adamV ← F32.const (F32.size params).toUSize 0.0
   IO.eprintln s!"  {F32.size params} params + m + v ({(params.size + adamM.size + adamV.size) / 1024 / 1024} MB)"
 
-  -- Training loop: Adam optimizer, cosine LR schedule, batch 32
-  let epochs := 80
+  -- Training loop: Adam optimizer, cosine LR schedule
+  let epochs := cfg.epochs
   let bpE := nTrain / batchN
   let trainPixels := 3 * 256 * 256
   let allShapes := ResnetLayout.shapesBA
   let xSh := ResnetLayout.xShape batchN
   let nP := ResnetLayout.nParams
   let nT := ResnetLayout.nTotal  -- params + m + v
-  let baseLR : Float := 0.001
+  let baseLR : Float := cfg.learningRate
+  let warmup : Nat := cfg.warmupEpochs
 
   let bnShapes := ResnetLayout.bnShapesBA
   let nBnStats := ResnetLayout.nBnStats
 
-  IO.eprintln s!"training: {bpE} batches/epoch, batch={batchN}, Adam, lr={baseLR}, cosine, label_smooth=0.1, wd=1e-4"
+  IO.eprintln s!"training: {bpE} batches/epoch, batch={batchN}, Adam, lr={baseLR}, cosine warmup={warmup}, label_smooth=0.1, wd={cfg.weightDecay}"
   IO.eprintln s!"  BN layers: {resnet34.bnLayers.size}, BN stat floats: {nBnStats}"
   let mut p := params
   let mut m := adamM
@@ -120,10 +132,10 @@ def main (args : List String) : IO Unit := do
   for epoch in [:epochs] do
     let (sImg, sLbl) ← F32.shuffle curImg curLbl nTrain.toUSize trainPixels.toUSize (epoch + 42).toUSize
     curImg := sImg; curLbl := sLbl
-    let lr : Float := if epoch < 3 then
-      baseLR * (epoch.toFloat + 1.0) / 3.0
+    let lr : Float := if epoch < warmup then
+      baseLR * (epoch.toFloat + 1.0) / warmup.toFloat
     else
-      baseLR * 0.5 * (1.0 + Float.cos (3.14159265358979 * (epoch.toFloat - 3.0) / (epochs.toFloat - 3.0)))
+      baseLR * 0.5 * (1.0 + Float.cos (3.14159265358979 * (epoch.toFloat - warmup.toFloat) / (epochs.toFloat - warmup.toFloat)))
     let mut epochLoss : Float := 0.0
     let t0 ← IO.monoMsNow
     for bi in [:bpE] do
