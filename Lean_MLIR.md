@@ -5,7 +5,7 @@ compiled via IREE, orchestrated from Lean with no Python at runtime.
 
 ## Context
 
-This project (`lean4-jax-mlx`) has working Lean → JAX and Lean → MLX backends.
+This project (`lean4-mlir`) has working Lean → JAX and Lean → MLX backends.
 Both match JAX baseline accuracy on MNIST, CIFAR-10, and ResNet-34 on Imagenette.
 The codegen pattern is established: walk the `NetSpec`, emit framework-specific
 text, shell out to Python to execute.
@@ -89,7 +89,7 @@ pipeline. Validate the full pipeline works end-to-end before touching autodiff.
 
 ### Implementation steps
 
-1. **Create `LeanJax/MlirCodegen.lean`** — emit StableHLO for MLP
+1. **Create `LeanMlir/MlirCodegen.lean`** — emit StableHLO for MLP
    - `emitHeader`: module preamble
    - `emitForward`: walk layer list, emit `stablehlo.dot_general` + broadcast_add + activation
    - `generate`: assemble
@@ -105,7 +105,7 @@ pipeline. Validate the full pipeline works end-to-end before touching autodiff.
    - Confirms MLIR is valid and the compiled artifact executes
 
 4. **Write IREE C FFI bindings in Lean**
-   - `LeanJax/IreeRuntime.lean`
+   - `LeanMlir/IreeRuntime.lean`
    - Core types: `Session`, `BufferView` (opaque pointers)
    - Functions needed:
      ```
@@ -256,15 +256,15 @@ payoff. Defer until the pipeline is proven to work and the motivation is clear.
 - **IREE runtime API**: https://iree.dev/reference/bindings/c-api/
 - **IREE C samples**: https://github.com/iree-org/iree/tree/main/samples/custom_dispatch
 - **jax.export**: https://jax.readthedocs.io/en/latest/export/export.html
-- **Existing JAX codegen in this repo**: `LeanJax/Codegen.lean` (reference for emission patterns)
-- **Existing MLX codegen**: `LeanJax/MlxCodegen.lean` (reference for structuring non-JAX backends)
+- **Existing JAX codegen in this repo**: `LeanMlir/Codegen.lean` (reference for emission patterns)
+- **Existing MLX codegen**: `LeanMlir/MlxCodegen.lean` (reference for structuring non-JAX backends)
 
 ## Concrete next steps (in order)
 
 1. `pip install iree-compiler iree-runtime` and verify `iree-compile --version`
 2. Hand-write a tiny MLP in StableHLO MLIR, compile via CLI, run via `iree-run-module` to validate the toolchain
-3. Write `LeanJax/MlirCodegen.lean` with just dense + relu emission, generate MLIR for `mnistMlp`, verify it compiles with `iree-compile`
-4. Write `LeanJax/IreeRuntime.lean` with FFI extern declarations, implement the C bindings in a companion `c/iree_bindings.c` file
+3. Write `LeanMlir/MlirCodegen.lean` with just dense + relu emission, generate MLIR for `mnistMlp`, verify it compiles with `iree-compile`
+4. Write `LeanMlir/IreeRuntime.lean` with FFI extern declarations, implement the C bindings in a companion `c/iree_bindings.c` file
 5. Serialize JAX-trained weights to binary, write `MainMlpMlir.lean` that loads weights + runs forward, check accuracy matches JAX
 6. Only after all that works: move to Phase 2 (training)
 

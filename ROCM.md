@@ -14,9 +14,9 @@ runtime library change.
 ## Step 1: Clone and build Lean project
 
 ```bash
-git clone <repo> lean4-jax-mlir
-cd lean4-jax-mlir
-lake build LeanJax
+git clone <repo> lean4-mlir
+cd lean4-mlir
+lake build LeanMlir
 ```
 
 ## Step 2: Install IREE compiler (pip)
@@ -99,7 +99,7 @@ This builds static `.a` libraries in `iree-build/runtime/src/iree/`.
 The FFI wrapper links our C shim against the IREE static libraries:
 
 ```bash
-cd lean4-jax-mlir/ffi
+cd lean4-mlir/ffi
 
 # Compile the FFI C files
 gcc -fPIC -O2 -c iree_ffi.c \

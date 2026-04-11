@@ -79,7 +79,7 @@ The model complexity is irrelevant — even a 2-layer MLP with 675 parameters ha
 
 ## Additional context
 
-This was discovered while running Lean 4 → JAX generated training scripts (https://github.com/skoonce/lean4-jax). The codegen produces multi-GPU data-parallel training by default using `Mesh` + `NamedSharding`. All models (MLP, CNN, ResNet, etc.) hang on gfx1100 when using this pattern.
+This was discovered while running Lean 4 → JAX generated training scripts (https://github.com/brettkoonce/lean4-mlir). The codegen produces multi-GPU data-parallel training by default using `Mesh` + `NamedSharding`. All models (MLP, CNN, ResNet, etc.) hang on gfx1100 when using this pattern.
 
 Separately, single-GPU CNN models also crash with a JIT segfault during conv backward pass compilation — that is a different bug tracked in our [conv backward report](bug_report.md).
 

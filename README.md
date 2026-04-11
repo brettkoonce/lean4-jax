@@ -186,7 +186,7 @@ def mobilenetV4Medium : NetSpec where
 ## Project structure
 
 ```
-lean4-jax/                  -- (the repo dir name still says "jax", a relic)
+lean4-mlir/
 ├── README.md               -- this file (phase 3)
 ├── RESULTS.md              -- per-architecture eval histories + ablations
 ├── IREE.md                 -- how to build the IREE runtime

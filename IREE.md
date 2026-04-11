@@ -65,7 +65,7 @@ output on 4060 Ti.
 
 ### Step 2: Lean codegen emits StableHLO
 
-Wrote `LeanJax/MlirCodegen.lean` (~80 LOC) mirroring the JAX codegen pattern.
+Wrote `LeanMlir/MlirCodegen.lean` (~80 LOC) mirroring the JAX codegen pattern.
 Walks `NetSpec.layers`, emits `stablehlo.dot_general` + `broadcast_in_dim`
 + `add` + `maximum` per dense-ReLU pair. Scope is MLP-only for this phase.
 
@@ -156,7 +156,7 @@ per call.
 to the C wrapper. Converts f64↔f32 at the boundary, handles packed int32
 labels, wraps opaque session pointers in Lean external classes for GC.
 
-`LeanJax/IreeRuntime.lean` declares three `@[extern]` functions:
+`LeanMlir/IreeRuntime.lean` declares three `@[extern]` functions:
 
 ```lean
 opaque IreeSession : Type
@@ -206,7 +206,7 @@ fp32 noise (1.5e-8 on weights, 0.0 on loss).
 
 ### Step 8: Training loop in Lean
 
-`LeanJax/MnistData.lean` parses IDX format (big-endian header + u8 pixels,
+`LeanMlir/MnistData.lean` parses IDX format (big-endian header + u8 pixels,
 u8 labels) into `FloatArray` (images normalized to [0,1]) and `ByteArray`
 (labels packed as int32 LE for the FFI). ~50 LOC.
 
@@ -445,7 +445,7 @@ the GPU is idle 80-90% of the time; adding GPUs just adds more idle GPUs.
 ## File map
 
 ```
-LeanJax/
+LeanMlir/
   MlirCodegen.lean          Lean NetSpec → StableHLO emitter (~200 LOC, conv+pool+dense)
   IreeRuntime.lean          @[extern] bindings + MlpLayout/CnnLayout/CifarLayout
   MnistData.lean            IDX parser (MNIST) + CIFAR-10 binary loader
