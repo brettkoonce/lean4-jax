@@ -181,7 +181,7 @@ def main (args : List String) : IO Unit := do
         let mut total : Nat := 0
         for bi in [:evalSteps] do
           let xba := F32.sliceImages valImg (bi * evalBatch) evalBatch (3 * 224 * 224)
-          let logits ← IreeSession.forwardF32 evalSess "resnet_34_eval.forward_eval"
+          let logits ← IreeSession.forwardF32 evalSess resnet34.evalFnName
                           evalParams evalShapesBA xba evalXSh evalBatch.toUSize 10
           let lblSlice := F32.sliceLabels valLbl (bi * evalBatch) evalBatch
           for i in [:evalBatch] do

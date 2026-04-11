@@ -169,6 +169,19 @@ def evalShapesBA (spec : NetSpec) : ByteArray :=
 def xShape (spec : NetSpec) (batch : Nat) : ByteArray :=
   packXShape #[batch, 3 * spec.imageH * spec.imageW]
 
+/-- Sanitized base name for the spec — same transformation the codegen
+    applies when generating MLIR module names. -/
+def sanitizedName (spec : NetSpec) : String :=
+  MlirCodegen.sanitize spec.name
+
+/-- The eval forward function name to pass to `forwardF32`. The codegen
+    emits modules of the form `@<sanitized_name>_eval` containing
+    `func.func @forward_eval`, so the FFI call wants the qualified
+    `"<sanitized_name>_eval.forward_eval"`. Computing this from the
+    spec means trainers can never get the spelling wrong by hand. -/
+def evalFnName (spec : NetSpec) : String :=
+  spec.sanitizedName ++ "_eval.forward_eval"
+
 /-- He-initialize all parameters for a spec. Walks `paramShapes`:
     - Rank ≥ 2 tensors → He-normal init using fan-in
     - Rank-1 tensors that come in pairs (gamma, beta) → 1.0 / 0.0 (BN/LN)

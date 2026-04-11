@@ -41,8 +41,10 @@ private def inputChannels (spec : NetSpec) : Option Nat :=
 private def tensorTy (dims : List Nat) : String :=
   "tensor<" ++ String.intercalate "x" (dims.map toString) ++ "xf32>"
 
-/-- Sanitize a string for use as an MLIR identifier. -/
-private def sanitize (s : String) : String :=
+/-- Sanitize a string for use as an MLIR identifier. Public so trainers
+    can derive eval-call names from `spec.name` instead of hardcoding
+    them (and getting them wrong — see e.g. the EffNetV2 eval-name bug). -/
+def sanitize (s : String) : String :=
   s.toLower.map (fun c => if c.isAlphanum then c else '_')
 
 /-- Compute SAME padding. Returns (padH0, padH1, padW0, padW1). -/

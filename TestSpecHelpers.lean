@@ -277,8 +277,23 @@ def main : IO Unit := do
     else
       IO.println s!"  ✗ {name}: paramShapes DIFFER (helper={helper.size}, inline={inline.size})"
       ok := false
+  -- Also verify evalFnName matches the old hardcoded strings.
+  let evalCases : Array (String × String × String) := #[
+    ("ResNet-34",          resnet34.evalFnName,          "resnet_34_eval.forward_eval"),
+    ("ResNet-50",          resnet50.evalFnName,          "resnet_50_eval.forward_eval"),
+    ("MobileNetV2",        mobilenetV2.evalFnName,       "mobilenet_v2_eval.forward_eval"),
+    ("EfficientNet-B0",    efficientNetB0.evalFnName,    "efficientnet_b0_eval.forward_eval"),
+    ("MobileNetV4-Medium", mobilenetV4Medium.evalFnName, "mobilenet_v4_medium_eval.forward_eval"),
+    ("ViT-Tiny",           vitTiny.evalFnName,           "vit_tiny_eval.forward_eval")
+  ]
+  for (name, helper, expected) in evalCases do
+    if helper == expected then
+      IO.println s!"  ✓ {name}: evalFnName = {expected}"
+    else
+      IO.println s!"  ✗ {name}: evalFnName MISMATCH: got {helper}, expected {expected}"
+      ok := false
   if ok then
-    IO.println "All paramShapes match. Refactor is safe."
+    IO.println "All paramShapes and evalFnNames match. Refactor is safe."
   else
     IO.eprintln "Mismatch detected — do NOT refactor further."
     IO.Process.exit 1
