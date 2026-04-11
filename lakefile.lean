@@ -211,6 +211,9 @@ lean_exe «test-resnet-residual» where
 lean_exe «test-spec-helpers» where
   root := `TestSpecHelpers
 
+lean_exe «test-smoke-trainers» where
+  root := `TestSmokeTrainers
+
 lean_exe «test-codegen-ts» where
   root := `TestCodegenTrainStep
 
