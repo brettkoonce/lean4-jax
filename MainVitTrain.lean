@@ -3,6 +3,7 @@ import LeanMlir.F32Array
 import LeanMlir.Types
 import LeanMlir.Spec
 import LeanMlir.MlirCodegen
+import LeanMlir.SpecHelpers
 
 /-! ViT-Tiny on Imagenette — full training pipeline.
     Generates train_step MLIR → compiles with IREE → Adam training loop.
@@ -20,69 +21,13 @@ def vitTiny : NetSpec where
   ]
 
 namespace VitLayout
-
-def nParams : Nat := vitTiny.totalParams
-
--- Build param shapes array by walking the spec
-def paramShapes : Array (Array Nat) := Id.run do
-  let mut shapes : Array (Array Nat) := #[]
-  for l in vitTiny.layers do
-    match l with
-    | .patchEmbed ic dim p nP =>
-      shapes := shapes.push #[dim, ic, p, p] |>.push #[dim]  -- W, b
-      shapes := shapes.push #[dim]                            -- cls
-      shapes := shapes.push #[nP + 1, dim]                    -- pos
-    | .transformerEncoder dim _heads mlpDim nBlocks =>
-      for _bi in [:nBlocks] do
-        -- LN1
-        shapes := shapes.push #[dim] |>.push #[dim]
-        -- Wq, bq
-        shapes := shapes.push #[dim, dim] |>.push #[dim]
-        -- Wk, bk
-        shapes := shapes.push #[dim, dim] |>.push #[dim]
-        -- Wv, bv
-        shapes := shapes.push #[dim, dim] |>.push #[dim]
-        -- Wo, bo
-        shapes := shapes.push #[dim, dim] |>.push #[dim]
-        -- LN2
-        shapes := shapes.push #[dim] |>.push #[dim]
-        -- Wfc1, bfc1
-        shapes := shapes.push #[dim, mlpDim] |>.push #[mlpDim]
-        -- Wfc2, bfc2
-        shapes := shapes.push #[mlpDim, dim] |>.push #[dim]
-      -- Final LN
-      shapes := shapes.push #[dim] |>.push #[dim]
-    | .dense fi fo _ =>
-      shapes := shapes.push #[fi, fo] |>.push #[fo]
-    | _ => pure ()
-  return shapes
-
-def allShapes : Array (Array Nat) := paramShapes ++ paramShapes ++ paramShapes
-def shapesBA : ByteArray := packShapes allShapes
-def nTotal : Nat := 3 * nParams
-
-def xShape (batch : Nat) : ByteArray :=
-  packXShape #[batch, 3 * 224 * 224]
-
--- ViT has no BN, so bnLayers is empty
-def bnLayers : Array (Nat × Nat) := MlirCodegen.collectBnLayers vitTiny
-def bnShapesBA : ByteArray := Id.run do
-  let push := fun (ba : ByteArray) (v : Nat) =>
-    let v32 : UInt32 := v.toUInt32
-    ba.push (v32 &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 8) &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 16) &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 24) &&& 0xFF).toUInt8
-  let mut ba := push .empty bnLayers.size
-  for (_, oc) in bnLayers do ba := push ba oc
-  return ba
-
-def nBnStats : Nat := bnLayers.foldl (fun acc (_, oc) => acc + oc * 2) 0
-
--- For ViT eval is identical to train forward (no BN running stats)
-def evalShapes : Array (Array Nat) := paramShapes
-def evalShapesBA : ByteArray := packShapes evalShapes
-
+def nParams      : Nat       := vitTiny.totalParams
+def shapesBA     : ByteArray := vitTiny.shapesBA
+def nTotal       : Nat       := 3 * nParams
+def bnShapesBA   : ByteArray := vitTiny.bnShapesBA
+def nBnStats     : Nat       := vitTiny.nBnStats
+def evalShapesBA : ByteArray := vitTiny.evalShapesBA
+def xShape (batch : Nat) : ByteArray := vitTiny.xShape batch
 end VitLayout
 
 #eval vitTiny.validate!
@@ -135,36 +80,7 @@ def main (args : List String) : IO Unit := do
   IO.eprintln s!"  train: {nTrain} images (256×256)"
 
   -- Init params: He init for weights, special init for cls/pos/LN
-  let mut paramParts : Array ByteArray := #[]
-  let mut seed : USize := 42
-  let shapes := VitLayout.paramShapes
-  let mut si : Nat := 0
-  while si < shapes.size do
-    let shape := shapes[si]!
-    let n := shape.foldl (· * ·) 1
-    if shape.size >= 2 then
-      let fanIn := if shape.size == 4 then shape[1]! * shape[2]! * shape[3]! else shape[0]!
-      paramParts := paramParts.push (← F32.heInit seed n.toUSize (Float.sqrt (2.0 / fanIn.toFloat)))
-      seed := seed + 1
-      si := si + 1
-      -- Next 1D: bias (zero) or LN gamma+beta (1.0, 0.0)
-      if si < shapes.size && shapes[si]!.size == 1 then
-        let n1 := shapes[si]![0]!
-        if si + 1 < shapes.size && shapes[si + 1]!.size == 1 && shapes[si + 1]![0]! == n1 then
-          -- LN: gamma=1.0, beta=0.0
-          paramParts := paramParts.push (← F32.const n1.toUSize 1.0)
-          si := si + 1
-          paramParts := paramParts.push (← F32.const (shapes[si]![0]!).toUSize 0.0)
-          si := si + 1
-        else
-          -- bias=0
-          paramParts := paramParts.push (← F32.const n1.toUSize 0.0)
-          si := si + 1
-    else
-      -- 1D-only (e.g., cls token, isolated bias)
-      paramParts := paramParts.push (← F32.const n.toUSize 0.0)
-      si := si + 1
-  let params := F32.concat paramParts
+  let params ← vitTiny.heInitParams
   let adamM ← F32.const (F32.size params).toUSize 0.0
   let adamV ← F32.const (F32.size params).toUSize 0.0
   IO.eprintln s!"  {F32.size params} params + m + v ({(params.size + adamM.size + adamV.size) / 1024 / 1024} MB)"

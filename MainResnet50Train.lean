@@ -3,6 +3,7 @@ import LeanMlir.F32Array
 import LeanMlir.Types
 import LeanMlir.Spec
 import LeanMlir.MlirCodegen
+import LeanMlir.SpecHelpers
 
 /-! ResNet-50 on Imagenette — full training pipeline with bottleneck blocks.
     ~23.5M params, 224×224 input, 10 classes. -/
@@ -22,68 +23,16 @@ def resnet50 : NetSpec where
     .dense 2048 10 .identity
   ]
 
+-- Param/shape/init helpers come from `LeanMlir.SpecHelpers`. The local
+-- namespace is now thin re-exports.
 namespace R50Layout
-
-def nParams : Nat := resnet50.totalParams
-
-def paramShapes : Array (Array Nat) := Id.run do
-  let mut shapes : Array (Array Nat) := #[]
-  for l in resnet50.layers do
-    match l with
-    | .convBn ic oc k _ _ =>
-      shapes := shapes.push #[oc, ic, k, k] |>.push #[oc] |>.push #[oc]
-    | .dense fi fo _ =>
-      shapes := shapes.push #[fi, fo] |>.push #[fo]
-    | .bottleneckBlock ic oc nBlocks firstStride =>
-      let mid := oc / 4
-      let needsProj := !(ic == oc && firstStride == 1)
-      for bi in [:nBlocks] do
-        let blockIc := if bi == 0 then ic else oc
-        -- 1x1 reduce
-        shapes := shapes.push #[mid, blockIc, 1, 1] |>.push #[mid] |>.push #[mid]
-        -- 3x3
-        shapes := shapes.push #[mid, mid, 3, 3] |>.push #[mid] |>.push #[mid]
-        -- 1x1 expand
-        shapes := shapes.push #[oc, mid, 1, 1] |>.push #[oc] |>.push #[oc]
-        if bi == 0 && needsProj then
-          shapes := shapes.push #[oc, ic, 1, 1] |>.push #[oc] |>.push #[oc]
-    | _ => pure ()
-  return shapes
-
--- Full shapes: params ++ m (1st moment) ++ v (2nd moment) for Adam
-def allShapes : Array (Array Nat) := paramShapes ++ paramShapes ++ paramShapes
-def shapesBA : ByteArray := packShapes allShapes
-def nTotal : Nat := 3 * nParams  -- params + m + v
-
-def xShape (batch : Nat) : ByteArray :=
-  packXShape #[batch, 3 * 224 * 224]
-
--- BN layer info: (pidx, oc) pairs for each BN layer
-def bnLayers : Array (Nat × Nat) := MlirCodegen.collectBnLayers resnet50
-
--- Pack BN shapes for FFI: [n_bn_layers, oc0, oc1, ...] as int32 LE
-def bnShapesBA : ByteArray := Id.run do
-  let push := fun (ba : ByteArray) (v : Nat) =>
-    let v32 : UInt32 := v.toUInt32
-    ba.push (v32 &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 8) &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 16) &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 24) &&& 0xFF).toUInt8
-  let mut ba := push .empty bnLayers.size
-  for (_, oc) in bnLayers do ba := push ba oc
-  return ba
-
--- Total BN stat floats: sum of oc * 2 (mean + var per layer)
-def nBnStats : Nat := bnLayers.foldl (fun acc (_, oc) => acc + oc * 2) 0
-
--- Param shapes for eval forward (params + bn_mean/var for each BN layer)
-def evalShapes : Array (Array Nat) := Id.run do
-  let mut shapes := paramShapes
-  for (_, oc) in bnLayers do
-    shapes := shapes.push #[oc] |>.push #[oc]  -- mean, var
-  return shapes
-def evalShapesBA : ByteArray := packShapes evalShapes
-
+def nParams      : Nat       := resnet50.totalParams
+def shapesBA     : ByteArray := resnet50.shapesBA
+def nTotal       : Nat       := 3 * nParams
+def bnShapesBA   : ByteArray := resnet50.bnShapesBA
+def nBnStats     : Nat       := resnet50.nBnStats
+def evalShapesBA : ByteArray := resnet50.evalShapesBA
+def xShape (batch : Nat) : ByteArray := resnet50.xShape batch
 end R50Layout
 
 def main (args : List String) : IO Unit := do
@@ -134,32 +83,7 @@ def main (args : List String) : IO Unit := do
   let (trainImg, trainLbl, nTrain) ← F32.loadImagenetteSized (dataDir ++ "/train.bin") 256
   IO.eprintln s!"  data: {nTrain} images"
 
-  -- Init params + velocity
-  let mut paramParts : Array ByteArray := #[]
-  let mut seed : USize := 42
-  let shapes := R50Layout.paramShapes
-  let mut si : Nat := 0
-  while si < shapes.size do
-    let shape := shapes[si]!
-    let n := shape.foldl (· * ·) 1
-    if shape.size >= 2 then
-      let fanIn := if shape.size == 4 then shape[1]! * shape[2]! * shape[3]! else shape[0]!
-      paramParts := paramParts.push (← F32.heInit seed n.toUSize (Float.sqrt (2.0 / fanIn.toFloat)))
-      seed := seed + 1
-      si := si + 1
-      if si < shapes.size && shapes[si]!.size == 1 then
-        let n1 := shapes[si]![0]!
-        if si + 1 < shapes.size && shapes[si + 1]!.size == 1 then
-          paramParts := paramParts.push (← F32.const n1.toUSize 1.0)
-          si := si + 1
-          paramParts := paramParts.push (← F32.const (shapes[si]![0]!).toUSize 0.0)
-          si := si + 1
-        else
-          paramParts := paramParts.push (← F32.const n1.toUSize 0.0)
-          si := si + 1
-    else
-      si := si + 1
-  let p := F32.concat paramParts
+  let p ← resnet50.heInitParams
   -- Adam state: m (1st moment) and v (2nd moment), both zero-initialized
   let adamM ← F32.const (F32.size p).toUSize 0.0
   let adamV ← F32.const (F32.size p).toUSize 0.0
@@ -179,7 +103,7 @@ def main (args : List String) : IO Unit := do
   let nBnStats := R50Layout.nBnStats
 
   IO.eprintln s!"training: {bpE} batches/epoch, batch={batchN}, Adam, lr={baseLR}, cosine, label_smooth=0.1, wd=1e-4"
-  IO.eprintln s!"  BN layers: {R50Layout.bnLayers.size}, BN stat floats: {nBnStats}"
+  IO.eprintln s!"  BN layers: {resnet50.bnLayers.size}, BN stat floats: {nBnStats}"
   let mut params := p
   let mut m := adamM
   let mut v := adamV

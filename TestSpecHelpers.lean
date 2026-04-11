@@ -118,6 +118,143 @@ def vitTinyParamShapesInline : Array (Array Nat) := Id.run do
     | _ => pure ()
   return shapes
 
+-- MobileNetV2: invertedResidual
+def mobilenetV2 : NetSpec where
+  name := "MobileNet-v2"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .convBn 3 32 3 2 .same,
+    .invertedResidual  32  16 1 1 1,
+    .invertedResidual  16  24 6 2 2,
+    .invertedResidual  24  32 6 2 3,
+    .invertedResidual  32  64 6 2 4,
+    .invertedResidual  64  96 6 1 3,
+    .invertedResidual  96 160 6 2 3,
+    .invertedResidual 160 320 6 1 1,
+    .convBn 320 1280 1 1 .same,
+    .globalAvgPool,
+    .dense 1280 10 .identity
+  ]
+
+def mobilenetV2ParamShapesInline : Array (Array Nat) := Id.run do
+  let mut shapes : Array (Array Nat) := #[]
+  for l in mobilenetV2.layers do
+    match l with
+    | .convBn ic oc k _ _ =>
+      shapes := shapes.push #[oc, ic, k, k] |>.push #[oc] |>.push #[oc]
+    | .dense fi fo _ =>
+      shapes := shapes.push #[fi, fo] |>.push #[fo]
+    | .invertedResidual ic oc expand _stride n =>
+      for bi in [:n] do
+        let blockIc := if bi == 0 then ic else oc
+        let mid := blockIc * expand
+        if expand != 1 then
+          shapes := shapes.push #[mid, blockIc, 1, 1] |>.push #[mid] |>.push #[mid]
+        shapes := shapes.push #[mid, 1, 3, 3] |>.push #[mid] |>.push #[mid]
+        shapes := shapes.push #[oc, mid, 1, 1] |>.push #[oc] |>.push #[oc]
+    | _ => pure ()
+  return shapes
+
+-- EfficientNet-B0: mbConv with SE
+def efficientNetB0 : NetSpec where
+  name := "EfficientNet-B0"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .convBn 3 32 3 2 .same,
+    .mbConv  32  16 1 3 1 1 true,
+    .mbConv  16  24 6 3 2 2 true,
+    .mbConv  24  40 6 5 2 2 true,
+    .mbConv  40  80 6 3 2 3 true,
+    .mbConv  80 112 6 5 1 3 true,
+    .mbConv 112 192 6 5 2 4 true,
+    .mbConv 192 320 6 3 1 1 true,
+    .convBn 320 1280 1 1 .same,
+    .globalAvgPool,
+    .dense 1280 10 .identity
+  ]
+
+def efficientNetB0ParamShapesInline : Array (Array Nat) := Id.run do
+  let mut shapes : Array (Array Nat) := #[]
+  for l in efficientNetB0.layers do
+    match l with
+    | .convBn ic oc k _ _ =>
+      shapes := shapes.push #[oc, ic, k, k] |>.push #[oc] |>.push #[oc]
+    | .dense fi fo _ =>
+      shapes := shapes.push #[fi, fo] |>.push #[fo]
+    | .mbConv ic oc expand kSize _ n useSE =>
+      for bi in [:n] do
+        let blockIc := if bi == 0 then ic else oc
+        let mid := blockIc * expand
+        let seMid := Nat.max 1 (mid / 4)
+        if expand != 1 then
+          shapes := shapes.push #[mid, blockIc, 1, 1] |>.push #[mid] |>.push #[mid]
+        shapes := shapes.push #[mid, 1, kSize, kSize] |>.push #[mid] |>.push #[mid]
+        if useSE then
+          shapes := shapes.push #[seMid, mid, 1, 1] |>.push #[seMid]
+          shapes := shapes.push #[mid, seMid, 1, 1] |>.push #[mid]
+        shapes := shapes.push #[oc, mid, 1, 1] |>.push #[oc] |>.push #[oc]
+    | _ => pure ()
+  return shapes
+
+-- MobileNetV4-Medium: uib + fusedMbConv
+def mobilenetV4Medium : NetSpec where
+  name := "MobileNet V4-Medium"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .convBn 3 32 3 2 .same,
+    .fusedMbConv 32 48 4 3 2 1 false,
+    .uib  48  80 4 2 3 5,
+    .uib  80  80 2 1 3 3,
+    .uib  80 160 6 2 0 3,
+    .uib 160 160 4 1 3 3,
+    .uib 160 160 4 1 3 5,
+    .uib 160 160 4 1 5 0,
+    .uib 160 160 4 1 0 3,
+    .uib 160 160 4 1 3 0,
+    .uib 160 160 4 1 0 0,
+    .uib 160 160 4 1 3 3,
+    .uib 160 256 6 2 5 5,
+    .uib 256 256 4 1 5 5,
+    .uib 256 256 4 1 0 3,
+    .uib 256 256 4 1 3 0,
+    .convBn 256 1280 1 1 .same,
+    .globalAvgPool,
+    .dense 1280 10 .identity
+  ]
+
+def mobilenetV4MediumParamShapesInline : Array (Array Nat) := Id.run do
+  let mut shapes : Array (Array Nat) := #[]
+  for l in mobilenetV4Medium.layers do
+    match l with
+    | .convBn ic oc k _ _ =>
+      shapes := shapes.push #[oc, ic, k, k] |>.push #[oc] |>.push #[oc]
+    | .dense fi fo _ =>
+      shapes := shapes.push #[fi, fo] |>.push #[fo]
+    | .fusedMbConv ic oc expand kSize _ n useSE =>
+      for bi in [:n] do
+        let blockIc := if bi == 0 then ic else oc
+        let mid := if expand == 1 then oc else blockIc * expand
+        let seMid := Nat.max 1 (mid / 4)
+        shapes := shapes.push #[mid, blockIc, kSize, kSize] |>.push #[mid] |>.push #[mid]
+        if useSE then
+          shapes := shapes.push #[seMid, mid, 1, 1] |>.push #[seMid]
+          shapes := shapes.push #[mid, seMid, 1, 1] |>.push #[mid]
+        if expand != 1 then
+          shapes := shapes.push #[oc, mid, 1, 1] |>.push #[oc] |>.push #[oc]
+    | .uib ic oc expand _stride preDWk postDWk =>
+      let mid := ic * expand
+      if preDWk > 0 then
+        shapes := shapes.push #[ic, 1, preDWk, preDWk] |>.push #[ic] |>.push #[ic]
+      shapes := shapes.push #[mid, ic, 1, 1] |>.push #[mid] |>.push #[mid]
+      if postDWk > 0 then
+        shapes := shapes.push #[mid, 1, postDWk, postDWk] |>.push #[mid] |>.push #[mid]
+      shapes := shapes.push #[oc, mid, 1, 1] |>.push #[oc] |>.push #[oc]
+    | _ => pure ()
+  return shapes
+
 def shapesEq (a b : Array (Array Nat)) : Bool :=
   a.size == b.size && (List.range a.size).all (fun i =>
     let x := a[i]!
@@ -127,9 +264,12 @@ def shapesEq (a b : Array (Array Nat)) : Bool :=
 def main : IO Unit := do
   let mut ok := true
   let cases : Array (String × Array (Array Nat) × Array (Array Nat)) := #[
-    ("ResNet-34", resnet34.paramShapes, resnet34ParamShapesInline),
-    ("ResNet-50", resnet50.paramShapes, resnet50ParamShapesInline),
-    ("ViT-Tiny",  vitTiny.paramShapes,  vitTinyParamShapesInline)
+    ("ResNet-34",          resnet34.paramShapes,          resnet34ParamShapesInline),
+    ("ResNet-50",          resnet50.paramShapes,          resnet50ParamShapesInline),
+    ("MobileNetV2",        mobilenetV2.paramShapes,       mobilenetV2ParamShapesInline),
+    ("EfficientNet-B0",    efficientNetB0.paramShapes,    efficientNetB0ParamShapesInline),
+    ("MobileNetV4-Medium", mobilenetV4Medium.paramShapes, mobilenetV4MediumParamShapesInline),
+    ("ViT-Tiny",           vitTiny.paramShapes,           vitTinyParamShapesInline)
   ]
   for (name, helper, inline) in cases do
     if shapesEq helper inline then

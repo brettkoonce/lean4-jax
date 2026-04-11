@@ -3,6 +3,7 @@ import LeanMlir.F32Array
 import LeanMlir.Types
 import LeanMlir.Spec
 import LeanMlir.MlirCodegen
+import LeanMlir.SpecHelpers
 
 /-! VGG-16-BN on Imagenette — full IREE training pipeline.
     13 conv layers + GAP + dense, all 3x3 convs with BN.
@@ -41,49 +42,13 @@ def vgg16bn : NetSpec where
   ]
 
 namespace VggLayout
-
-def nParams : Nat := vgg16bn.totalParams
-
-def paramShapes : Array (Array Nat) := Id.run do
-  let mut shapes : Array (Array Nat) := #[]
-  for l in vgg16bn.layers do
-    match l with
-    | .convBn ic oc k _ _ =>
-      shapes := shapes.push #[oc, ic, k, k] |>.push #[oc] |>.push #[oc]
-    | .dense fi fo _ =>
-      shapes := shapes.push #[fi, fo] |>.push #[fo]
-    | _ => pure ()
-  return shapes
-
-def allShapes : Array (Array Nat) := paramShapes ++ paramShapes ++ paramShapes
-def shapesBA : ByteArray := packShapes allShapes
-def nTotal : Nat := 3 * nParams
-
-def xShape (batch : Nat) : ByteArray :=
-  packXShape #[batch, 3 * 224 * 224]
-
-def bnLayers : Array (Nat × Nat) := MlirCodegen.collectBnLayers vgg16bn
-
-def bnShapesBA : ByteArray := Id.run do
-  let push := fun (ba : ByteArray) (v : Nat) =>
-    let v32 : UInt32 := v.toUInt32
-    ba.push (v32 &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 8) &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 16) &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 24) &&& 0xFF).toUInt8
-  let mut ba := push .empty bnLayers.size
-  for (_, oc) in bnLayers do ba := push ba oc
-  return ba
-
-def nBnStats : Nat := bnLayers.foldl (fun acc (_, oc) => acc + oc * 2) 0
-
-def evalShapes : Array (Array Nat) := Id.run do
-  let mut shapes := paramShapes
-  for (_, oc) in bnLayers do
-    shapes := shapes.push #[oc] |>.push #[oc]
-  return shapes
-def evalShapesBA : ByteArray := packShapes evalShapes
-
+def nParams      : Nat       := vgg16bn.totalParams
+def shapesBA     : ByteArray := vgg16bn.shapesBA
+def nTotal       : Nat       := 3 * nParams
+def bnShapesBA   : ByteArray := vgg16bn.bnShapesBA
+def nBnStats     : Nat       := vgg16bn.nBnStats
+def evalShapesBA : ByteArray := vgg16bn.evalShapesBA
+def xShape (batch : Nat) : ByteArray := vgg16bn.xShape batch
 end VggLayout
 
 def main (args : List String) : IO Unit := do
@@ -133,31 +98,7 @@ def main (args : List String) : IO Unit := do
   let (trainImg, trainLbl, nTrain) ← F32.loadImagenetteSized (dataDir ++ "/train.bin") 256
   IO.eprintln s!"  train: {nTrain} images (256×256)"
 
-  let mut paramParts : Array ByteArray := #[]
-  let mut seed : USize := 42
-  let shapes := VggLayout.paramShapes
-  let mut si : Nat := 0
-  while si < shapes.size do
-    let shape := shapes[si]!
-    let n := shape.foldl (· * ·) 1
-    if shape.size >= 2 then
-      let fanIn := if shape.size == 4 then shape[1]! * shape[2]! * shape[3]! else shape[0]!
-      paramParts := paramParts.push (← F32.heInit seed n.toUSize (Float.sqrt (2.0 / fanIn.toFloat)))
-      seed := seed + 1
-      si := si + 1
-      if si < shapes.size && shapes[si]!.size == 1 then
-        let n1 := shapes[si]![0]!
-        if si + 1 < shapes.size && shapes[si + 1]!.size == 1 then
-          paramParts := paramParts.push (← F32.const n1.toUSize 1.0)
-          si := si + 1
-          paramParts := paramParts.push (← F32.const (shapes[si]![0]!).toUSize 0.0)
-          si := si + 1
-        else
-          paramParts := paramParts.push (← F32.const n1.toUSize 0.0)
-          si := si + 1
-    else
-      si := si + 1
-  let params := F32.concat paramParts
+  let params ← vgg16bn.heInitParams
   let adamM ← F32.const (F32.size params).toUSize 0.0
   let adamV ← F32.const (F32.size params).toUSize 0.0
   IO.eprintln s!"  {F32.size params} params + m + v ({(params.size + adamM.size + adamV.size) / 1024 / 1024} MB)"
@@ -175,7 +116,7 @@ def main (args : List String) : IO Unit := do
   let nBnStats := VggLayout.nBnStats
 
   IO.eprintln s!"training: {bpE} batches/epoch, batch={batchN}, Adam, lr={baseLR}, cosine, label_smooth=0.1, wd=1e-4"
-  IO.eprintln s!"  BN layers: {VggLayout.bnLayers.size}, BN stat floats: {nBnStats}"
+  IO.eprintln s!"  BN layers: {vgg16bn.bnLayers.size}, BN stat floats: {nBnStats}"
   let mut p := params
   let mut m := adamM
   let mut v := adamV

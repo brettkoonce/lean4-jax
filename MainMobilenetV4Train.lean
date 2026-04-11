@@ -3,6 +3,7 @@ import LeanMlir.F32Array
 import LeanMlir.Types
 import LeanMlir.Spec
 import LeanMlir.MlirCodegen
+import LeanMlir.SpecHelpers
 
 /-! MobileNet V4-Medium on Imagenette — UIB (Universal Inverted Bottleneck) blocks.
     Conv-only variant (no attention). 224×224, 10 classes. -/
@@ -34,73 +35,13 @@ def mobilenetV4Medium : NetSpec where
   ]
 
 namespace MobilenetV4Layout
-
-def nParams : Nat := mobilenetV4Medium.totalParams
-
-def paramShapes : Array (Array Nat) := Id.run do
-  let mut shapes : Array (Array Nat) := #[]
-  for l in mobilenetV4Medium.layers do
-    match l with
-    | .convBn ic oc k _ _ =>
-      shapes := shapes.push #[oc, ic, k, k] |>.push #[oc] |>.push #[oc]
-    | .dense fi fo _ =>
-      shapes := shapes.push #[fi, fo] |>.push #[fo]
-    | .fusedMbConv ic oc expand kSize _ n useSE =>
-      for bi in [:n] do
-        let blockIc := if bi == 0 then ic else oc
-        let mid := if expand == 1 then oc else blockIc * expand
-        let seMid := Nat.max 1 (mid / 4)
-        -- Fused expand: regular k×k convBn
-        shapes := shapes.push #[mid, blockIc, kSize, kSize] |>.push #[mid] |>.push #[mid]
-        if useSE then
-          shapes := shapes.push #[seMid, mid, 1, 1] |>.push #[seMid]
-          shapes := shapes.push #[mid, seMid, 1, 1] |>.push #[mid]
-        if expand != 1 then
-          shapes := shapes.push #[oc, mid, 1, 1] |>.push #[oc] |>.push #[oc]
-    | .uib ic oc expand _stride preDWk postDWk =>
-      let mid := ic * expand
-      -- preDW (if preDWk > 0): W[ic, 1, k, k], gamma/beta [ic]
-      if preDWk > 0 then
-        shapes := shapes.push #[ic, 1, preDWk, preDWk] |>.push #[ic] |>.push #[ic]
-      -- Expand 1×1: W[mid, ic, 1, 1]
-      shapes := shapes.push #[mid, ic, 1, 1] |>.push #[mid] |>.push #[mid]
-      -- postDW (if postDWk > 0): W[mid, 1, k, k]
-      if postDWk > 0 then
-        shapes := shapes.push #[mid, 1, postDWk, postDWk] |>.push #[mid] |>.push #[mid]
-      -- Project 1×1: W[oc, mid, 1, 1]
-      shapes := shapes.push #[oc, mid, 1, 1] |>.push #[oc] |>.push #[oc]
-    | _ => pure ()
-  return shapes
-
-def allShapes : Array (Array Nat) := paramShapes ++ paramShapes ++ paramShapes
-def shapesBA : ByteArray := packShapes allShapes
-def nTotal : Nat := 3 * nParams
-
-def xShape (batch : Nat) : ByteArray :=
-  packXShape #[batch, 3 * 224 * 224]
-
-def bnLayers : Array (Nat × Nat) := MlirCodegen.collectBnLayers mobilenetV4Medium
-
-def bnShapesBA : ByteArray := Id.run do
-  let push := fun (ba : ByteArray) (v : Nat) =>
-    let v32 : UInt32 := v.toUInt32
-    ba.push (v32 &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 8) &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 16) &&& 0xFF).toUInt8
-      |>.push ((v32 >>> 24) &&& 0xFF).toUInt8
-  let mut ba := push .empty bnLayers.size
-  for (_, oc) in bnLayers do ba := push ba oc
-  return ba
-
-def nBnStats : Nat := bnLayers.foldl (fun acc (_, oc) => acc + oc * 2) 0
-
-def evalShapes : Array (Array Nat) := Id.run do
-  let mut shapes := paramShapes
-  for (_, oc) in bnLayers do
-    shapes := shapes.push #[oc] |>.push #[oc]
-  return shapes
-def evalShapesBA : ByteArray := packShapes evalShapes
-
+def nParams      : Nat       := mobilenetV4Medium.totalParams
+def shapesBA     : ByteArray := mobilenetV4Medium.shapesBA
+def nTotal       : Nat       := 3 * nParams
+def bnShapesBA   : ByteArray := mobilenetV4Medium.bnShapesBA
+def nBnStats     : Nat       := mobilenetV4Medium.nBnStats
+def evalShapesBA : ByteArray := mobilenetV4Medium.evalShapesBA
+def xShape (batch : Nat) : ByteArray := mobilenetV4Medium.xShape batch
 end MobilenetV4Layout
 
 def main (args : List String) : IO Unit := do
@@ -150,31 +91,7 @@ def main (args : List String) : IO Unit := do
   let (trainImg, trainLbl, nTrain) ← F32.loadImagenetteSized (dataDir ++ "/train.bin") 256
   IO.eprintln s!"  train: {nTrain} images (256×256)"
 
-  let mut paramParts : Array ByteArray := #[]
-  let mut seed : USize := 42
-  let shapes := MobilenetV4Layout.paramShapes
-  let mut si : Nat := 0
-  while si < shapes.size do
-    let shape := shapes[si]!
-    let n := shape.foldl (· * ·) 1
-    if shape.size >= 2 then
-      let fanIn := if shape.size == 4 then shape[1]! * shape[2]! * shape[3]! else shape[0]!
-      paramParts := paramParts.push (← F32.heInit seed n.toUSize (Float.sqrt (2.0 / fanIn.toFloat)))
-      seed := seed + 1
-      si := si + 1
-      if si < shapes.size && shapes[si]!.size == 1 then
-        let n1 := shapes[si]![0]!
-        if si + 1 < shapes.size && shapes[si + 1]!.size == 1 then
-          paramParts := paramParts.push (← F32.const n1.toUSize 1.0)
-          si := si + 1
-          paramParts := paramParts.push (← F32.const (shapes[si]![0]!).toUSize 0.0)
-          si := si + 1
-        else
-          paramParts := paramParts.push (← F32.const n1.toUSize 0.0)
-          si := si + 1
-    else
-      si := si + 1
-  let params := F32.concat paramParts
+  let params ← mobilenetV4Medium.heInitParams
   let adamM ← F32.const (F32.size params).toUSize 0.0
   let adamV ← F32.const (F32.size params).toUSize 0.0
   IO.eprintln s!"  {F32.size params} params + m + v ({(params.size + adamM.size + adamV.size) / 1024 / 1024} MB)"
@@ -192,7 +109,7 @@ def main (args : List String) : IO Unit := do
   let nBnStats := MobilenetV4Layout.nBnStats
 
   IO.eprintln s!"training: {bpE} batches/epoch, batch={batchN}, Adam, lr={baseLR}, cosine, wd=1e-4"
-  IO.eprintln s!"  BN layers: {MobilenetV4Layout.bnLayers.size}, BN stat floats: {nBnStats}"
+  IO.eprintln s!"  BN layers: {mobilenetV4Medium.bnLayers.size}, BN stat floats: {nBnStats}"
   let mut p := params
   let mut m := adamM
   let mut v := adamV
