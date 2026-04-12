@@ -8,14 +8,20 @@
 
 #include "iree/runtime/api.h"
 
-#ifdef USE_HIP
+// GPU driver selection: compile with -DUSE_HIP for AMD/ROCm,
+// -DUSE_CUDA (or neither flag on CUDA systems) for NVIDIA,
+// or neither for CPU-only (local-task).
+#if defined(USE_HIP)
   #include "iree/hal/drivers/hip/registration/driver_module.h"
   #define IREE_REGISTER_GPU_DRIVER iree_hal_hip_driver_module_register
   #define IREE_DEFAULT_DEVICE "hip"
-#else
+#elif !defined(USE_CPU)
   #include "iree/hal/drivers/cuda/registration/driver_module.h"
   #define IREE_REGISTER_GPU_DRIVER iree_hal_cuda_driver_module_register
   #define IREE_DEFAULT_DEVICE "cuda"
+#else
+  // CPU-only: no GPU driver, default to IREE's multi-threaded task system.
+  #define IREE_DEFAULT_DEVICE "local-task"
 #endif
 #include "iree/hal/drivers/local_task/registration/driver_module.h"
 
@@ -44,9 +50,11 @@ iree_ffi_session_t* iree_ffi_session_create(const char* vmfb_path) {
   static int driver_registered = 0;
   iree_status_t status = iree_ok_status();
   if (!driver_registered) {
+#ifdef IREE_REGISTER_GPU_DRIVER
     status = IREE_REGISTER_GPU_DRIVER(
         iree_hal_driver_registry_default());
     if (!iree_status_is_ok(status)) { print_status("gpu_driver_register", status); goto fail; }
+#endif
     iree_hal_local_task_driver_module_register(
         iree_hal_driver_registry_default());
     driver_registered = 1;
