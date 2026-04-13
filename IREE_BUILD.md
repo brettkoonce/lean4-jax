@@ -210,70 +210,41 @@ If you skipped `--whole-archive`, the `driver_module_register` symbol
 won't be present and session creation will fail at runtime with "no
 HAL driver matching 'cuda'/'hip'".
 
-## 6. Build and run mnist-mlp
+## 6. Build and run
+
+Every trainer is self-bootstrapping: it generates its own MLIR,
+calls `iree-compile`, and starts training. Just build + run:
 
 ```bash
 ./download_mnist.sh                        # → data/*-ubyte
-lake build mnist-mlp-train                 # links -liree_ffi from ./ffi
+lake build mnist-mlp-train-f32             # links -liree_ffi from ./ffi
+.lake/build/bin/mnist-mlp-train-f32 data   # generates vmfbs + trains
 ```
 
-**Heads up: mnist-mlp is not self-bootstrapping.** Unlike every later
-trainer (`resnet34-train`, `mobilenet-v2-train`, …), `MainMlpTrain.lean`
-does **not** run `generateTrainStep` + `iree-compile` on startup — it
-assumes two pre-built vmfbs already exist under `.lake/build/`:
+Expected output: 12 epochs, ~14-16 s/epoch on a modest GPU (or ~90
+s/epoch on CPU), final accuracy ≈ 97.9%.
 
-| File | Source | Who builds it |
-|---|---|---|
-| `.lake/build/mnist_mlp.vmfb` | Lean codegen (`MainMlpMlir.lean`) | run `mnist-mlp-mlir` once |
-| `.lake/build/train_step.vmfb` | hand-written (`mlir_poc/hand_train_step.mlir`) | `iree-compile` manually |
-
-So the actual run-from-scratch sequence is:
+For a bigger smoke test with Imagenette:
 
 ```bash
-# 6a. Forward vmfb (Lean codegen + iree-compile, happens inside the binary).
-lake build mnist-mlp-mlir
-.lake/build/bin/mnist-mlp-mlir
-# → writes .lake/build/mnist_mlp.mlir + .lake/build/mnist_mlp.vmfb
-
-# 6b. Train-step vmfb (hand-written MLIR, compiled directly).
-iree-compile mlir_poc/hand_train_step.mlir \
-  --iree-hal-target-backends=cuda --iree-cuda-target=sm_86 \
-  -o .lake/build/train_step.vmfb
-
-# 6c. Train.
-.lake/build/bin/mnist-mlp-train
+./download_imagenette.sh                   # → data/imagenette/
+lake build resnet34-train
+./run.sh resnet34                          # sets IREE_BACKEND + GPU
 ```
 
-Expected output: 12 epochs, ~14-16 s/epoch on a modest GPU, final
-accuracy ≈ 97.9%.
-
-For AMD/ROCm in step 6b, swap to
-`--iree-hal-target-backends=rocm --iree-rocm-target=gfx1100`.
+The first run spends ~10-15 min in `iree-compile` generating the
+train-step vmfb; subsequent runs hit the cache and start training
+immediately.
 
 If you see `error while loading shared libraries: libiree_ffi.so`, it's
 an rpath issue — the lakefile sets `-Wl,-rpath,./ffi`, so run the binary
 from the repo root (not from `.lake/build/bin/`).
 
-### Why mnist-mlp is special
-
-`MainMlpTrain.lean` is a **phase-2 artifact** that predates the Lean-side
-codegen for VJPs. When it was written, train_step MLIR was hand-authored
-(see `mlir_poc/hand_train_step.mlir`, ~130 lines, written byte-exact
-against JAX autodiff). The `MlirCodegen.generateTrainStep` machinery came
-later and was retrofitted into every newer trainer — `MainResnetTrain.lean`
-line 100 calls it directly and produces + compiles its own train-step
-vmfb at startup. `MainMlpTrain.lean` was on the "refactor to codegen"
-TODO list in `IREE.md` and never got done, so it still opens the two
-vmfb files from disk.
-
-Net effect for a fresh clone: **every other architecture** (resnet34,
-mobilenet, efficientnet, vit, vgg, …) is one command —
-`lake build <x>-train && .lake/build/bin/<x>-train` — because the trainer
-codegens + compiles its own MLIR on first run. **mnist-mlp alone** needs
-the two-step vmfb dance above. If you want, you can run `mnist-cnn-train`
-or any of the bigger trainers as a simpler "does it all work" smoke test,
-with the caveat that they download bigger datasets and spend 5-15 min in
-`iree-compile` before the first training batch.
+**Note:** the historical `mnist-mlp-train` (without the `-f32` suffix)
+in `historical/MainMlpTrain.lean` is a pre-codegen artifact that still
+uses hand-authored MLIR and a custom FFI. It's kept for reference but
+is not the recommended path. Use `mnist-mlp-train-f32` instead — it
+uses the same unified `spec.train` loop as every other architecture.
 
 ## Common failure modes
 

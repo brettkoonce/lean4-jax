@@ -79,6 +79,7 @@ crop (256→224) + horizontal flip, **running BN stats for eval**.
 |---|---|---|
 | ResNet-34 | 21.3M | **90.29%** |
 | ResNet-50 | 23.5M | **89.40%** |
+| EfficientNetV2-S | 38.2M | **88.50%** |
 | EfficientNet-B0 | 7.2M | **87.58%** |
 | MobileNetV2 | 2.2M | **87.09%** |
 | MobileNetV3-Large | 3.0M | **86.48%** |
@@ -100,7 +101,7 @@ curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf 
 
 You need the IREE runtime built for your GPU (CUDA or ROCm). The FFI shim
 in `ffi/` links against `libiree_runtime_unified.a` from the IREE build tree.
-See [`IREE.md`](IREE.md) for build instructions.
+See [`IREE_BUILD.md`](IREE_BUILD.md) for build instructions.
 
 ### 3. Get data
 
@@ -189,7 +190,7 @@ def mobilenetV4Medium : NetSpec where
 lean4-mlir/
 ├── README.md               -- this file (phase 3)
 ├── RESULTS.md              -- per-architecture eval histories + ablations
-├── IREE.md                 -- how to build the IREE runtime
+├── IREE_BUILD.md           -- how to build libiree_ffi.so from scratch
 ├── ROCM.md                 -- ROCm setup notes
 ├── BENCHMARK.md            -- ROCm vs CUDA performance comparison
 ├── lakefile.lean           -- Lake build config (libraries + ~30 execs)
