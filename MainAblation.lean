@@ -136,6 +136,18 @@ def sgdLowLr (epochs : Nat := 15) : TrainConfig where
   augment      := false
   labelSmoothing := 0.0
 
+-- SGD with book LR (0.002 + momentum)
+def sgdLowLr2 (epochs : Nat := 15) : TrainConfig where
+  learningRate := 0.002
+  batchSize    := 128
+  epochs       := epochs
+  useAdam      := false
+  weightDecay  := 0.0
+  cosineDecay  := false
+  warmupEpochs := 0
+  augment      := false
+  labelSmoothing := 0.0
+
 -- Adam only (no aug, no smooth, no wd, no cosine)
 def adamOnly (epochs : Nat := 15) : TrainConfig where
   learningRate := 0.001
@@ -200,10 +212,12 @@ def ablations : List (String × AblationRun) := [
 
   -- Chapter 3: CIFAR (no BN — should struggle)
   ("cifar-nobn-sgd",   ⟨cifarCnnNoBn, s4tfBaseline 30, .cifar10, "data"⟩),
+  ("cifar-nobn-sgd002",⟨cifarCnnNoBn, sgdLowLr2 30,   .cifar10, "data"⟩),
   ("cifar-nobn-adam",  ⟨cifarCnnNoBn, adamOnly 30,     .cifar10, "data"⟩),
 
   -- Chapter 3: CIFAR (with BN — the unlock)
   ("cifar-bn-sgd",     ⟨cifarCnnBn,   s4tfBaseline 30, .cifar10, "data"⟩),
+  ("cifar-bn-sgd002",  ⟨cifarCnnBn,   sgdLowLr2 30,   .cifar10, "data"⟩),
   ("cifar-bn-adam",    ⟨cifarCnnBn,   adamOnly 30,     .cifar10, "data"⟩),
   ("cifar-bn-cosine",  ⟨cifarCnnBn,   adamCosine 30,   .cifar10, "data"⟩),
   ("cifar-bn-aug",     ⟨cifarCnnBn,   adamCosineAug 30, .cifar10, "data"⟩),
