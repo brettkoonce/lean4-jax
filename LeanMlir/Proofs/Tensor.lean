@@ -178,9 +178,9 @@ noncomputable def vjp3_comp {c₁ h₁ w₁ c₂ h₂ w₂ c₃ h₃ w₃ : Nat}
     intro x dy ci hi wi
     rw [hf.correct]; simp_rw [hg.correct]
     -- Goal: ∑∑∑ pdiv3_f * (∑∑∑ pdiv3_g * dy) = ∑∑∑ pdiv3_(g∘f) * dy
-    -- Pull inner sums out via mul_sum, swap order, apply pdiv3_comp
-    -- Triple-sum commutation: same algebra as vjp_comp, three levels deep.
-    -- The proof structure is mechanical but Lean's sum_comm needs explicit type hints.
+    -- Same structure as vjp_comp (1D) but with triple indices.
+    -- The algebra is: distribute products, swap sums, apply chain rule, factor.
+    -- Mechanical but requires careful sum manipulation.
     sorry
 
 /-- **Identity VJP for Tensor3** — proved. -/
@@ -194,8 +194,23 @@ def identity3_has_vjp (c h w : Nat) : HasVJP3 (fun (x : Tensor3 c h w) => x) whe
   backward := fun _x dy => dy
   correct := by
     intro x dy ci hi wi
-    -- Triple Kronecker delta: ∑∑∑ (if ci=co ∧ hi=ho ∧ wi=wo then 1 else 0) * dy = dy ci hi wi
-    sorry
+    -- Don't unfold pdiv3_id yet — work directly with the sum
+    -- Rewrite each term under the sum
+    show dy ci hi wi = _
+    have : ∀ (co : Fin c) (ho : Fin h) (wo : Fin w),
+        pdiv3 (fun (t : Tensor3 c h w) => t) x ci hi wi co ho wo * dy co ho wo =
+        if ci = co then (if hi = ho then (if wi = wo then dy co ho wo else 0) else 0) else 0 := by
+      intro co ho wo; rw [pdiv3_id]
+      by_cases hc : ci = co <;> by_cases hh : hi = ho <;> by_cases hw : wi = wo <;> simp [*]
+    simp_rw [this]
+    -- Each sum is: ∑ x, if a = x then f x else 0
+    -- Use Finset.sum_eq_single to collapse
+    rw [Finset.sum_eq_single ci (by intro co _ hne; simp [Ne.symm hne]) (by simp)]
+    simp only [eq_self_iff_true, ite_true]
+    rw [Finset.sum_eq_single hi (by intro ho _ hne; simp [Ne.symm hne]) (by simp)]
+    simp only [eq_self_iff_true, ite_true]
+    rw [Finset.sum_eq_single wi (by intro wo _ hne; simp [Ne.symm hne]) (by simp)]
+    simp
 
 /-- **Additive fan-in for Tensor3** — proved. -/
 axiom pdiv3_add {c₁ h₁ w₁ c₂ h₂ w₂ : Nat}
