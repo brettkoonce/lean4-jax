@@ -178,10 +178,11 @@ noncomputable def vjp3_comp {c₁ h₁ w₁ c₂ h₂ w₂ c₃ h₃ w₃ : Nat}
     intro x dy ci hi wi
     rw [hf.correct]; simp_rw [hg.correct]
     -- Goal: ∑∑∑ pdiv3_f * (∑∑∑ pdiv3_g * dy) = ∑∑∑ pdiv3_(g∘f) * dy
-    -- Same structure as vjp_comp (1D) but with triple indices.
-    -- The algebra is: distribute products, swap sums, apply chain rule, factor.
-    -- Mechanical but requires careful sum manipulation.
-    sorry
+    -- Identical structure to vjp_comp (1D) but with triple-indexed sums.
+    -- Needs: distribute products, commute 6-level nested sums, apply pdiv3_comp, factor.
+    -- The algebra is mechanical (same as the proved 1D case); the Lean bookkeeping
+    -- for commuting 6 nested Finset.sum levels is the remaining obstacle.
+    simp_rw [Finset.mul_sum]; sorry
 
 /-- **Identity VJP for Tensor3** — proved. -/
 axiom pdiv3_id {c h w : Nat} (x : Tensor3 c h w)
