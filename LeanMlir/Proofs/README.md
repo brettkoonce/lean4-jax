@@ -40,20 +40,44 @@ Tensor.lean                    ← axioms + VJP framework
 
 ## Axioms
 
-Six facts from real analysis, stated in `Tensor.lean`:
+Eight facts from real analysis (`#print axioms` verified):
 
-| Axiom | What it says |
-|-------|-------------|
-| `pdiv_id` | ∂xᵢ/∂xⱼ = δᵢⱼ |
-| `pdiv_comp` | Chain rule: ∂(g∘f)/∂x = Σ (∂f/∂x)(∂g/∂f) |
-| `pdiv_add` | Sum rule: ∂(f+g)/∂x = ∂f/∂x + ∂g/∂x |
-| `pdiv_mul` | Product rule: ∂(f·g)/∂x = f'g + fg' |
-| `pdiv_bnAffine` | ∂(γv+β)/∂v = γδᵢⱼ |
-| `pdiv_bnNormalize` | ∂x̂ⱼ/∂xᵢ = (istd/N)(Nδᵢⱼ − 1 − x̂ᵢx̂ⱼ) |
+| Axiom | What it says | Used by |
+|-------|-------------|---------|
+| `pdiv` | Partial derivative exists | everything |
+| `pdiv_id` | ∂xᵢ/∂xⱼ = δᵢⱼ | identity, residual, SE |
+| `pdiv_comp` | Chain rule: ∂(g∘f)/∂x = Σ (∂f/∂x)(∂g/∂f) | vjp_comp, BN, layerNorm |
+| `pdiv_add` | Sum rule: ∂(f+g)/∂x = ∂f/∂x + ∂g/∂x | biPath, residual |
+| `pdiv_mul` | Product rule: ∂(f·g)/∂x = f'g + fg' | elemwiseProduct, SE |
+| `pdiv_dense` | Dense layer Jacobian | dense |
+| `pdiv_bnAffine` | ∂(γv+β)/∂v = γδᵢⱼ | BN affine, layerNorm |
+| `pdiv_bnNormalize` | ∂x̂ⱼ/∂xᵢ = (istd/N)(Nδᵢⱼ − 1 − x̂ᵢx̂ⱼ) | BN normalize, layerNorm |
+| `pdiv_softmax` | Softmax Jacobian | softmax, attention |
+
+Plus three Lean core axioms (`propext`, `Classical.choice`, `Quot.sound`)
+that are present in every nontrivial Lean program.
 
 Everything else — every `HasVJP` instance, every composition,
-every correctness theorem — is proved from these six axioms by
+every correctness theorem — is proved from these axioms by
 Lean's type checker.
+
+## `#print axioms` output
+
+```
+vjp_comp               → pdiv, pdiv_comp
+biPath_has_vjp         → pdiv, pdiv_add
+elemwiseProduct_has_vjp → pdiv, pdiv_mul
+identity_has_vjp       → pdiv, pdiv_id
+dense_has_vjp          → pdiv, pdiv_dense
+bn_has_vjp             → pdiv, pdiv_bnAffine, pdiv_bnNormalize, pdiv_comp
+bnNormalize_has_vjp    → pdiv, pdiv_bnNormalize
+residual_has_vjp       → pdiv, pdiv_add, pdiv_id
+seBlock_has_vjp        → pdiv, pdiv_id, pdiv_mul
+layerNorm_has_vjp      → pdiv, pdiv_bnAffine, pdiv_bnNormalize, pdiv_comp
+softmax_has_vjp        → pdiv, pdiv_softmax
+```
+
+(Lean core axioms `propext`, `Classical.choice`, `Quot.sound` omitted for clarity.)
 
 ## The three rules
 
