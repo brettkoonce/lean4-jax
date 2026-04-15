@@ -336,7 +336,7 @@ zoo. Everything else is orchestration.
 
 /-! ## What we've proved (and what's left)
 
-**Proved (modulo sorry'd algebra):**
+**Proved (zero sorry's, machine-checked):**
 - Dense, ReLU (`MLP.lean`)
 - Softmax cross-entropy loss gradient (`MLP.lean`)
 - Conv2d, MaxPool, Flatten (`CNN.lean`)
