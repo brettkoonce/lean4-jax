@@ -1,4 +1,5 @@
 import LeanMlir.Proofs.Tensor
+import Mathlib.Data.Real.Sqrt
 
 /-!
 # Batch Normalization VJP
@@ -32,6 +33,8 @@ clarity, this file works on a single 1D `Vec n` (think of `n` as
 indexing changes when you go to 4D.
 -/
 
+open Finset BigOperators Classical
+
 namespace Proofs
 
 -- ════════════════════════════════════════════════════════════════
@@ -39,23 +42,23 @@ namespace Proofs
 -- ════════════════════════════════════════════════════════════════
 
 /-- Population mean: `μ = (1/N) Σᵢ xᵢ` -/
-noncomputable def bnMean (n : Nat) (x : Vec n) : Float :=
-  finSum n x / n.toFloat
+noncomputable def bnMean (n : Nat) (x : Vec n) : ℝ :=
+  (∑ i : Fin n, x i) / (n : ℝ)
 
 /-- Population variance: `σ² = (1/N) Σᵢ (xᵢ − μ)²` -/
-noncomputable def bnVar (n : Nat) (x : Vec n) : Float :=
+noncomputable def bnVar (n : Nat) (x : Vec n) : ℝ :=
   let μ := bnMean n x
-  finSum n (fun i => (x i - μ) * (x i - μ)) / n.toFloat
+  (∑ i : Fin n, (x i - μ) * (x i - μ)) / (n : ℝ)
 
 /-- Inverse standard deviation: `istd = 1 / √(σ² + ε)` -/
-noncomputable def bnIstd (n : Nat) (x : Vec n) (ε : Float) : Float :=
-  1.0 / Float.sqrt (bnVar n x + ε)
+noncomputable def bnIstd (n : Nat) (x : Vec n) (ε : ℝ) : ℝ :=
+  1 / Real.sqrt (bnVar n x + ε)
 
 /-- Normalized output: `x̂ᵢ = (xᵢ − μ) · istd`
 
     `x̂` has mean 0 and variance 1 (up to ε-correction). It's the
     "centered, unit-scaled" version of `x`. -/
-noncomputable def bnXhat (n : Nat) (ε : Float) (x : Vec n) : Vec n :=
+noncomputable def bnXhat (n : Nat) (ε : ℝ) (x : Vec n) : Vec n :=
   fun i => (x i - bnMean n x) * bnIstd n x ε
 
 /-- The full BN forward: `yᵢ = γ · x̂ᵢ + β`
@@ -71,7 +74,7 @@ noncomputable def bnXhat (n : Nat) (ε : Float) (x : Vec n) : Vec n :=
       %cbn_bt_bc = broadcast %bt
       %cbn_pre   = add %cbn_gn, %cbn_bt_bc
 -/
-noncomputable def bnForward (n : Nat) (ε γ β : Float) (x : Vec n) : Vec n :=
+noncomputable def bnForward (n : Nat) (ε γ β : ℝ) (x : Vec n) : Vec n :=
   fun i => γ * bnXhat n ε x i + β
 
 -- ════════════════════════════════════════════════════════════════
@@ -91,8 +94,8 @@ noncomputable def bnForward (n : Nat) (ε γ β : Float) (x : Vec n) : Vec n :=
       %cbg_gn = multiply %effGrad, %cbn_norm
       %d_g    = reduce add %cbg_gn across dimensions = [0, 2, 3]
 -/
-noncomputable def bn_grad_gamma (n : Nat) (ε : Float) (x : Vec n) (dy : Vec n) : Float :=
-  finSum n (fun i => dy i * bnXhat n ε x i)
+noncomputable def bn_grad_gamma (n : Nat) (ε : ℝ) (x : Vec n) (dy : Vec n) : ℝ :=
+  ∑ i : Fin n, dy i * bnXhat n ε x i
 
 /-- **β gradient**: `dβ = Σᵢ dyᵢ`
 
@@ -102,7 +105,7 @@ noncomputable def bn_grad_gamma (n : Nat) (ε : Float) (x : Vec n) (dy : Vec n) 
     MLIR (line 770):
       %d_bt = reduce add %effGrad across dimensions = [0, 2, 3]
 -/
-noncomputable def bn_grad_beta (n : Nat) (dy : Vec n) : Float := finSum n dy
+noncomputable def bn_grad_beta (n : Nat) (dy : Vec n) : ℝ := ∑ i : Fin n, dy i
 
 -- ════════════════════════════════════════════════════════════════
 -- § Input gradient — the derivation
@@ -178,15 +181,15 @@ instead of O(N²). And it's exactly what the MLIR emits.
       %cbg_dconv = (1/N) * %cbg_t5
 -/
 noncomputable def bn_grad_input
-    (n : Nat) (ε γ : Float) (x : Vec n) (dy : Vec n) : Vec n :=
+    (n : Nat) (ε γ : ℝ) (x : Vec n) (dy : Vec n) : Vec n :=
   let xh : Vec n := bnXhat n ε x
   let dxhat : Vec n := fun i => γ * dy i
-  let invN : Float := 1.0 / n.toFloat
-  let s : Float := bnIstd n x ε
-  let sumDxhat : Float := finSum n dxhat
-  let sumXhatDxhat : Float := finSum n (fun i => xh i * dxhat i)
+  let invN : ℝ := 1 / (n : ℝ)
+  let s : ℝ := bnIstd n x ε
+  let sumDxhat : ℝ := ∑ i : Fin n, dxhat i
+  let sumXhatDxhat : ℝ := ∑ i : Fin n, xh i * dxhat i
   fun i =>
-    invN * s * (n.toFloat * dxhat i - sumDxhat - xh i * sumXhatDxhat)
+    invN * s * ((n : ℝ) * dxhat i - sumDxhat - xh i * sumXhatDxhat)
 
 -- ════════════════════════════════════════════════════════════════
 -- § Correctness statements
@@ -201,7 +204,7 @@ noncomputable def bn_grad_input
    is just the product rule applied to `γ · x̂ᵢ + β`:
 
        ∂(γ · x̂ᵢ + β)/∂γ = x̂ᵢ        →  dγ = Σᵢ dyᵢ · x̂ᵢ
-       ∂(γ · x̂ᵢ + β)/∂β = 1          →  dβ = Σᵢ dyᵢ
+       ∂(γ · x̂ᵢ + β)/∂β ​​= 1          →  dβ = Σᵢ dyᵢ
 
    We state these as the *definitions* `bn_grad_gamma` and `bn_grad_beta`
    above; the sum-over-i is the bookkeeping that turns "per-output
@@ -225,10 +228,10 @@ noncomputable def bn_grad_input
     A reader with paper and pencil can verify it; the value of stating it
     in Lean is that the **claim is unambiguous**: this exact function,
     on this exact input, returns this exact value. -/
-theorem bn_input_grad_correct (n : Nat) (ε γ β : Float)
+theorem bn_input_grad_correct (n : Nat) (ε γ β : ℝ)
     (x : Vec n) (dy : Vec n) (i : Fin n) :
     bn_grad_input n ε γ x dy i =
-    finSum n (fun j => pdiv (bnForward n ε γ β) x i j * dy j) := by
+    ∑ j : Fin n, pdiv (bnForward n ε γ β) x i j * dy j := by
   sorry
 
 -- ════════════════════════════════════════════════════════════════
@@ -260,42 +263,48 @@ collected at the affine layer alongside.
 -/
 
 /-- The normalize step as a function `Vec n → Vec n` (no params except ε). -/
-noncomputable def bnNormalize (n : Nat) (ε : Float) : Vec n → Vec n :=
+noncomputable def bnNormalize (n : Nat) (ε : ℝ) : Vec n → Vec n :=
   bnXhat n ε
 
 /-- The affine step as a function `Vec n → Vec n` (γ, β as constants). -/
-noncomputable def bnAffine (n : Nat) (γ β : Float) : Vec n → Vec n :=
+noncomputable def bnAffine (n : Nat) (γ β : ℝ) : Vec n → Vec n :=
   fun v i => γ * v i + β
 
 /-- BN as the composition of normalize and affine. -/
-theorem bnForward_eq_compose (n : Nat) (ε γ β : Float) :
+theorem bnForward_eq_compose (n : Nat) (ε γ β : ℝ) :
     bnForward n ε γ β = bnAffine n γ β ∘ bnNormalize n ε := by
   funext x i; rfl
+
+/-- The affine Jacobian is diagonal: `∂(γ·vᵢ + β)/∂vⱼ = γ · δᵢⱼ`. -/
+axiom pdiv_bnAffine (n : Nat) (γ β : ℝ)
+    (v : Vec n) (i j : Fin n) :
+    pdiv (bnAffine n γ β) v i j =
+      if i = j then γ else 0
 
 /-- **Affine VJP** (the easy half): `back(v, dy)ᵢ = γ · dyᵢ`.
 
     Each input enters one output multiplied by `γ`; the gradient comes
     back scaled by `γ`. -/
-noncomputable def bnAffine_has_vjp (n : Nat) (γ β : Float) :
+noncomputable def bnAffine_has_vjp (n : Nat) (γ β : ℝ) :
     HasVJP (bnAffine n γ β) where
   backward := fun _v dy => fun i => γ * dy i
   correct := by
     intro x dy i
-    sorry  -- ∂(γ·vᵢ + β)/∂vⱼ = γ·δᵢⱼ; collapses the sum to a single term
+    simp [pdiv_bnAffine]
 
 /-- **Normalize VJP** (the hard half): the consolidated formula with γ = 1.
 
     `back(x, dx̂)ᵢ = (1/N) · istd · (N · dx̂ᵢ − Σⱼ dx̂ⱼ − x̂ᵢ · Σⱼ x̂ⱼ · dx̂ⱼ)` -/
-noncomputable def bnNormalize_has_vjp (n : Nat) (ε : Float) :
+noncomputable def bnNormalize_has_vjp (n : Nat) (ε : ℝ) :
     HasVJP (bnNormalize n ε) where
   backward := fun x dxhat =>
     let xh := bnXhat n ε x
-    let invN : Float := 1.0 / n.toFloat
-    let s : Float := bnIstd n x ε
-    let sumDx := finSum n dxhat
-    let sumXhatDx := finSum n (fun j => xh j * dxhat j)
+    let invN : ℝ := 1 / (n : ℝ)
+    let s : ℝ := bnIstd n x ε
+    let sumDx := ∑ j : Fin n, dxhat j
+    let sumXhatDx := ∑ j : Fin n, xh j * dxhat j
     fun i =>
-      invN * s * (n.toFloat * dxhat i - sumDx - xh i * sumXhatDx)
+      invN * s * ((n : ℝ) * dxhat i - sumDx - xh i * sumXhatDx)
   correct := by
     intro x dxhat i
     sorry  -- the derivation in the long comment above
@@ -314,7 +323,7 @@ noncomputable def bnNormalize_has_vjp (n : Nat) (ε : Float) :
     MLIR emits: lines 773 (`d_norm = grad * gamma_bc`) followed by
     lines 794–801 (the consolidated three-term formula).
 -/
-noncomputable def bn_has_vjp (n : Nat) (ε γ β : Float) :
+noncomputable def bn_has_vjp (n : Nat) (ε γ β : ℝ) :
     HasVJP (bnForward n ε γ β) := by
   rw [bnForward_eq_compose]
   exact vjp_comp (bnNormalize n ε) (bnAffine n γ β)

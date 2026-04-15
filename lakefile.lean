@@ -5,6 +5,9 @@ package «lean4-jax» where
   version := v!"0.1.0"
   buildType := .release
 
+require mathlib from git
+  "https://github.com/leanprover-community/mathlib4"
+
 lean_lib «LeanMlir» where
   roots := #[`LeanMlir]
 

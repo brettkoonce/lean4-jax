@@ -3,6 +3,7 @@ import LeanMlir.Proofs.MLP
 import LeanMlir.Proofs.Residual
 import LeanMlir.Proofs.SE
 import LeanMlir.Proofs.LayerNorm
+import Mathlib.Analysis.SpecialFunctions.ExpDeriv
 
 /-!
 # Attention — the Capstone
@@ -16,7 +17,7 @@ together and you realize **there's nothing left to learn**.
 
 Scaled dot-product attention:
 
-    out = softmax((Q · Kᵀ) / √d) · V
+    out = softmax((Q * K^T) / sqrt(d)) * V
 
 where `Q = X Wq`, `K = X Wk`, `V = X Wv` — three dense projections of
 the same input `X`. Every piece is something we already have:
@@ -26,10 +27,10 @@ the same input `X`. Every piece is something we already have:
 | `Q = X Wq`            | `MLP.lean`         | dense backward           |
 | `K = X Wk`            | `MLP.lean`         | dense backward           |
 | `V = X Wv`            | `MLP.lean`         | dense backward           |
-| `Q · Kᵀ`              | (matmul = dense)   | chain rule               |
-| `/ √d`                | (scalar)           | chain rule + scale       |
+| `Q * K^T`             | (matmul = dense)   | chain rule               |
+| `/ sqrt(d)`           | (scalar)           | chain rule + scale       |
 | **`softmax(...)`**    | **this file**      | **closed-form collapse** |
-| `... · V`             | (matmul = dense)   | chain rule               |
+| `... * V`             | (matmul = dense)   | chain rule               |
 | three-way fan-in at X | `Residual.lean`    | `biPath_has_vjp`         |
 
 So the **only genuinely new ingredient in attention** is the standalone
@@ -42,11 +43,25 @@ earlier chapters.
 1. **Standalone softmax VJP** — the last closed-form trick.
 2. **Scaled dot-product attention** — SDPA as a composition.
 3. **Multi-head wrapper** — reshape/transpose boilerplate, no new math.
-4. **Transformer block** — LN → MHSA → + → LN → MLP → +, pure composition.
+4. **Transformer block** — LN -> MHSA -> + -> LN -> MLP -> +, pure composition.
 5. **Final commentary** — why the taxonomy is complete.
 -/
 
+open Finset BigOperators Classical
+
 namespace Proofs
+
+-- ════════════════════════════════════════════════════════════════
+-- § 0. Matrix transpose (needed for SDPA)
+-- ════════════════════════════════════════════════════════════════
+
+namespace Mat
+
+/-- Matrix transpose: swap rows and columns. -/
+def transpose (A : Mat m n) : Mat n m :=
+  fun j i => A i j
+
+end Mat
 
 -- ════════════════════════════════════════════════════════════════
 -- § 1. Standalone Softmax VJP
@@ -54,14 +69,14 @@ namespace Proofs
 
 /-! ## The softmax Jacobian
 
-For `p = softmax(z)` with `pⱼ = exp(zⱼ) / Σₖ exp(zₖ)`, the quotient
+For `p = softmax(z)` with `p_j = exp(z_j) / sum_k exp(z_k)`, the quotient
 rule gives:
 
-    ∂pⱼ/∂zᵢ = pⱼ · (δᵢⱼ − pᵢ)
+    dp_j/dz_i = p_j * (delta_{ij} - p_i)
 
 This is the famous "diag minus outer product" form:
 
-    J = diag(p) − p · pᵀ
+    J = diag(p) - p * p^T
 
 Dense (every output depends on every input), but **rank-1 correction
 to a diagonal** — which means the VJP has a closed-form collapse, just
@@ -70,7 +85,7 @@ like BatchNorm did.
 
 /-- **Partial derivative of softmax** (quotient rule on the exponentials).
 
-    `∂(softmax(z))ⱼ/∂zᵢ = softmax(z)ⱼ · (δᵢⱼ − softmax(z)ᵢ)`
+    `d(softmax(z))_j/dz_i = softmax(z)_j * (delta_{ij} - softmax(z)_i)`
 
     Standard calculus; axiomatized to stay in our `pdiv` framework. -/
 axiom pdiv_softmax (c : Nat) (z : Vec c) (i j : Fin c) :
@@ -79,18 +94,18 @@ axiom pdiv_softmax (c : Nat) (z : Vec c) (i j : Fin c) :
 
 /-- **Softmax VJP — the closed-form collapse.**
 
-    `back(z, dy)ᵢ = pᵢ · (dyᵢ − ⟨p, dy⟩)`
+    `back(z, dy)_i = p_i * (dy_i - <p, dy>)`
 
-    where `p = softmax(z)` and `⟨p, dy⟩ = Σⱼ pⱼ · dyⱼ` is one scalar.
+    where `p = softmax(z)` and `<p, dy> = sum_j p_j * dy_j` is one scalar.
 
     **Read this carefully.** The naive VJP would be:
-      dzᵢ = Σⱼ Jⱼᵢ · dyⱼ = Σⱼ (pⱼ · (δᵢⱼ − pᵢ)) · dyⱼ
+      dz_i = sum_j J_{ji} * dy_j = sum_j (p_j * (delta_{ij} - p_i)) * dy_j
 
-    That's O(c) per entry, O(c²) total. But expanding:
-      dzᵢ = pᵢ · dyᵢ − pᵢ · Σⱼ pⱼ · dyⱼ
-          = pᵢ · (dyᵢ − ⟨p, dy⟩)
+    That's O(c) per entry, O(c^2) total. But expanding:
+      dz_i = p_i * dy_i - p_i * sum_j p_j * dy_j
+           = p_i * (dy_i - <p, dy>)
 
-    The rank-1 correction lets you **precompute one scalar** (`⟨p, dy⟩`)
+    The rank-1 correction lets you **precompute one scalar** (`<p, dy>`)
     and apply it to every entry. **Total work: O(c).** Same optimization
     pattern as BN (one reduction + a broadcast) and max-pool (one
     comparison + a select).
@@ -109,14 +124,18 @@ axiom pdiv_softmax (c : Nat) (z : Vec c) (i j : Fin c) :
 noncomputable def softmax_has_vjp (c : Nat) : HasVJP (softmax c) where
   backward := fun z dy =>
     let p : Vec c := softmax c z
-    let s : Float := finSum c (fun j => p j * dy j)  -- ⟨p, dy⟩
+    let s : ℝ := ∑ j : Fin c, p j * dy j  -- <p, dy>
     fun i => p i * (dy i - s)
   correct := by
     intro z dy i
-    -- Goal: pᵢ · (dyᵢ − ⟨p, dy⟩) = Σⱼ pdiv(softmax) z i j · dyⱼ
-    -- RHS by pdiv_softmax: Σⱼ (pⱼ · (δᵢⱼ − pᵢ)) · dyⱼ
-    --                    = pᵢ · dyᵢ − pᵢ · Σⱼ pⱼ · dyⱼ
-    --                    = pᵢ · (dyᵢ − ⟨p, dy⟩)  ✓
+    -- Goal: p_i * (dy_i - <p, dy>) = sum_j pdiv(softmax) z i j * dy_j
+    -- RHS by pdiv_softmax: sum_j (p_j * (delta_{ij} - p_i)) * dy_j
+    --                    = p_i * dy_i - p_i * sum_j p_j * dy_j
+    --                    = p_i * (dy_i - <p, dy>)
+    -- The algebra: expand p_i * (dy_i - <p,dy>) using pdiv_softmax,
+    -- distribute the sum over subtraction, collapse the Kronecker delta,
+    -- and factor out p_i. Each step is mechanical but Lean's simp doesn't
+    -- chain them automatically for this non-diagonal Jacobian.
     sorry
 
 -- ════════════════════════════════════════════════════════════════
@@ -128,13 +147,13 @@ noncomputable def softmax_has_vjp (c : Nat) : HasVJP (softmax c) where
 For a single sequence of `n` tokens, each with feature dim `d`, let
 `X : Mat n d` be the input. Attention produces `out : Mat n d` via:
 
-    Q = X · Wq        -- (n × d), dense projection
-    K = X · Wk        -- (n × d)
-    V = X · Wv        -- (n × d)
-    scores = Q · Kᵀ    -- (n × n)
-    scaled = scores / √d
+    Q = X * Wq        -- (n x d), dense projection
+    K = X * Wk        -- (n x d)
+    V = X * Wv        -- (n x d)
+    scores = Q * K^T   -- (n x n)
+    scaled = scores / sqrt(d)
     weights = softmax_row(scaled)   -- softmax applied per row
-    out = weights · V                -- (n × d)
+    out = weights * V               -- (n x d)
 
 Because the input `X` is a matrix, we need matrix-level types. We work
 with `Mat n d` throughout this section (already defined in `Tensor.lean`).
@@ -152,17 +171,17 @@ noncomputable def rowSoftmax {m n : Nat} (A : Mat m n) : Mat m n :=
 /-- **Scaled dot-product attention**, for a single sequence and a
     single head. `Q K V : Mat n d`.
 
-    `sdpa Q K V = softmax_row(Q · Kᵀ / √d) · V`
+    `sdpa Q K V = softmax_row(Q * K^T / sqrt(d)) * V`
 
-    MLIR (`emitMHSAForward`, lines 754–781):
+    MLIR (`emitMHSAForward`, lines 754-781):
       %mh_sc   = dot_general %mh_q, %mh_k, contracting_dims = [3] x [3]
-      %mh_ss   = multiply %mh_sc, broadcast(1/√d)
+      %mh_ss   = multiply %mh_sc, broadcast(1/sqrt(d))
       %mh_sm   = softmax(%mh_ss) -- via reduce max, shift, exp, reduce sum, divide
       %mh_av   = dot_general %mh_sm, %mh_v, contracting_dims = [3] x [2]
 -/
 noncomputable def sdpa (n d : Nat) (Q K V : Mat n d) : Mat n d :=
   let scores : Mat n n := Mat.mul Q (Mat.transpose K)
-  let scale : Float := 1.0 / Float.sqrt d.toFloat
+  let scale : ℝ := 1 / Real.sqrt (↑d)
   let scaled : Mat n n := fun i j => scale * scores i j
   let weights : Mat n n := rowSoftmax scaled
   Mat.mul weights V
@@ -171,35 +190,35 @@ noncomputable def sdpa (n d : Nat) (Q K V : Mat n d) : Mat n d :=
 
 Working backward from `d_out : Mat n d`, four steps:
 
-**Step 1.** Through the final matmul `out = weights · V`. By the dense
+**Step 1.** Through the final matmul `out = weights * V`. By the dense
 layer VJP generalized to matrices (same derivation as `dense_has_vjp`,
 just with a batch dimension):
 
-    d_V       = weightsᵀ · d_out     -- (n × d)
-    d_weights = d_out · Vᵀ           -- (n × n)
+    d_V       = weights^T * d_out     -- (n x d)
+    d_weights = d_out * V^T           -- (n x n)
 
 **Step 2.** Through the per-row softmax. Each row is independent, so
 we apply `softmax_has_vjp` row-by-row:
 
-    d_scaledᵢ = weightsᵢ ⊙ (d_weightsᵢ − ⟨weightsᵢ, d_weightsᵢ⟩ · 1)
+    d_scaled_i = weights_i * (d_weights_i - <weights_i, d_weights_i> * 1)
 
-**Step 3.** Through the scalar scale `scaled = scores / √d`. Just
-divide the incoming gradient by `√d`:
+**Step 3.** Through the scalar scale `scaled = scores / sqrt(d)`. Just
+divide the incoming gradient by `sqrt(d)`:
 
-    d_scores = d_scaled / √d
+    d_scores = d_scaled / sqrt(d)
 
-**Step 4.** Through `scores = Q · Kᵀ`. Same matrix-matmul VJP as
+**Step 4.** Through `scores = Q * K^T`. Same matrix-matmul VJP as
 step 1, but now Q and K both flow back:
 
-    d_Q = d_scores · K                       -- (n × d)
-    d_K = d_scoresᵀ · Q                      -- (n × d)
+    d_Q = d_scores * K                       -- (n x d)
+    d_K = d_scores^T * Q                     -- (n x d)
 
 **Step 5.** Three parallel dense backwards from Q, K, V back to X.
 Each uses `dense_has_vjp`:
 
-    d_X_via_Q = d_Q · Wqᵀ
-    d_X_via_K = d_K · Wkᵀ
-    d_X_via_V = d_V · Wvᵀ
+    d_X_via_Q = d_Q * Wq^T
+    d_X_via_K = d_K * Wk^T
+    d_X_via_V = d_V * Wv^T
 
 **Step 6.** Fan-in at X — the three paths **add**:
 
@@ -247,11 +266,11 @@ Multi-head attention is:
   4. Apply one more dense projection `W_o`.
 
 In the MLIR (`emitMHSAForward`):
-    reshape (B, N, D) → (B, N, H, D_h)
-    transpose → (B, H, N, D_h)
+    reshape (B, N, D) -> (B, N, H, D_h)
+    transpose -> (B, H, N, D_h)
     [SDPA per head, using batching_dims = [0, 1]]
-    transpose → (B, N, H, D_h)
-    reshape → (B, N, D)
+    transpose -> (B, N, H, D_h)
+    reshape -> (B, N, D)
     dense projection (the "output projection" `Wo`)
 
 **No new VJP math.** Reshape and transpose are just index permutations
@@ -261,7 +280,7 @@ their VJPs are independent (like a batch dimension).
 
 If you wanted to prove `mhsa_has_vjp` in the framework, you'd:
 - Define reshape/transpose as functions with trivial VJPs (permute
-  indices → VJP is the inverse permutation)
+  indices -> VJP is the inverse permutation)
 - Apply `sdpa_has_vjp` per head (parallel over a new "head" axis)
 - Compose with the output projection via `dense_has_vjp`
 
@@ -283,12 +302,12 @@ Expanding:
     h1 = x + MHSA(LN1(x))       -- attention sub-layer with residual
     h2 = h1 + MLP(LN2(h1))      -- MLP sub-layer with residual
 
-where `MLP` is `Dense → GELU → Dense`.
+where `MLP` is `Dense -> GELU -> Dense`.
 
 Every piece has a `HasVJP` in the book:
 - `LN1`, `LN2` — `layerNorm_has_vjp` (`LayerNorm.lean`)
 - `MHSA` — `sdpa_has_vjp` + multi-head wrapping (this file)
-- `MLP` — `dense_has_vjp` ∘ `gelu_has_vjp` ∘ `dense_has_vjp` (via `vjp_comp`)
+- `MLP` — `dense_has_vjp` composed with `gelu_has_vjp` composed with `dense_has_vjp` (via `vjp_comp`)
 - `+` residual connections — `biPath_has_vjp` with identity (`Residual.lean`)
 
 So the whole transformer block assembles from the chain rule and
@@ -328,7 +347,7 @@ zoo. Everything else is orchestration.
 **Five closed-form "Jacobian-structure tricks"** handle the layers
 whose Jacobians are dense but exploitable:
 
-1. **Diagonal** (activations) — collapse the Σⱼ to one term.
+1. **Diagonal** (activations) — collapse the sum_j to one term.
 2. **Sparse toeplitz** (conv, depthwise) — reversed/transposed kernels.
 3. **Binary selection** (max-pool) — route gradients to argmax cells.
 4. **Rank-1 correction to diagonal** (softmax, BN, LN, IN, GN) — one
@@ -348,14 +367,14 @@ architecture-of-the-month. Pick any paper — Swin, ConvNeXt, CLIP,
 Mamba, anything — and walk through the forward pass. For each
 operation, ask:
 
-  1. Is it **composition** of known ops? → chain rule.
-  2. Is it a **sum of branches**? → fan-in add.
-  3. Is it an **elementwise / scalar product of branches**? → fan-in mul.
-  4. Is it an **activation**? → diagonal Jacobian template.
-  5. Is it a **normalization**? → closed-form three-term formula.
-  6. Is it a **convolution or linear map**? → the structured-matmul
+  1. Is it **composition** of known ops? -> chain rule.
+  2. Is it a **sum of branches**? -> fan-in add.
+  3. Is it an **elementwise / scalar product of branches**? -> fan-in mul.
+  4. Is it an **activation**? -> diagonal Jacobian template.
+  5. Is it a **normalization**? -> closed-form three-term formula.
+  6. Is it a **convolution or linear map**? -> the structured-matmul
      machinery.
-  7. Is it an **attention or softmax-based selection**? → the closed-form
+  7. Is it an **attention or softmax-based selection**? -> the closed-form
      rank-1 collapse.
 
 If the answer is "none of the above" — which it won't be — then you've

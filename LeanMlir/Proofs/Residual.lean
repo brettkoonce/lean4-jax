@@ -13,82 +13,23 @@ The math is trivial — it's the *pattern* that matters. Once you see
 SE blocks, multi-head outputs, anywhere a tensor is consumed by more
 than one downstream op.
 
-This file:
-1. Adds `pdiv_add` (linearity of partial derivatives) as an axiom.
-2. Defines `biPath f g x = f x + g x` and proves its VJP.
-3. Specializes to `residual f x = f x + x` and the projected variant
-   `residualProj proj f x = proj x + f x`.
-4. Comments on how this matches the ResNet skip connection in the
+This file builds on the proved foundations in `Tensor.lean`:
+- `biPath f g` and `biPath_has_vjp` (additive fan-in, proved)
+- `identity_has_vjp` (identity VJP, proved)
+- `pdiv_add` and `pdiv_id` (axiomatized calculus facts)
+
+With those in hand, the residual definitions are one-liners — no sorry's.
+
+1. Defines `residual f x = f x + x` via `biPath f id` and its VJP.
+2. Defines `residualProj proj f x = proj x + f x` via `biPath proj f`
+   and its VJP.
+3. Comments on how this matches the ResNet skip connection in the
    MLIR (`MlirCodegen.lean` residual block emission).
 -/
 
+open Finset BigOperators
+
 namespace Proofs
-
--- ════════════════════════════════════════════════════════════════
--- § Calculus axiom: derivatives are linear
--- ════════════════════════════════════════════════════════════════
-
-/-- **Linearity of partial derivatives**: ∂(f + g)ⱼ/∂xᵢ = ∂fⱼ/∂xᵢ + ∂gⱼ/∂xᵢ
-
-    This is the additive half of "differentiation is a linear operation."
-    A standard fact of real analysis; we take it as an axiom because
-    `pdiv` is itself axiomatized. -/
-axiom pdiv_add {m n : Nat} (f g : Vec m → Vec n) (x : Vec m)
-    (i : Fin m) (j : Fin n) :
-    pdiv (fun y k => f y k + g y k) x i j
-    = pdiv f x i j + pdiv g x i j
-
--- ════════════════════════════════════════════════════════════════
--- § The bi-path VJP: y = f(x) + g(x)
--- ════════════════════════════════════════════════════════════════
-
-/-- Two functions added pointwise: `(biPath f g)(x)ᵢ = f(x)ᵢ + g(x)ᵢ`. -/
-noncomputable def biPath {m n : Nat} (f g : Vec m → Vec n) : Vec m → Vec n :=
-  fun x i => f x i + g x i
-
-/-- **Bi-path VJP**: backward gradients from two parallel paths add.
-
-    `back_biPath(x, dy) = f.back(x, dy) + g.back(x, dy)`
-
-    The cotangent `dy` is sent backward through **both** paths, and the
-    resulting input cotangents are summed. Each path "sees" the full `dy`
-    (no splitting) — this is a consequence of the linearity of derivatives.
-
-    **Proof sketch** (sorry'd, structure shown):
-
-      back_biPath(x, dy)ᵢ = f.back(x, dy)ᵢ + g.back(x, dy)ᵢ          (defn)
-                          = Σⱼ ∂fⱼ/∂xᵢ · dyⱼ + Σⱼ ∂gⱼ/∂xᵢ · dyⱼ      (hf, hg correct)
-                          = Σⱼ (∂fⱼ/∂xᵢ + ∂gⱼ/∂xᵢ) · dyⱼ              (finSum_add, distrib)
-                          = Σⱼ ∂(f + g)ⱼ/∂xᵢ · dyⱼ                    (pdiv_add)
-                          = RHS                                         ✓
--/
-noncomputable def biPath_has_vjp {m n : Nat}
-    (f g : Vec m → Vec n) (hf : HasVJP f) (hg : HasVJP g) :
-    HasVJP (biPath f g) where
-  backward := fun x dy i => hf.backward x dy i + hg.backward x dy i
-  correct := by
-    intro x dy i
-    sorry
-
--- ════════════════════════════════════════════════════════════════
--- § Identity has a (trivial) VJP
--- ════════════════════════════════════════════════════════════════
-
-/-- ∂(id)ⱼ/∂xᵢ = δᵢⱼ — the identity Jacobian is, well, the identity matrix. -/
-axiom pdiv_id {n : Nat} (x : Vec n) (i j : Fin n) :
-    pdiv (fun y : Vec n => y) x i j = if i = j then 1 else 0
-
-/-- **Identity VJP**: gradient passes through unchanged.
-
-    `back_id(x, dy) = dy`
-
-    Trivial but worth stating: it's the base case for the residual VJP. -/
-def identity_has_vjp (n : Nat) : HasVJP (fun (x : Vec n) => x) where
-  backward := fun _x dy => dy
-  correct := by
-    intro x dy i
-    -- dy i = Σⱼ (if i = j then 1 else 0) · dyⱼ = dyᵢ (only j = i contributes)
-    sorry
 
 -- ════════════════════════════════════════════════════════════════
 -- § Residual block: y = f(x) + x
@@ -114,7 +55,10 @@ noncomputable def residual {n : Nat} (f : Vec n → Vec n) : Vec n → Vec n :=
 
     MLIR (`MlirCodegen.lean` residual block backward, around line 1107):
       The "skip grad" is added to the first convBn of the block — exactly
-      `f.back(x, dy) + dy_skip`, where `dy_skip = dy` here. -/
+      `f.back(x, dy) + dy_skip`, where `dy_skip = dy` here.
+
+    Proof: immediate from `biPath_has_vjp` and `identity_has_vjp`,
+    both proved in `Tensor.lean`. -/
 noncomputable def residual_has_vjp {n : Nat}
     (f : Vec n → Vec n) (hf : HasVJP f) :
     HasVJP (residual f) :=
@@ -143,7 +87,9 @@ noncomputable def residualProj {m n : Nat}
 
     MLIR: ResNets with stride > 1 use this — see `emitConvBnBackward`
     where the projection's VJP is emitted alongside the main block's,
-    and both gradients accumulate into the same incoming-grad SSA. -/
+    and both gradients accumulate into the same incoming-grad SSA.
+
+    Proof: immediate from `biPath_has_vjp`, proved in `Tensor.lean`. -/
 noncomputable def residualProj_has_vjp {m n : Nat}
     (proj f : Vec m → Vec n) (hproj : HasVJP proj) (hf : HasVJP f) :
     HasVJP (residualProj proj f) :=

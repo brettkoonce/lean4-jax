@@ -30,6 +30,8 @@ So we don't re-derive the VJPs from scratch. We state them as the
 the reversed-kernel trick still works — they just operate per-channel.
 -/
 
+open Finset BigOperators
+
 namespace Proofs
 
 -- ════════════════════════════════════════════════════════════════
@@ -43,7 +45,7 @@ namespace Proofs
     In the MLIR backend this is represented as a regular `(c, 1, kH, kW)`
     kernel with `feature_group_count = c`, telling StableHLO to apply
     each kernel only to its own input channel. -/
-abbrev DepthwiseKernel (c kH kW : Nat) := Fin c → Fin kH → Fin kW → Float
+abbrev DepthwiseKernel (c kH kW : Nat) := Fin c → Fin kH → Fin kW → ℝ
 
 -- ════════════════════════════════════════════════════════════════
 -- § Forward
@@ -120,7 +122,7 @@ axiom depthwiseConv2d_weight_grad {c h w kH kW : Nat}
     of its channel. The reduction is the same. -/
 noncomputable def depthwiseConv2d_bias_grad {c h w : Nat}
     (dy : Tensor3 c h w) : Vec c :=
-  fun cc => finSum h (fun y => finSum w (fun x => dy cc y x))
+  fun cc => ∑ y : Fin h, ∑ x : Fin w, dy cc y x
 
 -- ════════════════════════════════════════════════════════════════
 -- § The relationship to regular conv

@@ -33,6 +33,8 @@ calculus on cross-correlations), and the commentary explains why each
 formula has the form it does.
 -/
 
+open Finset BigOperators Classical
+
 namespace Proofs
 
 -- ════════════════════════════════════════════════════════════════
@@ -40,12 +42,12 @@ namespace Proofs
 -- ════════════════════════════════════════════════════════════════
 
 /-- A 3D feature map: channels × height × width (single sample). -/
-abbrev Tensor3 (c h w : Nat) := Fin c → Fin h → Fin w → Float
+abbrev Tensor3 (c h w : Nat) := Fin c → Fin h → Fin w → ℝ
 
 /-- A conv kernel: out_channels × in_channels × kH × kW.
     This is the OIHW layout used by StableHLO and IREE. -/
 abbrev Kernel4 (oc ic kh kw : Nat) :=
-  Fin oc → Fin ic → Fin kh → Fin kw → Float
+  Fin oc → Fin ic → Fin kh → Fin kw → ℝ
 
 -- ════════════════════════════════════════════════════════════════
 -- § Conv2d
@@ -138,7 +140,7 @@ axiom conv2d_weight_grad {ic oc h w kH kW : Nat}
                 across dimensions = [0, 2, 3]
     (dim 0 is batch, dims 2 and 3 are spatial.) -/
 noncomputable def conv2d_bias_grad {oc h w : Nat} (dy : Tensor3 oc h w) : Vec oc :=
-  fun o => finSum h (fun y => finSum w (fun x => dy o y x))
+  fun o => ∑ y : Fin h, ∑ x : Fin w, dy o y x
 
 -- ════════════════════════════════════════════════════════════════
 -- § MaxPool
