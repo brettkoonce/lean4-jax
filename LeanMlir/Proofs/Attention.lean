@@ -132,11 +132,20 @@ noncomputable def softmax_has_vjp (c : Nat) : HasVJP (softmax c) where
     -- RHS by pdiv_softmax: sum_j (p_j * (delta_{ij} - p_i)) * dy_j
     --                    = p_i * dy_i - p_i * sum_j p_j * dy_j
     --                    = p_i * (dy_i - <p, dy>)
-    -- The algebra: expand p_i * (dy_i - <p,dy>) using pdiv_softmax,
-    -- distribute the sum over subtraction, collapse the Kronecker delta,
-    -- and factor out p_i. Each step is mechanical but Lean's simp doesn't
-    -- chain them automatically for this non-diagonal Jacobian.
-    sorry
+    simp only [pdiv_softmax]
+    set p := softmax c z
+    -- Reduce to: ∑ j, p j * (δ_ij - p i) * dy j = p i * dy i - p i * ∑ j, p j * dy j
+    suffices h : ∑ j : Fin c, p j * ((if i = j then (1:ℝ) else 0) - p i) * dy j
+        = p i * dy i - p i * ∑ j : Fin c, p j * dy j by
+      rw [h]; ring
+    -- Distribute and split the sum
+    simp_rw [mul_sub, sub_mul]
+    rw [Finset.sum_sub_distrib]
+    congr 1
+    -- First sum: Kronecker delta collapses to p i * dy i
+    · simp [mul_ite, ite_mul, mul_one, mul_zero, zero_mul]
+    -- Second sum: factor p i out
+    · rw [Finset.mul_sum]; congr 1; ext j; ring
 
 -- ════════════════════════════════════════════════════════════════
 -- § 2. Scaled Dot-Product Attention
