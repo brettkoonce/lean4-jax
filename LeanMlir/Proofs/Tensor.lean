@@ -414,15 +414,156 @@ appear in scaled dot-product attention's backward pass:
 Each is a direct transcription of an elementary calculus fact. They are
 numerically gradient-checked in `check_axioms.py`. -/
 
-axiom pdivMat_matmul_left_const {m p q : Nat} (C : Mat m p) (B : Mat p q)
+/-- **Matmul Jacobian (left-const)** — theorem, derived from
+    `pdiv_finset_sum` + `pdiv_mul` + `pdiv_const` + `pdiv_reindex`. -/
+theorem pdivMat_matmul_left_const {m p q : Nat} (C : Mat m p) (B : Mat p q)
     (i : Fin p) (j : Fin q) (k : Fin m) (l : Fin q) :
     pdivMat (fun B' : Mat p q => Mat.mul C B') B i j k l =
-    if l = j then C k i else 0
+    if l = j then C k i else 0 := by
+  unfold pdivMat
+  -- Step 1: flatten(Mat.mul C (unflatten v)) at idx = Σ_s C_{k'(idx), s} · v(fPF(s, l'(idx)))
+  have h_reduces :
+      (fun v : Vec (p * q) =>
+        Mat.flatten ((fun B' : Mat p q => Mat.mul C B') (Mat.unflatten v))) =
+      (fun v : Vec (p * q) => fun idx : Fin (m * q) =>
+        ∑ s : Fin p,
+          C (finProdFinEquiv.symm idx).1 s *
+          v (finProdFinEquiv (s, (finProdFinEquiv.symm idx).2))) := by
+    funext v idx
+    show Mat.mul C (Mat.unflatten v)
+           (finProdFinEquiv.symm idx).1 (finProdFinEquiv.symm idx).2 = _
+    unfold Mat.mul Mat.unflatten
+    rfl
+  rw [h_reduces]
+  -- Step 2: linearity distributes pdiv over the Σ_s.
+  rw [pdiv_finset_sum]
+  -- Step 3: each summand is a product (const · reindex); pdiv_mul + pdiv_const + pdiv_reindex.
+  have hterm : ∀ s : Fin p,
+      pdiv (fun v : Vec (p * q) => fun idx : Fin (m * q) =>
+              C (finProdFinEquiv.symm idx).1 s *
+              v (finProdFinEquiv (s, (finProdFinEquiv.symm idx).2)))
+           (Mat.flatten B) (finProdFinEquiv (i, j)) (finProdFinEquiv (k, l)) =
+      C k s * (if finProdFinEquiv (i, j) = finProdFinEquiv (s, l) then 1 else 0) := by
+    intro s
+    -- Factor as (const fn) · (reindex fn):
+    have h_prod :
+        (fun v : Vec (p * q) => fun idx : Fin (m * q) =>
+          C (finProdFinEquiv.symm idx).1 s *
+          v (finProdFinEquiv (s, (finProdFinEquiv.symm idx).2))) =
+        (fun v idx =>
+          (fun (_ : Vec (p * q)) (idx' : Fin (m * q)) =>
+            C (finProdFinEquiv.symm idx').1 s) v idx *
+          (fun (w : Vec (p * q)) (idx' : Fin (m * q)) =>
+            w (finProdFinEquiv (s, (finProdFinEquiv.symm idx').2))) v idx) := rfl
+    rw [h_prod, pdiv_mul]
+    rw [show pdiv (fun _ : Vec (p * q) => fun idx' : Fin (m * q) =>
+              C (finProdFinEquiv.symm idx').1 s)
+            (Mat.flatten B) (finProdFinEquiv (i, j)) (finProdFinEquiv (k, l)) = 0
+        from pdiv_const _ _ _ _]
+    rw [pdiv_reindex (fun idx' => finProdFinEquiv (s, (finProdFinEquiv.symm idx').2))]
+    -- (fPF.symm (fPF (k, l))).2 = l and (fPF.symm (fPF (k, l))).1 = k
+    simp only [Equiv.symm_apply_apply]
+    ring
+  simp_rw [hterm]
+  -- Step 4: collapse the Finset sum.
+  -- Only s = i contributes (when j = l); otherwise all terms are zero.
+  have hkey : ∀ s : Fin p,
+      C k s * (if finProdFinEquiv (i, j) = finProdFinEquiv (s, l) then (1:ℝ) else 0) =
+      if s = i ∧ l = j then C k s else 0 := by
+    intro s
+    by_cases hs : s = i ∧ l = j
+    · obtain ⟨hsi, hlj⟩ := hs
+      subst hsi; subst hlj; simp
+    · have hne : finProdFinEquiv (i, j) ≠ finProdFinEquiv (s, l) := by
+        intro heq
+        apply hs
+        have := finProdFinEquiv.injective heq
+        exact ⟨(Prod.mk.inj this).1.symm, (Prod.mk.inj this).2.symm⟩
+      rw [if_neg hne]; simp [hs]
+  simp_rw [hkey]
+  -- Goal: ∑ s, (if s = i ∧ l = j then C k s else 0) = if l = j then C k i else 0
+  by_cases hlj : l = j
+  · rw [if_pos hlj]
+    -- Each `s = i ∧ l = j` term reduces to `s = i` (given hlj).
+    simp_rw [show ∀ s : Fin p, (s = i ∧ l = j) ↔ (s = i) from
+      fun s => ⟨And.left, fun h => ⟨h, hlj⟩⟩]
+    rw [Finset.sum_ite_eq' Finset.univ i (fun s => C k s)]
+    simp
+  · rw [if_neg hlj]
+    -- All terms false; sum is 0.
+    simp_rw [show ∀ s : Fin p, (s = i ∧ l = j) ↔ False from
+      fun s => ⟨fun h => hlj h.2, False.elim⟩]
+    simp
 
-axiom pdivMat_matmul_right_const {m p q : Nat} (A : Mat m p) (D : Mat p q)
+/-- **Matmul Jacobian (right-const)** — theorem, same recipe as the
+    left-const case with roles swapped. -/
+theorem pdivMat_matmul_right_const {m p q : Nat} (A : Mat m p) (D : Mat p q)
     (i : Fin m) (j : Fin p) (k : Fin m) (l : Fin q) :
     pdivMat (fun A' : Mat m p => Mat.mul A' D) A i j k l =
-    if i = k then D j l else 0
+    if i = k then D j l else 0 := by
+  unfold pdivMat
+  have h_reduces :
+      (fun v : Vec (m * p) =>
+        Mat.flatten ((fun A' : Mat m p => Mat.mul A' D) (Mat.unflatten v))) =
+      (fun v : Vec (m * p) => fun idx : Fin (m * q) =>
+        ∑ s : Fin p,
+          v (finProdFinEquiv ((finProdFinEquiv.symm idx).1, s)) *
+          D s (finProdFinEquiv.symm idx).2) := by
+    funext v idx
+    show Mat.mul (Mat.unflatten v) D
+           (finProdFinEquiv.symm idx).1 (finProdFinEquiv.symm idx).2 = _
+    unfold Mat.mul Mat.unflatten
+    rfl
+  rw [h_reduces, pdiv_finset_sum]
+  have hterm : ∀ s : Fin p,
+      pdiv (fun v : Vec (m * p) => fun idx : Fin (m * q) =>
+              v (finProdFinEquiv ((finProdFinEquiv.symm idx).1, s)) *
+              D s (finProdFinEquiv.symm idx).2)
+           (Mat.flatten A) (finProdFinEquiv (i, j)) (finProdFinEquiv (k, l)) =
+      D s l * (if finProdFinEquiv (i, j) = finProdFinEquiv (k, s) then 1 else 0) := by
+    intro s
+    have h_prod :
+        (fun v : Vec (m * p) => fun idx : Fin (m * q) =>
+          v (finProdFinEquiv ((finProdFinEquiv.symm idx).1, s)) *
+          D s (finProdFinEquiv.symm idx).2) =
+        (fun v idx =>
+          (fun (w : Vec (m * p)) (idx' : Fin (m * q)) =>
+            w (finProdFinEquiv ((finProdFinEquiv.symm idx').1, s))) v idx *
+          (fun (_ : Vec (m * p)) (idx' : Fin (m * q)) =>
+            D s (finProdFinEquiv.symm idx').2) v idx) := rfl
+    rw [h_prod, pdiv_mul]
+    rw [pdiv_reindex (fun idx' => finProdFinEquiv ((finProdFinEquiv.symm idx').1, s))]
+    rw [show pdiv (fun _ : Vec (m * p) => fun idx' : Fin (m * q) =>
+              D s (finProdFinEquiv.symm idx').2)
+            (Mat.flatten A) (finProdFinEquiv (i, j)) (finProdFinEquiv (k, l)) = 0
+        from pdiv_const _ _ _ _]
+    simp only [Equiv.symm_apply_apply]
+    ring
+  simp_rw [hterm]
+  have hkey : ∀ s : Fin p,
+      D s l * (if finProdFinEquiv (i, j) = finProdFinEquiv (k, s) then (1:ℝ) else 0) =
+      if s = j ∧ i = k then D s l else 0 := by
+    intro s
+    by_cases hs : s = j ∧ i = k
+    · obtain ⟨hsj, hik⟩ := hs
+      subst hsj; subst hik; simp
+    · have hne : finProdFinEquiv (i, j) ≠ finProdFinEquiv (k, s) := by
+        intro heq
+        apply hs
+        have := finProdFinEquiv.injective heq
+        exact ⟨(Prod.mk.inj this).2.symm, (Prod.mk.inj this).1⟩
+      rw [if_neg hne]; simp [hs]
+  simp_rw [hkey]
+  by_cases hik : i = k
+  · rw [if_pos hik]
+    simp_rw [show ∀ s : Fin p, (s = j ∧ i = k) ↔ (s = j) from
+      fun s => ⟨And.left, fun h => ⟨h, hik⟩⟩]
+    rw [Finset.sum_ite_eq' Finset.univ j (fun s => D s l)]
+    simp
+  · rw [if_neg hik]
+    simp_rw [show ∀ s : Fin p, (s = j ∧ i = k) ↔ False from
+      fun s => ⟨fun h => hik h.2, False.elim⟩]
+    simp
 
 axiom pdivMat_rowIndep {m n p : Nat} (g : Vec n → Vec p)
     (A : Mat m n) (i : Fin m) (j : Fin n) (k : Fin m) (l : Fin p) :
