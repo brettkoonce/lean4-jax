@@ -91,7 +91,16 @@ All axiom declarations across the proof suite, grouped by file:
 | Axiom | What it says |
 |-------|-------------|
 | `pdiv_bnAffine` | ∂(γv+β)/∂v = γδᵢⱼ |
-| `pdiv_bnNormalize` | ∂x̂ⱼ/∂xᵢ = (istd/N)(Nδᵢⱼ − 1 − x̂ᵢx̂ⱼ) |
+| `pdiv_bnCentered` | ∂(xⱼ-μ(x))/∂xᵢ = δᵢⱼ - 1/n |
+| `pdiv_bnIstdBroadcast` | ∂istd(x,ε)/∂xᵢ = -istd³·(xᵢ-μ)/n (broadcast) |
+
+> **The three-term consolidated BN formula is now a theorem**, not an
+> axiom. `pdiv_bnNormalize` is proved by factoring `bnXhat` as
+> `(x - μ) · istd`, applying `pdiv_mul`, substituting the two
+> elementary Jacobians above, and collapsing via `ring` + `field_simp`
+> using `x̂ₖ = (xₖ - μ) · istd`. Each elementary axiom corresponds
+> directly to a Mathlib `HasDerivAt`/`HasFDerivAt` fact (sub rule,
+> `Real.sqrt`/`inv` chain) — see docstrings.
 
 **Depthwise.lean** — depthwise convolution:
 | Axiom | What it says |
@@ -125,8 +134,8 @@ All axiom declarations across the proof suite, grouped by file:
 Plus three Lean core axioms (`propext`, `Classical.choice`, `Quot.sound`)
 present in every nontrivial Lean program.
 
-Total: 10 (Tensor) + 3 (MLP) + 4 (CNN) + 2 (BatchNorm) + 2 (Depthwise)
-+ 3 (LayerNorm) + 1 (Attention) = **25 axioms**.
+Total: 10 (Tensor) + 3 (MLP) + 4 (CNN) + 3 (BatchNorm) + 2 (Depthwise)
++ 3 (LayerNorm) + 1 (Attention) = **26 axioms**.
 
 Everything else — every `HasVJP` instance, every composition,
 every correctness theorem — is proved from these axioms by
@@ -157,9 +166,9 @@ sdpa_back_Q_correct    → pdivMat, pdivMat_matmul_left_const,
                          pdivMat_comp, pdiv, pdiv_softmax
 sdpa_back_K_correct    → (same as Q) + pdivMat_transpose
 dense_has_vjp          → pdiv, pdiv_dense
-bn_has_vjp             → pdiv, pdiv_bnAffine, pdiv_bnNormalize, pdiv_comp
-bn_input_grad_correct  → pdiv, pdiv_bnAffine, pdiv_bnNormalize, pdiv_comp
-bnNormalize_has_vjp    → pdiv, pdiv_bnNormalize
+bn_has_vjp             → pdiv, pdiv_bnAffine, pdiv_bnCentered, pdiv_bnIstdBroadcast, pdiv_comp, pdiv_mul
+bn_input_grad_correct  → (same as bn_has_vjp)
+bnNormalize_has_vjp    → pdiv, pdiv_bnCentered, pdiv_bnIstdBroadcast, pdiv_mul
 bnAffine_has_vjp       → pdiv, pdiv_bnAffine
 residual_has_vjp       → pdiv, pdiv_add, pdiv_id
 seBlock_has_vjp        → pdiv, pdiv_id, pdiv_mul

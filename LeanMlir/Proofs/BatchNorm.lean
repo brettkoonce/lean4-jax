@@ -260,12 +260,110 @@ axiom pdiv_bnAffine (n : Nat) (γ β : ℝ)
     pdiv (bnAffine n γ β) v i j =
       if i = j then γ else 0
 
-/-- The normalize Jacobian (the "hard" derivative):
-    `∂x̂ⱼ/∂xᵢ = (istd / N) · (N · δᵢⱼ − 1 − x̂ᵢ · x̂ⱼ)` -/
-axiom pdiv_bnNormalize (n : Nat) (ε : ℝ) (x : Vec n) (i j : Fin n) :
+-- ════════════════════════════════════════════════════════════════
+-- § The hard Jacobian: `pdiv_bnNormalize` — now derived
+-- ════════════════════════════════════════════════════════════════
+
+/-! The consolidated three-term formula used to be axiomatized directly.
+Now it's a theorem: we factor `bnXhat` as the elementwise product of
+the centered input and the broadcast `istd`, apply `pdiv_mul`, and
+collapse via `ring` using the `x̂ᵢ = (xᵢ - μ) · istd` identity.
+
+Only **two** elementary calculus facts remain axiomatized:
+
+1. `pdiv_bnCentered` — ∂(xⱼ - μ(x))/∂xᵢ = δᵢⱼ - 1/n.
+   Equivalent to Mathlib's `HasDerivAt.sub` applied to `id` and `(const_mul) ∘ (Finset.sum)`.
+
+2. `pdiv_bnIstdBroadcast` — ∂istd(x,ε)/∂xᵢ = -istd³ · (xᵢ - μ) / n.
+   Equivalent to `Real.hasDerivAt_sqrt` + `HasDerivAt.inv` + chain rule
+   against `bnVar`, whose derivative is `(2/n)·(xᵢ - μ)` by the same
+   product-rule trick as `pdiv_bnCentered`.
+
+The three-term formula falls out by ring manipulation alone. -/
+
+/-- Centered input: `(x - μ(x))` as a `Vec n → Vec n` function. -/
+noncomputable def bnCentered (n : Nat) : Vec n → Vec n :=
+  fun x j => x j - bnMean n x
+
+/-- Broadcast inverse-stddev: `istd(x,ε)` as a `Vec n → Vec n` function
+    (constant in the output index, just lifted for `pdiv_mul`). -/
+noncomputable def bnIstdBroadcast (n : Nat) (ε : ℝ) : Vec n → Vec n :=
+  fun x _ => bnIstd n x ε
+
+/-- `bnXhat` factors as `bnCentered · bnIstdBroadcast` (elementwise product). -/
+theorem bnXhat_eq_product (n : Nat) (ε : ℝ) (x : Vec n) :
+    bnXhat n ε x = fun j => bnCentered n x j * bnIstdBroadcast n ε x j := by
+  funext j
+  unfold bnXhat bnCentered bnIstdBroadcast
+  rfl
+
+/-- **Centered-input Jacobian** — axiomatized elementary fact.
+
+    `∂(xⱼ - μ(x))/∂xᵢ = δᵢⱼ - 1/n`
+
+    The mean `μ(x) = (1/n) Σₖ xₖ` is a linear combination with
+    constant coefficients `1/n`, so its partial derivative w.r.t. each
+    input is `1/n`.  Subtracting from the identity gives `δᵢⱼ - 1/n`.
+
+    **Mathlib correspondence**: follows from `HasFDerivAt.sub` applied
+    to `id` (derivative = identity map) and `(1/n) · (∑ x)`
+    (derivative = constant `1/n`).  We axiomatize the `pdiv` form
+    directly to stay in our framework. -/
+axiom pdiv_bnCentered (n : Nat) (x : Vec n) (i j : Fin n) :
+    pdiv (bnCentered n) x i j =
+      (if i = j then (1 : ℝ) else 0) - 1 / (n : ℝ)
+
+/-- **Broadcast inverse-stddev Jacobian** — axiomatized elementary fact.
+
+    `∂istd(x,ε)/∂xᵢ = -istd³(x,ε) · (xᵢ - μ(x)) / n`
+
+    Derivation sketch (standard calculus):
+    - `istd = 1/√(σ²+ε)` → chain rule through `Real.sqrt` and `x ↦ 1/x`:
+        `∂istd/∂σ² = -(1/2) · istd³`
+    - `∂σ²/∂xᵢ = (2/n) · (xᵢ - μ)`  (product rule on `(xⱼ - μ)²` summed,
+      using `Σⱼ (xⱼ - μ) = 0` to cancel a `(1 - 1/n)` factor)
+    - Chain together: `∂istd/∂xᵢ = -istd³ · (xᵢ - μ) / n`.
+
+    **Mathlib correspondence**: `Real.hasDerivAt_sqrt` + `HasDerivAt.inv`
+    + product/sum rules on the inner `bnVar`. Axiomatized here to avoid
+    the fderiv-bridge plumbing. -/
+axiom pdiv_bnIstdBroadcast (n : Nat) (ε : ℝ) (x : Vec n) (i j : Fin n) :
+    pdiv (bnIstdBroadcast n ε) x i j =
+      -(bnIstd n x ε)^3 * (x i - bnMean n x) / (n : ℝ)
+
+/-- **The BN normalize Jacobian — derived, no longer axiomatized.**
+
+    `pdiv (bnNormalize n ε) x i j = (istd / n) · (n · δᵢⱼ − 1 − x̂ᵢ · x̂ⱼ)`
+
+    Proof: factor `bnXhat = bnCentered · bnIstdBroadcast`, apply
+    `pdiv_mul`, substitute the two elementary Jacobians, then expand
+    `x̂ₖ = (xₖ - μ) · istd` and collapse with `ring`. -/
+theorem pdiv_bnNormalize (n : Nat) (ε : ℝ) (x : Vec n) (i j : Fin n) :
     pdiv (bnNormalize n ε) x i j =
       bnIstd n x ε / (n : ℝ) *
-        ((n : ℝ) * (if i = j then 1 else 0) - 1 - bnXhat n ε x i * bnXhat n ε x j)
+        ((n : ℝ) * (if i = j then 1 else 0) - 1 - bnXhat n ε x i * bnXhat n ε x j) := by
+  -- Step 1: rewrite bnNormalize as the elementwise product of bnCentered and bnIstdBroadcast.
+  have hfactor : bnNormalize n ε =
+                 (fun y : Vec n => fun k : Fin n => bnCentered n y k * bnIstdBroadcast n ε y k) := by
+    funext y
+    exact bnXhat_eq_product n ε y
+  rw [show bnNormalize n ε = bnNormalize n ε from rfl, hfactor]
+  -- Step 2: apply pdiv_mul.
+  rw [pdiv_mul]
+  -- Step 3: substitute the two elementary Jacobians.
+  rw [pdiv_bnCentered, pdiv_bnIstdBroadcast]
+  -- Step 4: expand x̂ on the RHS and collapse with `ring`.
+  -- Existence of `i : Fin n` gives us `n ≠ 0`, so `↑n · (↑n)⁻¹ = 1`.
+  have hn : (n : ℝ) ≠ 0 := by
+    have hpos : 0 < n := Nat.pos_of_ne_zero fun hz =>
+      absurd i.isLt (by simp [hz])
+    exact_mod_cast hpos.ne'
+  unfold bnXhat bnIstdBroadcast bnCentered
+  -- Both sides are now polynomial in (x_i - μ), (x_j - μ), istd, n (with `(↑n)⁻¹`).
+  -- Handle the `if i = j` branches, then `field_simp` + `ring` closes both.
+  by_cases hij : i = j
+  · subst hij; simp; field_simp; ring
+  · simp [hij]; field_simp; ring
 
 /-- **Affine VJP** (the easy half): `back(v, dy)ᵢ = γ · dyᵢ`.
 

@@ -284,6 +284,41 @@ def test_bn_normalize():
     return check("pdiv_bnNormalize", bn_fwd, bn_jac, (n,))
 
 # ════════════════════════════════════════════════════════════════
+# BatchNorm centered (pdiv_bnCentered axiom):
+#   ∂(xⱼ - μ(x))/∂xᵢ = δᵢⱼ - 1/n
+# ════════════════════════════════════════════════════════════════
+def test_bn_centered():
+    n = 5
+    f = lambda x: x - x.mean()  # broadcasted: (x - μ)_j
+    def jac(x):
+        N = len(x)
+        return np.eye(N) - (1.0 / N) * np.ones((N, N))
+    return check("pdiv_bnCentered", f, jac, (n,))
+
+# ════════════════════════════════════════════════════════════════
+# BatchNorm broadcast-istd (pdiv_bnIstdBroadcast axiom):
+#   ∂istd(x,ε)/∂xᵢ = -istd³ · (xᵢ - μ) / n   (same for all output indices)
+# ════════════════════════════════════════════════════════════════
+def test_bn_istd_broadcast():
+    n = 5
+    eps = 1e-5
+    def f(x):
+        mu = x.mean()
+        var = ((x - mu) ** 2).mean()
+        istd = 1.0 / np.sqrt(var + eps)
+        return np.full_like(x, istd)  # broadcast to Vec n
+    def jac(x):
+        mu = x.mean()
+        var = ((x - mu) ** 2).mean()
+        istd = 1.0 / np.sqrt(var + eps)
+        N = len(x)
+        # J[j, i] = ∂(broadcast_istd)_j / ∂x_i = -istd³ (x_i - μ) / N
+        # shape: (N, N) output × (N,) input, flattened
+        col = -(istd ** 3) * (x - mu) / N  # shape (N,), i.e. per input
+        return np.tile(col, (N, 1))         # same row for every output j
+    return check("pdiv_bnIstdBroadcast", f, jac, (n,))
+
+# ════════════════════════════════════════════════════════════════
 # BatchNorm affine: ∂(γv+β)/∂v = γδᵢⱼ
 # ════════════════════════════════════════════════════════════════
 def test_bn_affine():
@@ -487,6 +522,8 @@ if __name__ == "__main__":
     results.append(("CNN.lean",     "conv2d_weight_grad",   test_conv2d_weight_grad()))
     results.append(("CNN.lean",     "maxPool2_input_grad",  test_maxpool2()))
     results.append(("BatchNorm",    "pdiv_bnNormalize",     test_bn_normalize()))
+    results.append(("BatchNorm",    "pdiv_bnCentered",      test_bn_centered()))
+    results.append(("BatchNorm",    "pdiv_bnIstdBroadcast", test_bn_istd_broadcast()))
     results.append(("BatchNorm",    "pdiv_bnAffine",        test_bn_affine()))
     results.append(("Attention",    "pdiv_softmax",         test_softmax()))
     results.append(("Attention",    "sdpa_back_Q",          test_sdpa_back_Q()))
