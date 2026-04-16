@@ -122,6 +122,33 @@ def mnistCnnBn : NetSpec where
     .dense 512 10 .identity
   ]
 
+-- Chapter 2 (R34-aligned variant): 2×[3×3] → GAP → Dense(128→10).
+-- Matches the book's unified progression: same classifier shape as
+-- MNIST MLP (Dense to 10), same conv-block shape as CIFAR/R34 (2×3×3),
+-- ending channel count = 128 to match CIFAR's Stage 2.
+def mnistCnnLite : NetSpec where
+  name := "MNIST-CNN-Lite"
+  imageH := 28
+  imageW := 28
+  layers := [
+    .conv2d 1 128 3 .same .relu,
+    .conv2d 128 128 3 .same .relu,
+    .globalAvgPool,
+    .dense 128 10 .identity
+  ]
+
+-- BN variant for comparison (not the Ch 2 default — BN shows up at Ch 3).
+def mnistCnnLiteBn : NetSpec where
+  name := "MNIST-CNN-Lite-BN"
+  imageH := 28
+  imageW := 28
+  layers := [
+    .convBn 1 128 3 1 .same,
+    .convBn 128 128 3 1 .same,
+    .globalAvgPool,
+    .dense 128 10 .identity
+  ]
+
 -- Chapter 3: CNN on CIFAR (no BN)
 def cifarCnnNoBn : NetSpec where
   name := "CIFAR-CNN-noBN"
@@ -156,6 +183,40 @@ def cifarCnnBn : NetSpec where
     .dense 4096 512 .relu,
     .dense 512 512 .relu,
     .dense 512 10 .identity
+  ]
+
+-- Chapter 3 (R34-aligned variant): GAP + single-FC head, matching the
+-- classifier pattern we'll use all the way up to ResNet. Conv trunk
+-- bumped to 64→128 to echo R34's first two stages.  ~262k params
+-- (vs. 2.43M for the dense-head version above).
+def cifarCnnLiteNoBn : NetSpec where
+  name := "CIFAR-Lite-noBN"
+  imageH := 32
+  imageW := 32
+  layers := [
+    .conv2d 3 64 3 .same .relu,
+    .conv2d 64 64 3 .same .relu,
+    .maxPool 2 2,
+    .conv2d 64 128 3 .same .relu,
+    .conv2d 128 128 3 .same .relu,
+    .maxPool 2 2,
+    .globalAvgPool,
+    .dense 128 10 .identity
+  ]
+
+def cifarCnnLiteBn : NetSpec where
+  name := "CIFAR-Lite-BN"
+  imageH := 32
+  imageW := 32
+  layers := [
+    .convBn 3 64 3 1 .same,
+    .convBn 64 64 3 1 .same,
+    .maxPool 2 2,
+    .convBn 64 128 3 1 .same,
+    .convBn 128 128 3 1 .same,
+    .maxPool 2 2,
+    .globalAvgPool,
+    .dense 128 10 .identity
   ]
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -299,6 +360,11 @@ def ablations : List (String × AblationRun) := [
   ("cnn-bn-adam",      ⟨mnistCnnBn,   adamOnly 15,     .mnist, "data"⟩),
   ("cnn-bn-full",      ⟨mnistCnnBn,   fullRecipe 0.001 15 128, .mnist, "data"⟩),
 
+  -- Chapter 2 (R34-aligned, GAP + single-FC head, 128-dim feature):
+  -- "does this minimal arch train MNIST well enough?" (expected: yes)
+  ("cnn-lite-nobn-sgd002", ⟨mnistCnnLite,   sgdLowLr2 15, .mnist, "data"⟩),
+  ("cnn-lite-bn-sgd002",   ⟨mnistCnnLiteBn, sgdLowLr2 15, .mnist, "data"⟩),
+
   -- Chapter 3: CIFAR (no BN — should struggle)
   ("cifar-nobn-sgd",   ⟨cifarCnnNoBn, s4tfBaseline 30, .cifar10, "data"⟩),
   ("cifar-nobn-sgd002",⟨cifarCnnNoBn, sgdLowLr2 30,   .cifar10, "data"⟩),
@@ -310,7 +376,11 @@ def ablations : List (String × AblationRun) := [
   ("cifar-bn-adam",    ⟨cifarCnnBn,   adamOnly 30,     .cifar10, "data"⟩),
   ("cifar-bn-cosine",  ⟨cifarCnnBn,   adamCosine 30,   .cifar10, "data"⟩),
   ("cifar-bn-aug",     ⟨cifarCnnBn,   adamCosineAug 30, .cifar10, "data"⟩),
-  ("cifar-bn-full",    ⟨cifarCnnBn,   fullRecipe 0.001 30 128, .cifar10, "data"⟩)
+  ("cifar-bn-full",    ⟨cifarCnnBn,   fullRecipe 0.001 30 128, .cifar10, "data"⟩),
+
+  -- Chapter 3 (R34-aligned, GAP + single-FC head): does BN matter here?
+  ("cifar-lite-nobn-sgd002", ⟨cifarCnnLiteNoBn, sgdLowLr2 30, .cifar10, "data"⟩),
+  ("cifar-lite-bn-sgd002",   ⟨cifarCnnLiteBn,   sgdLowLr2 30, .cifar10, "data"⟩)
 ]
 
 def main (args : List String) : IO Unit := do
