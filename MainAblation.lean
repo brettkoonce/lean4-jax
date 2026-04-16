@@ -122,10 +122,10 @@ def mnistCnnBn : NetSpec where
     .dense 512 10 .identity
   ]
 
--- Chapter 2 (R34-aligned variant): 2×[3×3] → GAP → Dense(128→10).
--- Matches the book's unified progression: same classifier shape as
--- MNIST MLP (Dense to 10), same conv-block shape as CIFAR/R34 (2×3×3),
--- ending channel count = 128 to match CIFAR's Stage 2.
+-- Chapter 2 (R34-aligned variant): [Conv+Conv+MaxPool] → GAP → Dense(128→10).
+-- One "block" of the CIFAR-lite pattern (which repeats it twice).
+-- The MaxPool bridges to VGG and halves the activation count after
+-- the first conv, so training runs ~4× faster too.
 def mnistCnnLite : NetSpec where
   name := "MNIST-CNN-Lite"
   imageH := 28
@@ -133,11 +133,12 @@ def mnistCnnLite : NetSpec where
   layers := [
     .conv2d 1 128 3 .same .relu,
     .conv2d 128 128 3 .same .relu,
+    .maxPool 2 2,
     .globalAvgPool,
     .dense 128 10 .identity
   ]
 
--- BN variant for comparison (not the Ch 2 default — BN shows up at Ch 3).
+-- BN variant for the BN vs no-BN comparison in Ch 2 prep material.
 def mnistCnnLiteBn : NetSpec where
   name := "MNIST-CNN-Lite-BN"
   imageH := 28
@@ -145,6 +146,7 @@ def mnistCnnLiteBn : NetSpec where
   layers := [
     .convBn 1 128 3 1 .same,
     .convBn 128 128 3 1 .same,
+    .maxPool 2 2,
     .globalAvgPool,
     .dense 128 10 .identity
   ]
@@ -360,8 +362,12 @@ def ablations : List (String × AblationRun) := [
   ("cnn-bn-adam",      ⟨mnistCnnBn,   adamOnly 15,     .mnist, "data"⟩),
   ("cnn-bn-full",      ⟨mnistCnnBn,   fullRecipe 0.001 15 128, .mnist, "data"⟩),
 
-  -- Chapter 2 (R34-aligned, GAP + single-FC head, 128-dim feature):
-  -- "does this minimal arch train MNIST well enough?" (expected: yes)
+  -- Chapter 2 (R34-aligned, GAP + single-FC head, 128-dim feature).
+  -- MNIST needs a higher LR than CIFAR — SGD 0.1 is the book default here.
+  ("cnn-lite-nobn-sgd",    ⟨mnistCnnLite,   s4tfBaseline 15, .mnist, "data"⟩),
+  ("cnn-lite-bn-sgd",      ⟨mnistCnnLiteBn, s4tfBaseline 15, .mnist, "data"⟩),
+  -- Kept as a "what if we used CIFAR's LR?" data point — trains slowly,
+  -- not the chapter default.
   ("cnn-lite-nobn-sgd002", ⟨mnistCnnLite,   sgdLowLr2 15, .mnist, "data"⟩),
   ("cnn-lite-bn-sgd002",   ⟨mnistCnnLiteBn, sgdLowLr2 15, .mnist, "data"⟩),
 
