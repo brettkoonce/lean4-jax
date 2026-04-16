@@ -73,26 +73,39 @@ axiom conv2d {ic oc h w kH kW : Nat}
     (W : Kernel4 oc ic kH kW) (b : Vec oc)
     (x : Tensor3 ic h w) : Tensor3 oc h w
 
-/-- **Conv2d input gradient** — full convolution with reversed, transposed kernel.
+/-- **Conv2d input-VJP** — one axiom bundling the backward function and its
+    correctness.  A `HasVJP3` record carries both the backward function
+    and a proof that it equals the `pdiv3`-contracted cotangent.
 
-    `dx[c, h, w] = Σ_{o, kh, kw} W[o, c, kH−1−kh, kW−1−kw] · dy[o, h+kh−p, w+kw−p]`
+    The backward function (accessed as `(conv2d_has_vjp3 W b).backward`, or
+    via the named `conv2d_input_grad` abbrev below) implements the standard
+    "reversed-kernel, transposed-I/O" formula:
 
-    Two transformations on W:
+      `dx[c, h, w] = Σ_{o, kh, kw} W[o, c, kH−1−kh, kW−1−kw] ·
+                                   dy[o, h+kh−p, w+kw−p]`
+
+    Two transformations on `W` make conv's backward *itself* a convolution:
     - **Reverse spatial dims** (`kh ↦ kH−1−kh`): conv backward "looks the
       other way" along the spatial axes — each output cell influenced each
       input cell at a *negated* offset.
     - **Swap I/O channels** (`c ↔ o`): the weight tensor is "transposed" so
       it now maps from the gradient (oc channels) back to the input (ic).
 
-    MLIR uses exactly this structure:
+    MLIR emits exactly this structure:
       %W1_t   = stablehlo.transpose %W1, dims = [1, 0, 2, 3]   -- swap oc↔ic
       %W1_rev = stablehlo.reverse %W1_t, dims = [2, 3]         -- flip spatial
       %d_h0   = "stablehlo.convolution"(%d_h1pre, %W1_rev) ...
 -/
-axiom conv2d_input_grad {ic oc h w kH kW : Nat}
+axiom conv2d_has_vjp3 {ic oc h w kH kW : Nat}
+    (W : Kernel4 oc ic kH kW) (b : Vec oc) :
+    HasVJP3 (conv2d W b : Tensor3 ic h w → Tensor3 oc h w)
+
+/-- Named accessor for the conv2d input backward — aligns with MLIR
+    codegen (`stablehlo.convolution` in the backward pass). -/
+noncomputable abbrev conv2d_input_grad {ic oc h w kH kW : Nat}
     (W : Kernel4 oc ic kH kW) (b : Vec oc)
-    (x : Tensor3 ic h w) (dy : Tensor3 oc h w) :
-    Tensor3 ic h w
+    (x : Tensor3 ic h w) (dy : Tensor3 oc h w) : Tensor3 ic h w :=
+  (conv2d_has_vjp3 W b).backward x dy
 
 /-- **Conv2d weight gradient** — the transpose trick.
 
@@ -122,7 +135,12 @@ axiom conv2d_input_grad {ic oc h w kH kW : Nat}
       %dh0p_t   = stablehlo.transpose %d_h0pre, dims = [1, 0, 2, 3] -- (32,128,28,28)
       %d_W0_raw = "stablehlo.convolution"(%x_t, %dh0p_t) ...        -- (1,32,3,3)
       %d_W0     = stablehlo.transpose %d_W0_raw, dims = [1, 0, 2, 3] -- (32,1,3,3)
--/
+
+    **Note** — this is a **shape-only** axiom: it asserts a weight-gradient
+    function exists, but the `HasVJP3` framework only covers input→output
+    VJPs. A formal correctness claim would require a parameterized
+    `HasVJP3_params` variant, which we don't yet have. The function name
+    and signature document the codegen interface. -/
 axiom conv2d_weight_grad {ic oc h w kH kW : Nat}
     (x : Tensor3 ic h w) (dy : Tensor3 oc h w) :
     Kernel4 oc ic kH kW
@@ -156,12 +174,11 @@ noncomputable def conv2d_bias_grad {oc h w : Nat} (dy : Tensor3 oc h w) : Vec oc
       }) {window_dimensions = [1, 1, 2, 2], window_strides = [1, 1, 2, 2]} -/
 axiom maxPool2 {c h w : Nat} (x : Tensor3 c (2*h) (2*w)) : Tensor3 c h w
 
-/-- **MaxPool VJP** — gradient routes only to the argmax positions.
+/-- **MaxPool2 input-VJP** — gradient routes only to the argmax positions.
 
-    For each 2×2 window, the gradient dy[c, h, w] is *placed* at whichever
-    of the four input cells achieved the maximum. Other cells get 0.
+    The backward function implements:
 
-    `dx[c, 2h+a, 2w+b] = dy[c, h, w] · 𝟙[(a,b) is the argmax of the window]`
+      `dx[c, 2h+a, 2w+b] = dy[c, h, w] · 𝟙[(a,b) is the argmax of the window]`
 
     Conceptually, max-pool is a piecewise selection: each output is one
     specific input. So the Jacobian is a sparse 0/1 matrix and the VJP
@@ -175,33 +192,33 @@ axiom maxPool2 {c h w : Nat} (x : Tensor3 c (2*h) (2*w)) : Tensor3 c h w
         -- scatter: accumulate by addition (no overlap with stride = window)
         ^bb0(%a, %b): stablehlo.return (stablehlo.add %a, %b)
       }) {window_dimensions = [1,1,2,2], window_strides = [1,1,2,2]} -/
-axiom maxPool2_input_grad {c h w : Nat}
-    (x : Tensor3 c (2*h) (2*w)) (dy : Tensor3 c h w) :
-    Tensor3 c (2*h) (2*w)
+axiom maxPool2_has_vjp3 {c h w : Nat} :
+    HasVJP3 (maxPool2 : Tensor3 c (2*h) (2*w) → Tensor3 c h w)
+
+/-- Named accessor for the maxPool2 input backward — aligns with MLIR
+    `stablehlo.select_and_scatter` in codegen. -/
+noncomputable abbrev maxPool2_input_grad {c h w : Nat}
+    (x : Tensor3 c (2*h) (2*w)) (dy : Tensor3 c h w) : Tensor3 c (2*h) (2*w) :=
+  maxPool2_has_vjp3.backward x dy
 
 -- ════════════════════════════════════════════════════════════════
 -- § Flatten
 -- ════════════════════════════════════════════════════════════════
 
-/-- **Flatten** — reshape a 3D tensor to a 1D vector.
+/-! ## Reshape (flatten / unflatten)
 
-    `flatten x [c, h, w] = x` viewed as a `Vec (c·h·w)`. The mapping is
-    a bijection on the underlying data; nothing is computed.
+Flatten is a permutation of indices, so its VJP is just the inverse
+permutation. No gradient computation needed.
 
-    MLIR:
-      %flat = stablehlo.reshape %pool
-              : (tensor<128x32x14x14xf32>) -> tensor<128x6272xf32>
+MLIR:
+    %flat = stablehlo.reshape %pool
+            : (tensor<128x32x14x14xf32>) -> tensor<128x6272xf32>
 
-    Because flatten is a permutation of indices, its VJP is the inverse
-    permutation: `unflatten dy`. There is no gradient computation. -/
-axiom flatten {c h w : Nat} (x : Tensor3 c h w) : Vec (c * h * w)
-
-/-- The reverse of `flatten`. Together with `flatten`, this forms an
-    isomorphism `Tensor3 c h w ≃ Vec (c·h·w)`.
-
-    The VJP of flatten is unflatten, and vice versa: both operations are
-    just reindexings. -/
-axiom unflatten {c h w : Nat} (v : Vec (c * h * w)) : Tensor3 c h w
+The flatten / unflatten bijection is **already defined** in
+`Tensor.lean` as `Tensor3.flatten` / `Tensor3.unflatten` (used by the
+`pdiv3` derivation in Phase 5). We reuse those here rather than
+duplicating — see `Tensor3.flatten_unflatten` / `unflatten_flatten`
+for the mutual-inverse proofs. -/
 
 -- ════════════════════════════════════════════════════════════════
 -- § The full CNN backward pass
@@ -258,39 +275,20 @@ axiom unflatten {c h w : Nat} (v : Vec (c * h * w)) : Tensor3 c h w
 -/
 example : True := trivial  -- anchor for the docstring above
 
--- ════════════════════════════════════════════════════════════════
--- § HasVJP3 instances — wiring axioms into the framework
--- ════════════════════════════════════════════════════════════════
+/-! ## Summary of axioms in this file
 
-/-- Conv2d VJP correctness stated directly:
-    `conv2d_input_grad W b x dy` is the correct VJP of `conv2d W b` at `x`. -/
-axiom pdiv3_conv2d_vjp {ic oc h w kH kW : Nat}
-    (W : Kernel4 oc ic kH kW) (b : Vec oc)
-    (x : Tensor3 ic h w) (dy : Tensor3 oc h w)
-    (ci : Fin ic) (hi : Fin h) (wi : Fin w) :
-    conv2d_input_grad W b x dy ci hi wi =
-    ∑ co : Fin oc, ∑ ho : Fin h, ∑ wo : Fin w,
-      pdiv3 (conv2d W b) x ci hi wi co ho wo * dy co ho wo
+- `conv2d`, `maxPool2` — forward operations (black-box forward).
+- `conv2d_has_vjp3`, `maxPool2_has_vjp3` — the input-path VJPs, each
+  packaging both the backward function and its correctness into a
+  single `HasVJP3` axiom.
+- `conv2d_weight_grad` — shape-only axiom for the weight gradient
+  (no correctness claim; see its docstring).
 
-/-- **Conv2d VJP** — proved from the axiom. -/
-noncomputable def conv2d_has_vjp3 {ic oc h w kH kW : Nat}
-    (W : Kernel4 oc ic kH kW) (b : Vec oc) :
-    HasVJP3 (conv2d W b : Tensor3 ic h w → Tensor3 oc h w) where
-  backward := fun x dy => conv2d_input_grad W b x dy
-  correct := by intro x dy ci hi wi; exact pdiv3_conv2d_vjp W b x dy ci hi wi
-
-/-- MaxPool2 VJP correctness stated directly. -/
-axiom pdiv3_maxPool2_vjp {c h w : Nat}
-    (x : Tensor3 c (2*h) (2*w)) (dy : Tensor3 c h w)
-    (ci : Fin c) (hi : Fin (2*h)) (wi : Fin (2*w)) :
-    maxPool2_input_grad x dy ci hi wi =
-    ∑ co : Fin c, ∑ ho : Fin h, ∑ wo : Fin w,
-      pdiv3 maxPool2 x ci hi wi co ho wo * dy co ho wo
-
-/-- **MaxPool2 VJP** — proved from the axiom. -/
-noncomputable def maxPool2_has_vjp3 {c h w : Nat} :
-    HasVJP3 (maxPool2 : Tensor3 c (2*h) (2*w) → Tensor3 c h w) where
-  backward := fun x dy => maxPool2_input_grad x dy
-  correct := by intro x dy ci hi wi; exact pdiv3_maxPool2_vjp x dy ci hi wi
+Derived (not axioms):
+- `conv2d_input_grad`, `maxPool2_input_grad` — named accessors, defined
+  as `.backward` of the corresponding `HasVJP3`.
+- `conv2d_bias_grad` — concrete sum-over-spatial formula.
+- 3D reshape (`Tensor3.flatten` / `Tensor3.unflatten`) is imported from
+  `Tensor.lean` as a proved bijection. -/
 
 end Proofs

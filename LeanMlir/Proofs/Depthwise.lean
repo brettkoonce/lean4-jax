@@ -72,24 +72,32 @@ axiom depthwiseConv2d {c h w kH kW : Nat}
 -- § Backward — three pieces, each per-channel
 -- ════════════════════════════════════════════════════════════════
 
-/-- **Input gradient** — full convolution with reversed kernel,
-    **applied per channel**.
+/-- **Depthwise conv input-VJP** — reversed kernel, applied per channel.
 
-    `dx[c, h, w] = Σ_{kh, kw} W[c, kH−1−kh, kW−1−kw] · dy[c, h+kh−p, w+kw−p]`
+    The backward function (accessed as
+    `(depthwise_has_vjp3 W b).backward`, or via the named
+    `depthwiseConv2d_input_grad` abbrev below) implements:
 
-    Compare to `conv2d_input_grad`:
+      `dx[c, h, w] = Σ_{kh, kw} W[c, kH−1−kh, kW−1−kw] · dy[c, h+kh−p, w+kw−p]`
+
+    Compare to `conv2d_has_vjp3`:
     - Regular conv: `Σ_{o, kh, kw}` — summed over all output channels.
     - Depthwise:    `Σ_{kh, kw}`     — only spatial sum, channel `c`
                                        reads only from kernel `c` and
                                        gradient channel `c`.
 
-    The kernel reversal trick is the same; you just don't transpose
-    `(oc, ic) → (ic, oc)` because there's no cross-channel structure
-    to transpose. -/
-axiom depthwiseConv2d_input_grad {c h w kH kW : Nat}
+    The kernel-reversal trick is the same; you just don't transpose
+    `(oc, ic) → (ic, oc)` because there's no cross-channel structure. -/
+axiom depthwise_has_vjp3 {c h w kH kW : Nat}
+    (W : DepthwiseKernel c kH kW) (b : Vec c) :
+    HasVJP3 (depthwiseConv2d W b : Tensor3 c h w → Tensor3 c h w)
+
+/-- Named accessor for the depthwise input backward — aligns with MLIR
+    codegen (per-channel `stablehlo.convolution` in the backward pass). -/
+noncomputable abbrev depthwiseConv2d_input_grad {c h w kH kW : Nat}
     (W : DepthwiseKernel c kH kW) (b : Vec c)
-    (x : Tensor3 c h w) (dy : Tensor3 c h w) :
-    Tensor3 c h w
+    (x : Tensor3 c h w) (dy : Tensor3 c h w) : Tensor3 c h w :=
+  (depthwise_has_vjp3 W b).backward x dy
 
 /-- **Weight gradient** — the transpose trick, **applied per channel**.
 
@@ -108,7 +116,10 @@ axiom depthwiseConv2d_input_grad {c h w kH kW : Nat}
     MLIR (the depthwise variant of the transpose trick is in
     `emitDepthwiseConvBnBackward` around line 1855):
       "For depthwise: dW[c,1,kH,kW] = sum_b input[b,c,:,:] conv grad[b,c,:,:]"
--/
+
+    **Note** — shape-only axiom, like `conv2d_weight_grad`. The
+    `HasVJP3` framework only covers input→output VJPs; a parameterized
+    variant would be needed to state correctness formally. -/
 axiom depthwiseConv2d_weight_grad {c h w kH kW : Nat}
     (x : Tensor3 c h w) (dy : Tensor3 c h w) :
     DepthwiseKernel c kH kW
@@ -168,24 +179,15 @@ the same expressive power as a regular conv at a fraction of the FLOPs.
   optional Squeeze-and-Excitation. See `SE.lean` for the SE part.
 -/
 
--- ════════════════════════════════════════════════════════════════
--- § HasVJP3 instance
--- ════════════════════════════════════════════════════════════════
+/-! ## Summary of axioms in this file
 
-/-- Depthwise conv VJP correctness stated directly. -/
-axiom pdiv3_depthwise_vjp {c h w kH kW : Nat}
-    (W : DepthwiseKernel c kH kW) (b : Vec c)
-    (x : Tensor3 c h w) (dy : Tensor3 c h w)
-    (ci : Fin c) (hi : Fin h) (wi : Fin w) :
-    depthwiseConv2d_input_grad W b x dy ci hi wi =
-    ∑ co : Fin c, ∑ ho : Fin h, ∑ wo : Fin w,
-      pdiv3 (depthwiseConv2d W b) x ci hi wi co ho wo * dy co ho wo
+- `depthwiseConv2d` — forward (black-box).
+- `depthwise_has_vjp3` — input-path VJP (function + correctness bundled).
+- `depthwiseConv2d_weight_grad` — shape-only axiom; see its docstring.
 
-/-- **Depthwise conv VJP** — proved from the axiom. -/
-noncomputable def depthwise_has_vjp3 {c h w kH kW : Nat}
-    (W : DepthwiseKernel c kH kW) (b : Vec c) :
-    HasVJP3 (depthwiseConv2d W b : Tensor3 c h w → Tensor3 c h w) where
-  backward := fun x dy => depthwiseConv2d_input_grad W b x dy
-  correct := by intro x dy ci hi wi; exact pdiv3_depthwise_vjp W b x dy ci hi wi
+Derived (not axioms):
+- `depthwiseConv2d_input_grad` — named accessor, `.backward` of the
+  corresponding `HasVJP3`.
+- `depthwiseConv2d_bias_grad` — concrete sum-over-spatial formula. -/
 
 end Proofs

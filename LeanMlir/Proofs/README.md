@@ -78,14 +78,11 @@ All axiom declarations across the proof suite, grouped by file:
 **CNN.lean** — convolution and pooling:
 | Axiom | What it says |
 |-------|-------------|
-| `conv2d` | Conv forward (function signature) |
-| `conv2d_input_grad` | dx = conv with reversed kernel |
-| `conv2d_weight_grad` | dW = input ⊗ grad (transpose trick) |
-| `maxPool2` | MaxPool forward (function signature) |
-| `maxPool2_input_grad` | Route gradient to argmax positions |
-| `flatten` / `unflatten` | Reshape between 3D and 1D |
-| `pdiv3_conv2d_vjp` | Conv2d 3D-tensor VJP statement |
-| `pdiv3_maxPool2_vjp` | MaxPool2 3D-tensor VJP statement |
+| `conv2d` | Conv forward (opaque function) |
+| `conv2d_has_vjp3` | Conv2d input-VJP (function + correctness bundled) |
+| `conv2d_weight_grad` | dW = input ⊗ grad (shape-only; no correctness claim) |
+| `maxPool2` | MaxPool forward (opaque function) |
+| `maxPool2_has_vjp3` | MaxPool2 input-VJP (function + correctness bundled) |
 
 **BatchNorm.lean** — the hard one:
 | Axiom | What it says |
@@ -96,10 +93,9 @@ All axiom declarations across the proof suite, grouped by file:
 **Depthwise.lean** — depthwise convolution:
 | Axiom | What it says |
 |-------|-------------|
-| `depthwiseConv2d` | Depthwise conv forward |
-| `depthwiseConv2d_input_grad` | dx per-channel |
-| `depthwiseConv2d_weight_grad` | dW per-channel |
-| `pdiv3_depthwise_vjp` | Depthwise 3D-tensor VJP statement |
+| `depthwiseConv2d` | Depthwise conv forward (opaque function) |
+| `depthwise_has_vjp3` | Depthwise input-VJP (function + correctness bundled) |
+| `depthwiseConv2d_weight_grad` | dW per-channel (shape-only; no correctness) |
 
 **LayerNorm.lean** — layer norm and GELU:
 | Axiom | What it says |
@@ -124,8 +120,8 @@ All axiom declarations across the proof suite, grouped by file:
 Plus three Lean core axioms (`propext`, `Classical.choice`, `Quot.sound`)
 present in every nontrivial Lean program.
 
-Total: 11 (Tensor) + 3 (MLP) + 9 (CNN) + 2 (BatchNorm) + 4 (Depthwise)
-+ 3 (LayerNorm) + 1 (Attention) = **33 axioms**.
+Total: 11 (Tensor) + 3 (MLP) + 5 (CNN) + 2 (BatchNorm) + 3 (Depthwise)
++ 3 (LayerNorm) + 1 (Attention) = **28 axioms**.
 
 Everything else — every `HasVJP` instance, every composition,
 every correctness theorem — is proved from these axioms by
