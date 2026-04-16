@@ -100,3 +100,20 @@ jobs:
 
           # Fail CI if gradient checks fail
           python3 LeanMlir/Proofs/check_axioms.py
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Codebase Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Files | Lines |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          for category in "Proofs:LeanMlir/Proofs/*.lean" "Core Library:LeanMlir/*.lean" "Trainers:Main*Train*.lean" "Tests:Test*.lean" "FFI (C):ffi/*.c ffi/*.h"; do
+            name="${category%%:*}"
+            pattern="${category##*:}"
+            files=$(ls $pattern 2>/dev/null | wc -l)
+            lines=$(cat $pattern 2>/dev/null | wc -l)
+            echo "| ${name} | ${files} | ${lines} |" >> $GITHUB_STEP_SUMMARY
+          done
+          total_lean=$(find . -name "*.lean" -not -path "./.lake/*" -not -path "./jax/*" -not -path "./mnist-lean4/*" | xargs cat | wc -l)
+          total_c=$(cat ffi/*.c ffi/*.h 2>/dev/null | wc -l)
+          echo "| **Total Lean** | | **${total_lean}** |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Total C** | | **${total_c}** |" >> $GITHUB_STEP_SUMMARY
