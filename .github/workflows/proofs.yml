@@ -62,7 +62,8 @@ jobs:
                 *Tensor*) note="vjp3_comp: 6-level Finset.sum_comm (sum reordering bookkeeping)" ;;
                 *) note="$decl" ;;
               esac
-              echo "| \`${file}\` | ${lineno} | ${note} |" >> $GITHUB_STEP_SUMMARY
+              link="https://github.com/${{ github.repository }}/blob/${{ github.sha }}/${file}#L${lineno}"
+              echo "| [${file}](${link}) | ${lineno} | ${note} |" >> $GITHUB_STEP_SUMMARY
             done
           fi
 
