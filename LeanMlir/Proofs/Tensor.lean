@@ -2,6 +2,7 @@ import Mathlib.Data.Real.Basic
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import Mathlib.Algebra.BigOperators.Ring.Finset
 import Mathlib.Data.Fintype.BigOperators
+import Mathlib.Logic.Equiv.Fin.Basic
 import Mathlib.Tactic.Ring
 
 /-!
@@ -137,35 +138,136 @@ def identity_has_vjp (n : Nat) : HasVJP (fun (x : Vec n) => x) where
     simp [Finset.mem_univ]
 
 -- ════════════════════════════════════════════════════════════════
--- § Matrix-level differentiation (axiomatized)
+-- § Matrix ↔ Vector flattening (row-major)
 -- ════════════════════════════════════════════════════════════════
 
-/-! `pdivMat` is the matrix analogue of `pdiv`: the partial derivative of a
-matrix-valued function of a matrix. The axioms here mirror the `Vec`
-family (`pdiv_comp`, `pdiv_add`, `pdiv_id`) — they are theorems of real
-analysis, just lifted to rank-2 indices. Introduced for multi-matrix-input
-functions like SDPA where the `Vec` framework doesn't suffice. -/
+/-! `Mat m n` and `Vec (m * n)` are in bijection by row-major flattening.
+This bijection lets us **define** `pdivMat` in terms of `pdiv` rather
+than introducing parallel axioms, and so **derive** the rank-2 chain,
+sum, and identity rules as theorems. The 5 local Jacobian axioms
+(matmul, scalarScale, transpose, rowIndep) remain — they're genuine
+calculus facts about specific operations, not structural framework. -/
 
-axiom pdivMat {a b c d : Nat} (f : Mat a b → Mat c d) (A : Mat a b)
-    (i : Fin a) (j : Fin b) (k : Fin c) (l : Fin d) : ℝ
+namespace Mat
 
-axiom pdivMat_comp {a b c d e f : Nat}
+/-- Row-major flatten: `Mat m n → Vec (m * n)`. Uses Mathlib's
+    `finProdFinEquiv : Fin m × Fin n ≃ Fin (m * n)`. -/
+noncomputable def flatten {m n : Nat} (A : Mat m n) : Vec (m * n) :=
+  fun k => let p := finProdFinEquiv.symm k; A p.1 p.2
+
+/-- Row-major unflatten: `Vec (m * n) → Mat m n`. -/
+noncomputable def unflatten {m n : Nat} (v : Vec (m * n)) : Mat m n :=
+  fun i j => v (finProdFinEquiv (i, j))
+
+/-- Unflatten is a left inverse of flatten. -/
+theorem unflatten_flatten {m n : Nat} (A : Mat m n) :
+    unflatten (flatten A) = A := by
+  funext i j
+  unfold unflatten flatten
+  simp [Equiv.symm_apply_apply]
+
+/-- Flatten is a left inverse of unflatten. -/
+theorem flatten_unflatten {m n : Nat} (v : Vec (m * n)) :
+    flatten (unflatten v) = v := by
+  funext k
+  change v (finProdFinEquiv (finProdFinEquiv.symm k)) = v k
+  rw [Equiv.apply_symm_apply]
+
+end Mat
+
+-- ════════════════════════════════════════════════════════════════
+-- § Matrix-level differentiation (derived from `pdiv`)
+-- ════════════════════════════════════════════════════════════════
+
+/-- **Matrix partial derivative**, defined in terms of `pdiv` on the
+    row-major flattened `Vec` form. No longer an axiom — the rank-2
+    structural rules (chain/sum/id) now follow as theorems. -/
+noncomputable def pdivMat {a b c d : Nat} (f : Mat a b → Mat c d) (A : Mat a b)
+    (i : Fin a) (j : Fin b) (k : Fin c) (l : Fin d) : ℝ :=
+  pdiv (fun v : Vec (a * b) => Mat.flatten (f (Mat.unflatten v)))
+    (Mat.flatten A) (finProdFinEquiv (i, j)) (finProdFinEquiv (k, l))
+
+/-- **Chain rule for `pdivMat`** — now a theorem, derived from `pdiv_comp`
+    via the row-major flatten bijection. -/
+theorem pdivMat_comp {a b c d e f : Nat}
     (F : Mat a b → Mat c d) (G : Mat c d → Mat e f)
     (A : Mat a b) (i : Fin a) (j : Fin b) (k : Fin e) (l : Fin f) :
     pdivMat (G ∘ F) A i j k l =
     ∑ p : Fin c, ∑ q : Fin d,
-      pdivMat F A i j p q * pdivMat G (F A) p q k l
+      pdivMat F A i j p q * pdivMat G (F A) p q k l := by
+  unfold pdivMat
+  -- Step 1: the flattened composition equals the composition of flatteneds,
+  -- because `unflatten ∘ flatten = id`.
+  have h_compose :
+      (fun v : Vec (a * b) => Mat.flatten ((G ∘ F) (Mat.unflatten v))) =
+      (fun u : Vec (c * d) => Mat.flatten (G (Mat.unflatten u))) ∘
+      (fun v : Vec (a * b) => Mat.flatten (F (Mat.unflatten v))) := by
+    funext v
+    simp [Function.comp, Mat.unflatten_flatten]
+  rw [h_compose, pdiv_comp]
+  -- Step 2: inside the resulting sum, rewrite `F' (flatten A)` to `flatten (F A)`
+  -- (by unflatten ∘ flatten = id), so the "middle point" matches pdivMat's form.
+  have h_mid :
+      (fun v : Vec (a * b) => Mat.flatten (F (Mat.unflatten v))) (Mat.flatten A)
+      = Mat.flatten (F A) := by
+    simp [Mat.unflatten_flatten]
+  simp_rw [h_mid]
+  -- Step 3: convert the single sum over Fin (c*d) to a double sum over Fin c × Fin d.
+  rw [Fintype.sum_equiv finProdFinEquiv.symm
+      (fun r =>
+        pdiv (fun v => Mat.flatten (F (Mat.unflatten v))) (Mat.flatten A)
+          (finProdFinEquiv (i, j)) r *
+        pdiv (fun u => Mat.flatten (G (Mat.unflatten u))) (Mat.flatten (F A))
+          r (finProdFinEquiv (k, l)))
+      (fun pq =>
+        pdiv (fun v => Mat.flatten (F (Mat.unflatten v))) (Mat.flatten A)
+          (finProdFinEquiv (i, j)) (finProdFinEquiv pq) *
+        pdiv (fun u => Mat.flatten (G (Mat.unflatten u))) (Mat.flatten (F A))
+          (finProdFinEquiv pq) (finProdFinEquiv (k, l)))
+      (fun r => by
+        show _ = _ * _
+        rw [Equiv.apply_symm_apply])]
+  rw [Fintype.sum_prod_type]
 
-axiom pdivMat_add {a b c d : Nat}
+/-- **Sum rule for `pdivMat`** — theorem, via `pdiv_add`. -/
+theorem pdivMat_add {a b c d : Nat}
     (F G : Mat a b → Mat c d) (A : Mat a b)
     (i : Fin a) (j : Fin b) (k : Fin c) (l : Fin d) :
     pdivMat (fun M r s => F M r s + G M r s) A i j k l
-    = pdivMat F A i j k l + pdivMat G A i j k l
+    = pdivMat F A i j k l + pdivMat G A i j k l := by
+  unfold pdivMat
+  -- flatten of a pointwise sum = pointwise sum of flattens.
+  have h_flat : (fun v : Vec (a * b) =>
+                  Mat.flatten ((fun M r s => F M r s + G M r s) (Mat.unflatten v))) =
+                (fun v k => (fun w => Mat.flatten (F (Mat.unflatten w))) v k +
+                            (fun w => Mat.flatten (G (Mat.unflatten w))) v k) := by
+    funext v k
+    unfold Mat.flatten
+    rfl
+  rw [h_flat, pdiv_add]
 
-axiom pdivMat_id {a b : Nat} (A : Mat a b)
+/-- **Identity Jacobian for `pdivMat`** — theorem, via `pdiv_id`. -/
+theorem pdivMat_id {a b : Nat} (A : Mat a b)
     (i : Fin a) (j : Fin b) (k : Fin a) (l : Fin b) :
     pdivMat (fun M : Mat a b => M) A i j k l =
-    if i = k ∧ j = l then 1 else 0
+    if i = k ∧ j = l then 1 else 0 := by
+  unfold pdivMat
+  -- flatten ∘ id ∘ unflatten = id (on Vec (a*b))
+  have h_id : (fun v : Vec (a * b) => Mat.flatten (Mat.unflatten v)) =
+              (fun v : Vec (a * b) => v) := by
+    funext v; exact Mat.flatten_unflatten v
+  rw [h_id, pdiv_id]
+  -- Now: (if finProdFinEquiv (i,j) = finProdFinEquiv (k,l) then 1 else 0)
+  --    = if i = k ∧ j = l then 1 else 0
+  by_cases h : i = k ∧ j = l
+  · obtain ⟨hik, hjl⟩ := h
+    subst hik; subst hjl
+    simp
+  · rw [if_neg h, if_neg]
+    intro heq
+    apply h
+    have := finProdFinEquiv.injective heq
+    exact ⟨(Prod.mk.inj this).1, (Prod.mk.inj this).2⟩
 
 -- ════════════════════════════════════════════════════════════════
 -- § Matrix VJP Framework

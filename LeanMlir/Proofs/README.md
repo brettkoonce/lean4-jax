@@ -51,10 +51,6 @@ All axiom declarations across the proof suite, grouped by file:
 | `pdiv_comp` | Chain rule |
 | `pdiv_add` | Sum rule |
 | `pdiv_mul` | Product rule |
-| `pdivMat` | Matrix-level partial derivative |
-| `pdivMat_comp` | Matrix chain rule |
-| `pdivMat_add` | Matrix sum rule |
-| `pdivMat_id` | Matrix identity Jacobian |
 | `pdivMat_matmul_left_const` | ∂(C·B')/∂B' with C fixed |
 | `pdivMat_matmul_right_const` | ∂(A'·D)/∂A' with D fixed |
 | `pdivMat_rowIndep` | Row-independent function ⇒ block-diagonal Jacobian |
@@ -64,6 +60,15 @@ All axiom declarations across the proof suite, grouped by file:
 | `pdiv3_comp` | 3D chain rule |
 | `pdiv3_id` | 3D identity Jacobian |
 | `pdiv3_add` | 3D sum rule |
+
+> **Phase 4**: `pdivMat`, `pdivMat_comp`, `pdivMat_add`, `pdivMat_id`
+> used to be axioms. They are now a **definition** (`pdivMat`) and
+> three **theorems** derived from the corresponding `pdiv` axioms via
+> the row-major `Mat ≃ Vec (m*n)` bijection (`Mat.flatten` /
+> `Mat.unflatten`). The five remaining `pdivMat_*` axioms state
+> specific Jacobian *values* for concrete operations (matmul,
+> scalarScale, transpose, rowIndep) — genuine local calculus facts,
+> not framework plumbing.
 
 **MLP.lean** — dense layers:
 | Axiom | What it says |
@@ -121,8 +126,8 @@ All axiom declarations across the proof suite, grouped by file:
 Plus three Lean core axioms (`propext`, `Classical.choice`, `Quot.sound`)
 present in every nontrivial Lean program.
 
-Total: 19 (Tensor) + 3 (MLP) + 9 (CNN) + 2 (BatchNorm) + 4 (Depthwise)
-+ 3 (LayerNorm) + 1 (Attention) = **41 axioms**.
+Total: 15 (Tensor) + 3 (MLP) + 9 (CNN) + 2 (BatchNorm) + 4 (Depthwise)
++ 3 (LayerNorm) + 1 (Attention) = **37 axioms**.
 
 Everything else — every `HasVJP` instance, every composition,
 every correctness theorem — is proved from these axioms by
@@ -137,9 +142,9 @@ vjp_comp               → pdiv, pdiv_comp
 biPath_has_vjp         → pdiv, pdiv_add
 elemwiseProduct_has_vjp → pdiv, pdiv_mul
 identity_has_vjp       → pdiv, pdiv_id
-vjpMat_comp            → pdivMat, pdivMat_comp
-biPathMat_has_vjp      → pdivMat, pdivMat_add
-identityMat_has_vjp    → pdivMat, pdivMat_id
+vjpMat_comp            → pdiv, pdiv_comp  (via Mat.flatten bijection)
+biPathMat_has_vjp      → pdiv, pdiv_add   (via Mat.flatten bijection)
+identityMat_has_vjp    → pdiv, pdiv_id    (via Mat.flatten bijection)
 matmul_left_const_has_vjp  → pdivMat, pdivMat_matmul_left_const
 matmul_right_const_has_vjp → pdivMat, pdivMat_matmul_right_const
 scalarScale_has_vjp        → pdivMat, pdivMat_scalarScale
