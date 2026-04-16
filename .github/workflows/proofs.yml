@@ -48,12 +48,22 @@ jobs:
           # Sorry count
           SORRIES=$(lake build LeanMlir.Proofs.Tensor LeanMlir.Proofs.MLP LeanMlir.Proofs.CNN LeanMlir.Proofs.BatchNorm LeanMlir.Proofs.Residual LeanMlir.Proofs.Depthwise LeanMlir.Proofs.SE LeanMlir.Proofs.LayerNorm LeanMlir.Proofs.Attention 2>&1 | grep -c "sorry" || true)
           if [ "$SORRIES" -eq 0 ]; then
-            echo "**All proofs verified — zero sorry**" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **All proofs verified — zero sorry**" >> $GITHUB_STEP_SUMMARY
           else
-            echo "**${SORRIES} sorry(s) remaining:**" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            lake build LeanMlir.Proofs.Tensor LeanMlir.Proofs.MLP LeanMlir.Proofs.CNN LeanMlir.Proofs.BatchNorm LeanMlir.Proofs.Residual LeanMlir.Proofs.Depthwise LeanMlir.Proofs.SE LeanMlir.Proofs.LayerNorm LeanMlir.Proofs.Attention 2>&1 | grep "sorry" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **${SORRIES} sorry(s) remaining:**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| File | Line | Note |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|------|------|" >> $GITHUB_STEP_SUMMARY
+            lake build LeanMlir.Proofs.Tensor LeanMlir.Proofs.MLP LeanMlir.Proofs.CNN LeanMlir.Proofs.BatchNorm LeanMlir.Proofs.Residual LeanMlir.Proofs.Depthwise LeanMlir.Proofs.SE LeanMlir.Proofs.LayerNorm LeanMlir.Proofs.Attention 2>&1 | grep "sorry" | while read line; do
+              file=$(echo "$line" | sed 's/warning: //' | sed 's/:.*//')
+              lineno=$(echo "$line" | grep -o ':[0-9]*:' | head -1 | tr -d ':')
+              decl=$(echo "$line" | sed "s/.*declaration uses .sorry.//" | sed "s/'//g")
+              case "$file" in
+                *Tensor*) note="vjp3_comp: 6-level Finset.sum_comm (sum reordering bookkeeping)" ;;
+                *) note="$decl" ;;
+              esac
+              echo "| \`${file}\` | ${lineno} | ${note} |" >> $GITHUB_STEP_SUMMARY
+            done
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
