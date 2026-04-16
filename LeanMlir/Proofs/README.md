@@ -50,22 +50,24 @@ All axiom declarations across the proof suite, grouped by file:
 | `pdiv_comp` | Chain rule |
 | `pdiv_add` | Sum rule |
 | `pdiv_mul` | Product rule |
-| `pdivMat_matmul_left_const` | ∂(C·B')/∂B' with C fixed |
-| `pdivMat_matmul_right_const` | ∂(A'·D)/∂A' with D fixed |
+| `pdiv_const` | Derivative of a constant is zero |
+| `pdiv_reindex` | Gather Jacobian: `∂y_{σ(k)}/∂y_i = δ_{i,σ(k)}` |
 | `pdivMat_rowIndep` | Row-independent function ⇒ block-diagonal Jacobian |
-| `pdivMat_scalarScale` | ∂(s·A')/∂A' = s·δ |
-| `pdivMat_transpose` | ∂(A'^T)/∂A' — swap-indices Kronecker delta |
 
-> **Phases 4–5**: `pdivMat`, `pdivMat_comp`, `pdivMat_add`, `pdivMat_id`
-> and the entire `pdiv3` family (`pdiv3`, `pdiv3_comp`, `pdiv3_id`,
-> `pdiv3_add`) used to be axioms parallel to `pdiv`. They are now
-> **definitions** (`pdivMat`, `pdiv3`) and **theorems** derived from
-> `pdiv` axioms via the row-major bijections
-> `Mat.flatten : Mat m n ≃ Vec (m*n)` and
-> `Tensor3.flatten : Tensor3 c h w ≃ Vec (c*h*w)`. The five remaining
-> `pdivMat_*` axioms state specific Jacobian *values* for concrete
-> operations (matmul, scalarScale, transpose, rowIndep) — genuine
-> local calculus facts, not framework plumbing.
+> **Progression** — axioms 41 → 24 over several phases:
+> - **Phases 4–5**: `pdivMat`, `pdivMat_comp`, `pdivMat_add`,
+>   `pdivMat_id` and the whole `pdiv3` family collapsed to
+>   definitions + theorems via the `Mat.flatten` / `Tensor3.flatten`
+>   bijections.
+> - **Phase 6** (this commit): `pdivMat_scalarScale`, `pdivMat_transpose`,
+>   and both `pdivMat_matmul_{left,right}_const` derived from
+>   `pdiv_const` + `pdiv_reindex` + `pdiv_finset_sum` (itself a
+>   theorem, via `Finset.induction_on` over `pdiv_add` + `pdiv_const`).
+>
+> Remaining Mat-level axiom: only `pdivMat_rowIndep` — the
+> genuinely-new-primitive that ties Mat-row structure to Vec-level
+> pdiv of an opaque row function (can't derive without either a
+> vmap-style axiom or knowing the row function's definition).
 
 **MLP.lean** — dense layers:
 | Axiom | What it says |
@@ -134,8 +136,8 @@ All axiom declarations across the proof suite, grouped by file:
 Plus three Lean core axioms (`propext`, `Classical.choice`, `Quot.sound`)
 present in every nontrivial Lean program.
 
-Total: 10 (Tensor) + 3 (MLP) + 4 (CNN) + 3 (BatchNorm) + 2 (Depthwise)
-+ 3 (LayerNorm) + 1 (Attention) = **26 axioms**.
+Total: 8 (Tensor) + 3 (MLP) + 4 (CNN) + 3 (BatchNorm) + 2 (Depthwise)
++ 3 (LayerNorm) + 1 (Attention) = **24 axioms**.
 
 Everything else — every `HasVJP` instance, every composition,
 every correctness theorem — is proved from these axioms by
