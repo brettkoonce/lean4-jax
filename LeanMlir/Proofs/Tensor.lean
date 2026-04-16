@@ -40,6 +40,10 @@ def outer (u : Vec m) (v : Vec n) : Mat m n :=
 noncomputable def mul (A : Mat m n) (B : Mat n p) : Mat m p :=
   fun i k => ∑ j : Fin n, A i j * B j k
 
+/-- Matrix transpose: swap rows and columns. -/
+def transpose (A : Mat m n) : Mat n m :=
+  fun j i => A i j
+
 end Mat
 
 -- ════════════════════════════════════════════════════════════════
@@ -281,6 +285,18 @@ axiom pdivMat_rowIndep {m n p : Nat} (g : Vec n → Vec p)
     pdivMat (fun M : Mat m n => fun r => g (M r)) A i j k l =
     if i = k then pdiv g (A i) j l else 0
 
+/-- **Scalar-scale Jacobian**: `∂(s · A')_{kl} / ∂A'_{ij} = s · δ_{ik,jl}`. -/
+axiom pdivMat_scalarScale {m n : Nat} (s : ℝ) (A : Mat m n)
+    (i : Fin m) (j : Fin n) (k : Fin m) (l : Fin n) :
+    pdivMat (fun M : Mat m n => fun r c => s * M r c) A i j k l =
+    if i = k ∧ j = l then s else 0
+
+/-- **Transpose Jacobian**: `∂A^T_{kl} / ∂A_{ij} = δ_{l=i, k=j}`. -/
+axiom pdivMat_transpose {m n : Nat} (A : Mat m n)
+    (i : Fin m) (j : Fin n) (k : Fin n) (l : Fin m) :
+    pdivMat (fun M : Mat m n => Mat.transpose M) A i j k l =
+    if j = k ∧ i = l then 1 else 0
+
 /-- **Matmul with right factor varying, left factor fixed** — proved.
 
     `f : Mat p q → Mat m q`,  `f B' = C · B'`.
@@ -330,6 +346,44 @@ noncomputable def matmul_right_const_has_vjp {m p q : Nat} (D : Mat p q) :
       simp
     simp_rw [hinner]
     congr 1; ext l; ring
+
+/-- **Scalar-scale VJP** — proved.  Backward: `dA = s · dY`. -/
+noncomputable def scalarScale_has_vjp {m n : Nat} (s : ℝ) :
+    HasVJPMat (fun M : Mat m n => fun r c => s * M r c) where
+  backward := fun _A dY => fun i j => s * dY i j
+  correct := by
+    intro A dY i j
+    simp_rw [pdivMat_scalarScale]
+    -- Σ k Σ l, (if i=k ∧ j=l then s else 0) * dY k l = s * dY i j
+    have h : ∀ k : Fin m, ∀ l : Fin n,
+        (if i = k ∧ j = l then s else 0) * dY k l =
+        (if i = k then (if j = l then s * dY k l else 0) else 0) := by
+      intro k l
+      by_cases hik : i = k <;> by_cases hjl : j = l <;> simp [hik, hjl]
+    simp_rw [h]
+    rw [Finset.sum_eq_single i (by intro k _ hne; simp [Ne.symm hne]) (by simp)]
+    simp only [if_true]
+    rw [Finset.sum_eq_single j (by intro l _ hne; simp [Ne.symm hne]) (by simp)]
+    simp
+
+/-- **Transpose VJP** — proved.  Backward: `dA = (dY)^T`. -/
+noncomputable def transpose_has_vjp {m n : Nat} :
+    HasVJPMat (fun M : Mat m n => Mat.transpose M) where
+  backward := fun _A dY => fun i j => dY j i
+  correct := by
+    intro A dY i j
+    simp_rw [pdivMat_transpose]
+    -- Σ k : Fin n, Σ l : Fin m, (if j=k ∧ i=l then 1 else 0) * dY k l = dY j i
+    have h : ∀ k : Fin n, ∀ l : Fin m,
+        (if j = k ∧ i = l then (1 : ℝ) else 0) * dY k l =
+        (if j = k then (if i = l then dY k l else 0) else 0) := by
+      intro k l
+      by_cases hjk : j = k <;> by_cases hil : i = l <;> simp [hjk, hil]
+    simp_rw [h]
+    rw [Finset.sum_eq_single j (by intro k _ hne; simp [Ne.symm hne]) (by simp)]
+    simp only [if_true]
+    rw [Finset.sum_eq_single i (by intro l _ hne; simp [Ne.symm hne]) (by simp)]
+    simp
 
 -- ════════════════════════════════════════════════════════════════
 -- § 3D Tensor VJP Framework (for CNN / Depthwise)

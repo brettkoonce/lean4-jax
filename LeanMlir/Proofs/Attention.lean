@@ -52,18 +52,6 @@ open Finset BigOperators Classical
 namespace Proofs
 
 -- ════════════════════════════════════════════════════════════════
--- § 0. Matrix transpose (needed for SDPA)
--- ════════════════════════════════════════════════════════════════
-
-namespace Mat
-
-/-- Matrix transpose: swap rows and columns. -/
-def transpose (A : Mat m n) : Mat n m :=
-  fun j i => A i j
-
-end Mat
-
--- ════════════════════════════════════════════════════════════════
 -- § 1. Standalone Softmax VJP
 -- ════════════════════════════════════════════════════════════════
 
@@ -176,6 +164,43 @@ parallel.
 /-- Row-wise softmax of a matrix. -/
 noncomputable def rowSoftmax {m n : Nat} (A : Mat m n) : Mat m n :=
   fun i => softmax n (A i)
+
+/-- **Row-wise softmax VJP** — proved, no sorry.
+
+    Rows are independent, so the Jacobian is block-diagonal with the
+    standalone softmax Jacobian in each block. The backward just
+    applies `softmax_has_vjp` per row. -/
+noncomputable def rowSoftmax_has_vjp_mat {m n : Nat} :
+    HasVJPMat (fun A : Mat m n => fun r => softmax n (A r)) where
+  backward := fun A dY => fun r c => (softmax_has_vjp n).backward (A r) (dY r) c
+  correct := by
+    intro A dY i j
+    -- Replace pdivMat of the row-independent fn with its row/vector form.
+    simp_rw [pdivMat_rowIndep]
+    -- Goal: (softmax_has_vjp n).backward (A i) (dY i) j =
+    --       Σ k, Σ l, (if i = k then pdiv (softmax n) (A i) j l else 0) * dY k l
+    -- Push the *dY through the if-else, then pull the if-else out of the inner sum.
+    have h : ∀ k : Fin m,
+        (∑ l : Fin n, (if i = k then pdiv (softmax n) (A i) j l else 0) * dY k l) =
+        if i = k then ∑ l : Fin n, pdiv (softmax n) (A i) j l * dY k l else 0 := by
+      intro k
+      by_cases hik : i = k
+      · simp [hik]
+      · simp [hik]
+    simp_rw [h]
+    -- Now: Σ k, if i = k then Σ l, ... * dY k l else 0.  Collapse at k = i.
+    rw [Finset.sum_ite_eq Finset.univ i
+        (fun k => ∑ l : Fin n, pdiv (softmax n) (A i) j l * dY k l)]
+    simp only [Finset.mem_univ, if_true]
+    -- Goal: (softmax_has_vjp n).backward (A i) (dY i) j =
+    --       Σ l, pdiv (softmax n) (A i) j l * dY i l
+    exact (softmax_has_vjp n).correct (A i) (dY i) j
+
+/-- Alias so `rowSoftmax_has_vjp_mat` types against the actual `rowSoftmax`
+    definition (definitionally equal, but lets Lean unify on the name). -/
+noncomputable def rowSoftmax_has_vjp_mat' (m n : Nat) :
+    HasVJPMat (@rowSoftmax m n) :=
+  rowSoftmax_has_vjp_mat
 
 /-- **Scaled dot-product attention**, for a single sequence and a
     single head. `Q K V : Mat n d`.
@@ -308,21 +333,123 @@ noncomputable def sdpa_back_K (n d : Nat) (Q K V dOut : Mat n d) : Mat n d :=
 noncomputable def sdpa_back_V (n d : Nat) (Q K _V dOut : Mat n d) : Mat n d :=
   Mat.mul (Mat.transpose (sdpa_weights n d Q K)) dOut
 
-/-- **Correctness of `sdpa_back_Q`.** The backward w.r.t. Q equals the
-    contraction of `pdivMat (fun Q' => sdpa n d Q' K V) Q` against `dOut`.
-    Axiomatized pending Phase 2. Numerically gradient-checked. -/
-axiom sdpa_back_Q_correct (n d : Nat) (Q K V dOut : Mat n d)
+/-! ## Q and K correctness via compositional SDPA forward chain
+
+For Q (with K, V fixed), `sdpa n d · K V` is the composition:
+
+    Q ↦ Q · K^T   ↦   scale * _   ↦   rowSoftmax _   ↦   _ · V
+
+Four steps, four already-proved `HasVJPMat` building blocks:
+
+1. `matmul_right_const_has_vjp (Mat.transpose K)` — ∂(Q · K^T)/∂Q
+2. `scalarScale_has_vjp (sdpa_scale d)` — ∂(scale · scores)/∂scores
+3. `rowSoftmax_has_vjp_mat` — ∂(rowSoftmax scaled)/∂scaled
+4. `matmul_right_const_has_vjp V` — ∂(weights · V)/∂weights
+
+Chain them with `vjpMat_comp` thrice → a `HasVJPMat` for the full
+Q-path. Then show the chain's backward function equals `sdpa_back_Q`
+pointwise (trivial — the chain's backward literally computes the same
+nested formula) and invoke its `.correct` to discharge the axiom. -/
+
+/-- Explicit 4-composition forward for SDPA, varying Q with K, V fixed. -/
+noncomputable def sdpa_Q_chain (n d : Nat) (K V : Mat n d) : Mat n d → Mat n d :=
+  (fun w : Mat n n => Mat.mul w V) ∘
+  (@rowSoftmax n n) ∘
+  (fun s : Mat n n => fun r c => sdpa_scale d * s r c) ∘
+  (fun Q' : Mat n d => Mat.mul Q' (Mat.transpose K))
+
+theorem sdpa_Q_chain_eq (n d : Nat) (Q K V : Mat n d) :
+    sdpa_Q_chain n d K V Q = sdpa n d Q K V := by
+  unfold sdpa_Q_chain sdpa sdpa_scale
+  rfl
+
+/-- `HasVJPMat` for the chain — built by nesting `vjpMat_comp` thrice. -/
+noncomputable def sdpa_Q_chain_has_vjp (n d : Nat) (K V : Mat n d) :
+    HasVJPMat (sdpa_Q_chain n d K V) :=
+  vjpMat_comp _ (fun w : Mat n n => Mat.mul w V)
+    (vjpMat_comp _ (@rowSoftmax n n)
+      (vjpMat_comp _ (fun s : Mat n n => fun r c => sdpa_scale d * s r c)
+        (matmul_right_const_has_vjp (Mat.transpose K))
+        (scalarScale_has_vjp (sdpa_scale d)))
+      (rowSoftmax_has_vjp_mat' n n))
+    (matmul_right_const_has_vjp V)
+
+/-- **Correctness of `sdpa_back_Q`** — proved, no sorry.
+
+    Two moves: (1) replace `fun Q' => sdpa n d Q' K V` by the chain via
+    `sdpa_Q_chain_eq`; (2) apply the chain's `.correct` and verify that
+    the chain's backward reduces to `sdpa_back_Q` (pure unfolding). -/
+theorem sdpa_back_Q_correct (n d : Nat) (Q K V dOut : Mat n d)
     (i : Fin n) (j : Fin d) :
     sdpa_back_Q n d Q K V dOut i j =
     ∑ k : Fin n, ∑ l : Fin d,
-      pdivMat (fun Q' => sdpa n d Q' K V) Q i j k l * dOut k l
+      pdivMat (fun Q' => sdpa n d Q' K V) Q i j k l * dOut k l := by
+  have hfwd : (fun Q' : Mat n d => sdpa n d Q' K V) = sdpa_Q_chain n d K V := by
+    funext Q'; exact (sdpa_Q_chain_eq n d Q' K V).symm
+  rw [hfwd]
+  rw [← (sdpa_Q_chain_has_vjp n d K V).correct Q dOut i j]
+  -- Goal: sdpa_back_Q ... = (sdpa_Q_chain_has_vjp ...).backward Q dOut i j
+  unfold sdpa_back_Q sdpa_dScores sdpa_dScaled sdpa_dWeights sdpa_weights
+    sdpa_Q_chain_has_vjp
+  rfl
 
-/-- **Correctness of `sdpa_back_K`.** Axiomatized pending Phase 2. -/
-axiom sdpa_back_K_correct (n d : Nat) (Q K V dOut : Mat n d)
+/-! ## K case
+
+K enters through a transpose before the first matmul. One extra step in
+the chain: K ↦ K^T, then follow the Q chain (but with the matmul being
+"left factor constant" this time because Q is fixed and K^T is on the
+right). -/
+
+noncomputable def sdpa_K_chain (n d : Nat) (Q V : Mat n d) : Mat n d → Mat n d :=
+  (fun w : Mat n n => Mat.mul w V) ∘
+  (@rowSoftmax n n) ∘
+  (fun s : Mat n n => fun r c => sdpa_scale d * s r c) ∘
+  (fun Kt' : Mat d n => Mat.mul Q Kt') ∘
+  (fun K' : Mat n d => Mat.transpose K')
+
+theorem sdpa_K_chain_eq (n d : Nat) (Q K V : Mat n d) :
+    sdpa_K_chain n d Q V K = sdpa n d Q K V := by
+  unfold sdpa_K_chain sdpa sdpa_scale
+  rfl
+
+noncomputable def sdpa_K_chain_has_vjp (n d : Nat) (Q V : Mat n d) :
+    HasVJPMat (sdpa_K_chain n d Q V) :=
+  vjpMat_comp _ (fun w : Mat n n => Mat.mul w V)
+    (vjpMat_comp _ (@rowSoftmax n n)
+      (vjpMat_comp _ (fun s : Mat n n => fun r c => sdpa_scale d * s r c)
+        (vjpMat_comp _ (fun Kt' : Mat d n => Mat.mul Q Kt')
+          (@transpose_has_vjp n d)
+          (matmul_left_const_has_vjp Q))
+        (scalarScale_has_vjp (sdpa_scale d)))
+      (rowSoftmax_has_vjp_mat' n n))
+    (matmul_right_const_has_vjp V)
+
+/-- **Correctness of `sdpa_back_K`** — proved, no sorry.
+
+    Same shape as Q, but the chain goes through a leading transpose
+    step. The resulting backward computes `∑ k, Q k j * dScores k i`
+    whereas `sdpa_back_K` is `Mat.mul (Mat.transpose dScores) Q`, which
+    expands to `∑ k, dScores k i * Q k j`. Equal by `mul_comm` at the
+    summand level. -/
+theorem sdpa_back_K_correct (n d : Nat) (Q K V dOut : Mat n d)
     (i : Fin n) (j : Fin d) :
     sdpa_back_K n d Q K V dOut i j =
     ∑ k : Fin n, ∑ l : Fin d,
-      pdivMat (fun K' => sdpa n d Q K' V) K i j k l * dOut k l
+      pdivMat (fun K' => sdpa n d Q K' V) K i j k l * dOut k l := by
+  have hfwd : (fun K' : Mat n d => sdpa n d Q K' V) = sdpa_K_chain n d Q V := by
+    funext K'; exact (sdpa_K_chain_eq n d Q K' V).symm
+  rw [hfwd]
+  rw [← (sdpa_K_chain_has_vjp n d Q V).correct K dOut i j]
+  unfold sdpa_back_K sdpa_dScores sdpa_dScaled sdpa_dWeights sdpa_weights
+    sdpa_K_chain_has_vjp vjpMat_comp
+    matmul_right_const_has_vjp matmul_left_const_has_vjp transpose_has_vjp
+    scalarScale_has_vjp rowSoftmax_has_vjp_mat' rowSoftmax_has_vjp_mat
+    softmax_has_vjp rowSoftmax
+  -- Both sides now in sum-of-products form; differ only by mul_comm at the summand.
+  simp only [Mat.mul, Mat.transpose, Function.comp]
+  apply Finset.sum_congr rfl
+  intro k _
+  ring
 
 /-- The final matmul in SDPA: for fixed Q, K, the function `V' ↦ sdpa Q K V'`
     is `V' ↦ W · V'` where `W = sdpa_weights Q K`. Pure rewrite; definitional. -/
@@ -440,11 +567,10 @@ zoo. Everything else is orchestration.
 - Squeeze-and-Excitation / elementwise product VJP (`SE.lean`)
 - LayerNorm, GELU (`LayerNorm.lean`)
 - Standalone softmax VJP (this file)
-
-**Stated concretely, correctness axiomatized (Phase 2 target):**
-- Scaled dot-product attention backwards `sdpa_back_{Q,K,V}` — the
-  formulas are written out and numerically gradient-checked;
-  formal correctness awaits the matrix-level VJP framework.
+- Scaled dot-product attention backwards `sdpa_back_{Q,K,V}` —
+  proved via `vjpMat_comp` composition of four matrix-level VJP
+  building blocks (matmul, scalarScale, rowSoftmax, matmul). Formulas
+  are also numerically gradient-checked as a belt-and-braces check.
 
 **Three calculus axioms do all the structural work:**
 
