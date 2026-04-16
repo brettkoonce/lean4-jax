@@ -37,14 +37,35 @@ jobs:
                      LeanMlir.Proofs.LayerNorm \
                      LeanMlir.Proofs.Attention
 
-      - name: Check for sorry
+      - name: Summary
         run: |
-          if lake build LeanMlir.Proofs.Tensor LeanMlir.Proofs.MLP LeanMlir.Proofs.CNN LeanMlir.Proofs.BatchNorm LeanMlir.Proofs.Residual LeanMlir.Proofs.Depthwise LeanMlir.Proofs.SE LeanMlir.Proofs.LayerNorm LeanMlir.Proofs.Attention 2>&1 | grep -q "sorry"; then
-            echo "::warning::Found sorry in proofs"
-            lake build LeanMlir.Proofs.Tensor LeanMlir.Proofs.MLP LeanMlir.Proofs.CNN LeanMlir.Proofs.BatchNorm LeanMlir.Proofs.Residual LeanMlir.Proofs.Depthwise LeanMlir.Proofs.SE LeanMlir.Proofs.LayerNorm LeanMlir.Proofs.Attention 2>&1 | grep "sorry"
+          echo "## Proof Verification" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Sorry count
+          SORRIES=$(lake build LeanMlir.Proofs.Tensor LeanMlir.Proofs.MLP LeanMlir.Proofs.CNN LeanMlir.Proofs.BatchNorm LeanMlir.Proofs.Residual LeanMlir.Proofs.Depthwise LeanMlir.Proofs.SE LeanMlir.Proofs.LayerNorm LeanMlir.Proofs.Attention 2>&1 | grep -c "sorry" || true)
+          if [ "$SORRIES" -eq 0 ]; then
+            echo "**All proofs verified — zero sorry**" >> $GITHUB_STEP_SUMMARY
           else
-            echo "All proofs verified - zero sorry"
+            echo "**${SORRIES} sorry(s) remaining:**" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            lake build LeanMlir.Proofs.Tensor LeanMlir.Proofs.MLP LeanMlir.Proofs.CNN LeanMlir.Proofs.BatchNorm LeanMlir.Proofs.Residual LeanMlir.Proofs.Depthwise LeanMlir.Proofs.SE LeanMlir.Proofs.LayerNorm LeanMlir.Proofs.Attention 2>&1 | grep "sorry" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Numerical gradient checks
-        run: python3 LeanMlir/Proofs/check_axioms.py
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Numerical Gradient Checks" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Axiom | Max Error | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          python3 LeanMlir/Proofs/check_axioms.py 2>&1 | grep -E "PASS|FAIL" | while read line; do
+            status=$(echo "$line" | grep -o "PASS\|FAIL")
+            name=$(echo "$line" | sed 's/.*: //' | sed 's/ *max_err.*//')
+            err=$(echo "$line" | grep -o "max_err=[0-9.e+-]*" | sed 's/max_err=//')
+            icon=$( [ "$status" = "PASS" ] && echo "✅" || echo "❌" )
+            echo "| ${name} | ${err} | ${icon} ${status} |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Fail CI if gradient checks fail
+          python3 LeanMlir/Proofs/check_axioms.py
