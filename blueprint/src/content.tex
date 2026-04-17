@@ -800,6 +800,22 @@ goal is pedagogical shape + parameter accounting, not training runs.
   Signature: \texttt{convNextDownsample (ic oc : Nat)}.
 \end{definition}
 
+\begin{definition}[WaveNet block]
+  \label{layer:waveNetBlock}
+  \lean{Layer.waveNetBlock}
+  \leanok
+  One stack of \texttt{nLayers} dilated causal residual blocks with
+  doubling dilation rates $2^0, 2^1, \ldots, 2^{\texttt{nLayers}-1}$
+  (van den Oord et al.\ 2016). Each block: dilated 2-tap causal conv
+  $\to$ gated activation $\tanh(\text{filter}) \odot \sigma(\text{gate})$
+  $\to$ 1$\times$1 project back to \texttt{residualCh} (residual path) +
+  1$\times$1 skip projection to \texttt{skipCh}. Skip outputs across
+  blocks are summed into the final head. Signature:
+  \texttt{waveNetBlock (residualCh skipCh nLayers : Nat)}. Output
+  channels are \texttt{skipCh}: bestiary convention picks the skip path
+  as the "forward" output since it's what feeds the final classifier.
+\end{definition}
+
 \section{Bestiary entries}
 \label{sec:bestiary_entries}
 
@@ -871,3 +887,13 @@ depthwise + inverted bottleneck + LN + GELU + separate inter-stage
 downsamples. Proof-by-construction that CNNs didn't need to die in
 2021. Variants: T (28M), S (50M), B (89M), L (198M), tiny fixture ---
 all matching the paper within 1\%.
+
+\subsection*{WaveNet (\texttt{Bestiary/WaveNet.lean})}
+Uses \S~\ref{layer:waveNetBlock}. Dilated causal convolutions for raw
+audio sample prediction: exponential receptive field, linear parameter
+growth. The foundation of neural TTS and PixelCNN. Variants: single
+stack (0.4M), 3-stack (paper setup, with a NetSpec-linearity
+approximation), music (single stack, 4.1M), tiny. One honest
+limitation: the residual-vs-skip dual-output pattern doesn't
+linearize cleanly, so the 3-stack variant uses a simplified
+channel-flow approximation.

@@ -96,6 +96,13 @@ inductive Layer where
   -- (ic → oc). Separated from the residual blocks, following the paper's
   -- design choice (point 8 of Liu et al.'s modernization recipe).
   | convNextDownsample (ic oc : Nat)
+  -- WaveNet (van den Oord 2016) residual-block stack with exponentially
+  -- growing dilation. One stack = `nLayers` blocks with dilation rates
+  -- 2⁰, 2¹, ..., 2^(nLayers−1). Per block: dilated causal conv + gated
+  -- activation (tanh ⊙ sigmoid) + 1×1 project back to residualCh + skip
+  -- connection + separate 1×1 conv producing a skipCh vector (summed
+  -- into the final output head).
+  | waveNetBlock (residualCh skipCh nLayers : Nat)
 deriving Repr
 
 structure NetSpec where

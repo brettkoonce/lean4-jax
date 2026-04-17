@@ -204,6 +204,16 @@ def Layer.nParams : Layer → Nat
   | .convNextDownsample ic oc =>
       -- LayerNorm on ic channels + 2×2 conv stride-2 (ic → oc) with bias
       2 * ic + 4 * ic * oc + oc
+  | .waveNetBlock residualCh skipCh nLayers =>
+      -- Per dilated residual block:
+      --   Dilated causal conv (kernel 2), res → 2·res (filter + gate):
+      --     2·(2·res)·res + 2·res = 4·res² + 2·res
+      --   1×1 residual projection (res → res) + bias: res² + res
+      --   1×1 skip projection (res → skip) + bias: res·skip + skip
+      let res := residualCh
+      let skip := skipCh
+      let perBlock := 4 * res * res + 2 * res + res * res + res + res * skip + skip
+      nLayers * perBlock
   | _                        => 0
 
 def NetSpec.totalParams (s : NetSpec) : Nat :=
@@ -280,7 +290,8 @@ def NetSpec.archStr (s : NetSpec) : String :=
     | .structureModule cs cz n   => s!"StructMod{n}(s={cs},z={cz})"
     | .mobileVitBlock ic d h m n => s!"MobileViT(ic={ic},d={d},h={h},mlp={m},L={n})"
     | .convNextStage c n         => s!"ConvNeXt{n}(c={c})"
-    | .convNextDownsample i o    => s!"CNXDown({i}→{o})")
+    | .convNextDownsample i o    => s!"CNXDown({i}→{o})"
+    | .waveNetBlock r s n        => s!"WaveNet{n}(res={r},skip={s})")
 
 -- ===========================================================================
 -- Validation: catch channel/dimension mismatches at `lake build` time
@@ -315,6 +326,7 @@ def Layer.outChannels : Layer → Nat
   | .mobileVitBlock ic _ _ _ _      => ic     -- block is ic → ic
   | .convNextStage c _              => c      -- stage preserves channels
   | .convNextDownsample _ oc        => oc
+  | .waveNetBlock _ skipCh _        => skipCh     -- skip-sum is what flows to the head
   | _                               => 0  -- pool/flatten/GAP: pass-through
 
 /-- Input channels expected by a layer. Returns 0 for layers that accept any input. -/
@@ -346,6 +358,7 @@ def Layer.inChannels : Layer → Nat
   | .mobileVitBlock ic _ _ _ _      => ic
   | .convNextStage c _              => c
   | .convNextDownsample ic _        => ic
+  | .waveNetBlock residualCh _ _    => residualCh
   | _                               => 0  -- pool/flatten/GAP: accept anything
 
 /-- Validate that channel dimensions chain correctly through the spec.

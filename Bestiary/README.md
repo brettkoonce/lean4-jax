@@ -21,6 +21,7 @@ like in ~20 lines of Lean."
 | `MuZero.lean`    | MuZero                    | Go / Atari / tiny | AlphaZero + learned dynamics; three networks (rep + dyn + pred) |
 | `MobileViT.lean` | MobileViT                 | S / XS / XXS / tiny | Hybrid CNN + transformer-across-patches for mobile |
 | `ConvNeXt.lean`  | ConvNeXt                  | T / S / B / L / tiny | Modernized CNN; the "can pure convs still compete" answer |
+| `WaveNet.lean`   | WaveNet                   | speech / 3-stack / music / tiny | Dilated causal convs for audio; exponential receptive field |
 
 ## Adding a new entry
 
