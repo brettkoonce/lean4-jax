@@ -90,9 +90,21 @@ jobs:
           leanblueprint checkdecls
 
       - name: Build blueprint PDF
-        run: |
-          leanblueprint pdf || echo "PDF build failed but continuing; web is primary."
+        # Don't block the web deploy if PDF fails, but do show the full
+        # latexmk log in the CI output so we can see what broke.
         continue-on-error: true
+        run: |
+          set +e
+          leanblueprint pdf
+          status=$?
+          if [ $status -ne 0 ]; then
+            echo "::warning::PDF build failed (status $status); web version still ships."
+            echo "--- latexmk log tail ---"
+            tail -n 100 blueprint/src/print.log 2>/dev/null || true
+            echo "--- print directory ---"
+            ls -la blueprint/print 2>/dev/null || true
+          fi
+          exit 0
 
       - name: Assemble public/ directory for Pages
         run: |
