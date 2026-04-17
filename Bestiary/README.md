@@ -24,6 +24,7 @@ like in ~20 lines of Lean."
 | `WaveNet.lean`   | WaveNet                   | speech / 3-stack / music / tiny | Dilated causal convs for audio; exponential receptive field |
 | `NeRF.lean`      | NeRF                      | canonical / fast / tiny | 3D scene as an MLP; the magic is in positional encoding |
 | `CLIP.lean`      | CLIP                      | RN50 / ViT-B/32 / ViT-L/14 / tiny | Dual encoder + contrastive; zero new primitives |
+| `SqueezeNet.lean`| SqueezeNet                | 1.0 / 1.1 / tiny | Fire modules: squeeze-then-parallel-expand, AlexNet @ 1.25M params |
 
 ## Adding a new entry
 
