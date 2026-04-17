@@ -41,9 +41,20 @@ jobs:
           curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- --default-toolchain none -y
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
+      - name: Cache .lake (Mathlib oleans + our build products)
+        uses: actions/cache@v4
+        with:
+          path: .lake
+          # Invalidate cache when Mathlib rev changes or lean-toolchain bumps.
+          key: lake-${{ runner.os }}-${{ hashFiles('lake-manifest.json', 'lean-toolchain') }}
+          restore-keys: |
+            lake-${{ runner.os }}-
+
       - name: Fetch Mathlib cache
         run: |
-          lake exe cache get
+          # If actions/cache restored .lake already, `cache get` is a fast no-op.
+          # Otherwise it downloads ~5GB of Mathlib oleans from the Azure cache server.
+          lake exe cache get || true
 
       - name: Build proof library
         run: |
