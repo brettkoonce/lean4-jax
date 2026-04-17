@@ -5,32 +5,331 @@
 % Lean declaration via \lean{...}, marks proved claims with \leanok, and
 % lists upstream dependencies via \uses{...}.
 
-\chapter{Overview}
+\chapter{Introduction}
+\label{chap:introduction}
 
-This blueprint visualizes the Verified VJP Proofs suite: machine-checked
-proofs that every layer's backward pass (vector-Jacobian product) matches
-its forward-pass Jacobian. The suite contains 30 axioms and 48 theorems
-across nine Lean files, with zero \texttt{sorry}s.
+On the next-to-last page of my first book, I wrote that I dreamed of a
+future where we could take our code and compile it for whatever backend
+we desire, via MLIR. I meant it as a wishlist item --- something I expected
+to happen eventually, but not soon enough to matter for that work.
 
-The axioms fall into three buckets:
+It turned out ``eventually'' was about five years.
+
+This is the book I wanted to write back then, and couldn't. The tools
+weren't ready. Lean 4 was still in development. MLIR was a research
+project. IREE couldn't compile a training step. Now all three are
+production-quality, and the thing I wished for is not only possible ---
+it's sitting in a GitHub repo, training ResNets on a single GPU, with
+machine-checked proofs that every gradient is correct.
+
+\section*{What this book is about}
+
+This book teaches you how backpropagation actually works.
+
+Not the hand-wave version --- ``compute gradients, update weights,
+repeat.'' You already know that version. If you've trained a model,
+you've called \texttt{.backward()} a thousand times. What you probably
+haven't done is open the hood and look at what \texttt{.backward()} is
+actually computing, layer by layer, and verify that the computation
+is mathematically correct.
+
+That's what we're going to do. For every layer in the modern stack ---
+dense, ReLU, convolution, pooling, batch normalization, residual
+connections, depthwise convolution, squeeze-and-excitation, layer
+normalization, and self-attention --- we will:
+
+\begin{enumerate}
+  \item \textbf{Derive the backward pass} from the forward pass, using nothing
+    but the chain rule and some index algebra.
+  \item \textbf{State the result formally} in Lean 4, a programming language
+    that doubles as a theorem prover.
+  \item \textbf{Show the MLIR} that compiles to GPU bytecode, and verify it
+    matches the math.
+  \item \textbf{Train the model} on real data, end-to-end, on your hardware.
+\end{enumerate}
+
+Three views of the same computation: the math, the proof, the code
+that runs. They agree, and the entire book is about understanding why.
+
+\section*{The thesis}
+
+Here's the punchline, stated up front so you know where we're headed.
+
+Backpropagation is \textbf{one operation} (the vector-Jacobian product),
+composed using \textbf{three rules}:
+
+\begin{enumerate}
+  \item \textbf{The chain rule} --- if you compose two functions, you compose
+    their backward passes.
+  \item \textbf{Additive fan-in} --- if two paths feed into a sum (like a
+    residual connection), their gradients add.
+  \item \textbf{Multiplicative fan-in} --- if two paths feed into a product
+    (like squeeze-and-excitation or attention), the product rule
+    gives you two backward contributions that add.
+\end{enumerate}
+
+And \textbf{five structural tricks} for layers whose Jacobians are dense
+but exploitably structured:
+
+\begin{enumerate}
+  \item \textbf{Diagonal} --- elementwise activations (ReLU, GELU, Swish).
+    The Jacobian is diagonal; the backward is one multiply.
+  \item \textbf{Sparse Toeplitz} --- convolutions. The Jacobian is block-sparse
+    with a sliding-window structure; the backward is another
+    convolution with a reversed kernel.
+  \item \textbf{Binary selection} --- max pooling. The Jacobian routes the
+    gradient to whichever input was the max.
+  \item \textbf{Rank-1 correction to diagonal} --- softmax, batch norm, layer
+    norm. The Jacobian is dense but has a clean closed form because
+    it's a diagonal plus a rank-1 outer product.
+  \item \textbf{Outer product reductions} --- dense layers and matmul. The
+    weight gradient is the outer product of the input with the
+    output gradient.
+\end{enumerate}
+
+That's it. Three rules, five tricks. Every architecture in this book ---
+MLP, CNN, ResNet, MobileNet, EfficientNet, Vision Transformer --- and
+every architecture in the bestiary --- U-Net, DETR, Mamba, GAN, VAE,
+diffusion models, CLIP, GPT-style decoders --- decomposes into some
+combination of these eight things. There is no ninth.
+
+I didn't set out to prove this. I set out to train a ResNet with
+verified gradients, and by the time I'd done it for enough architectures,
+the pattern became impossible to ignore. The framework kept working
+without needing new primitives. Once you see it, you can't unsee it,
+and the rest of the book is about making sure you see it.
+
+\section*{Who this book is for}
+
+This book assumes you've trained a neural network. Not a fancy one.
+If you've fine-tuned a pretrained model, debugged a NaN loss, or
+watched a model overfit and wondered why, you're the audience.
+
+I'm going to assume you know what a derivative is, what a matrix is,
+and roughly what a convolutional layer does. I'm not going to assume
+you know Lean, MLIR, formal verification, or compiler theory. The Lean
+code appears throughout the book as a precise specification and a
+credibility instrument --- not as a barrier. If you skip every Lean
+snippet, you still get a complete book on the mechanics of
+backpropagation. The Lean is there for the reader who wants to
+\emph{check} me, not the reader who needs to learn formal methods.
+
+This is not a beginner's book. If you're looking for your first
+introduction to neural networks, there are several good ones: my
+first book is one option, fast.ai's free course is another, and there
+are good resources all over the web. Come back to this one when
+you've trained something and want to understand what you did.
+
+This is also not a research textbook. I'm not trying to write Goodfellow
+or Bishop. The proofs here are for credibility, not for theoretical depth.
+If you want the full formal story, Mathlib is open-source and you can
+extend it. What this book gives you that a research textbook doesn't is
+the bridge from the math to the actual GPU code, and the assurance
+that they agree.
+
+If you're me from ten years ago --- interested in ML, willing to put in
+the work, not sure where the math stops and the folklore begins --- this
+is the book I wish I'd had.
+
+\section*{Why now}
+
+Three things had to happen before this book was possible, and all three
+happened in the last few years:
+
+\textbf{Lean 4 reached maturity.} Lean is a programming language that is
+also a theorem prover. You can write a function in Lean and then write
+a proof that the function does what you claim. If the proof compiles,
+the claim is correct --- not because you trust the author, but because
+the compiler checked it. Lean 4 (released 2023) is the version that
+made this practical for non-specialists: it has a real package manager,
+real tooling, a growing math library (Mathlib), and an active community.
+
+\textbf{MLIR and StableHLO stabilized.} MLIR is a compiler infrastructure
+for machine learning. StableHLO is a portable operation set built on
+MLIR that describes the computations neural networks perform. Together,
+they let you specify a training step as a sequence of mathematical
+operations and compile it to any hardware backend --- CPU, CUDA, ROCm ---
+without writing backend-specific code. This is the layer that turns
+``math on paper'' into ``code on the GPU.''
+
+\textbf{IREE became production-ready.} IREE (Intermediate Representation
+Execution Environment) is the runtime that takes a compiled StableHLO
+module and executes it on actual hardware. It handles memory management,
+device allocation, and kernel dispatch. It's what lets us go from a
+Lean spec file to a running training loop with no Python anywhere in
+the pipeline.
+
+The combination of these three tools means, for the first time, that
+a single person can: (a) write a neural network spec in a language
+with a type system strong enough to state and check mathematical
+properties; (b) compile that spec to GPU-runnable code via a standard
+intermediate representation; and (c) train the network end-to-end on
+consumer hardware, with formal guarantees about the gradient
+computation. That's the pipeline this book is built around.
+
+\section*{Why image recognition}
+
+Same reason as the first book: it's the oldest, most well-understood
+corner of deep learning, which means we can introduce primitives one
+at a time in a logical order.
+
+We start with MNIST (digits, $28 \times 28$ grayscale) and work up through
+CIFAR-10 (color, $32 \times 32$) to Imagenette (real photos, $224 \times 224$).
+The architectures form a natural progression:
+MLP $\to$ CNN $\to$ ResNet $\to$ MobileNet $\to$ EfficientNet $\to$ ViT.
+Each one adds exactly one new structural primitive to the framework. By
+the time you reach ViT, you've seen every primitive there is to see for
+modern vision --- and as it turns out, for modern language models too,
+since transformers are the same architecture in both domains.
+
+The bestiary at the end demonstrates that the same primitives cover
+detection (DETR), segmentation (U-Net), generation (diffusion models),
+self-supervised learning (MAE, CLIP), sequence modeling (Mamba), and
+multi-modal models (Flamingo). Image recognition is the on-ramp; the
+destination is the whole modern stack.
+
+\section*{Why Lean}
+
+I considered several options for the ``formal'' half of the book ---
+Coq, Agda, Isabelle, or just doing the proofs on paper with LaTeX.
+I chose Lean for a practical reason: it reads like code.
+
+If you've trained a model in PyTorch, you can read:
+
+\begin{verbatim}
+def dense {m n : Nat} (W : Mat m n) (b : Vec n) (x : Vec m) : Vec n :=
+  fun j => finSum m (fun i => x i * W i j) + b j
+\end{verbatim}
+
+and understand it. It's a function with typed arguments.
+\texttt{\{m n : Nat\}} are the dimensions. \texttt{fun j =>} is a lambda.
+\texttt{finSum} is a for loop. You don't need to learn a new paradigm
+--- you need to learn maybe twenty keywords and some notation, and then
+Lean reads like any other typed functional language.
+
+The other reason is that Lean enforces honesty. If I claim that the
+backward pass of batch normalization is a specific three-term formula,
+the Lean compiler requires me to prove it. If the proof compiles,
+the claim is correct --- not because you trust me, but because the
+type checker verified it. There is no hidden hand-waving. Every VJP
+in this book --- dense, convolution, batch norm, residual, attention,
+all of them --- builds with zero \texttt{sorry}s. The compiler is the
+referee.
+
+\section*{How to read this book}
+
+Every chapter after this one follows the same pattern:
+
+\begin{enumerate}
+  \item A new architecture (the ``what'')
+  \item A new structural primitive (the ``why'')
+  \item Derivation of the backward pass (by hand, with indices)
+  \item Lean proof (the formal statement)
+  \item MLIR snippet (the GPU code)
+  \item Training results (proof it works)
+\end{enumerate}
+
+You can read straight through, or you can skip to any chapter whose
+architecture interests you --- each one is mostly self-contained, with
+back-references to earlier chapters for the primitives it builds on.
+
+The Lean code and MLIR snippets are available in the lean4-mlir
+repository on GitHub. Every architecture in the book can be trained
+on your hardware. Appendix A walks you through the toolchain setup;
+if you're impatient, there's a Docker image that gets you from zero
+to training MNIST in one command.
+
+\section*{How this book is organized}
+
+\textbf{Basics.} We build the framework from scratch using simple
+architectures:
+
 \begin{itemize}
-  \item \textbf{Calculus primitives} (8): chain rule, linearity, product
-    rule, identity, reindex --- elementary facts about the partial-derivative
-    function \(\pdiv\). Correspond directly to Mathlib \texttt{HasDerivAt}
-    / \texttt{HasFDerivAt} lemmas.
-  \item \textbf{Elementary Jacobian facts} (about 11): the Jacobian of a
-    specific operation (ReLU diagonal, softmax rank-1, layer-norm 3-term,
-    etc.), stated in \(\pdiv\)-land rather than bridging to Mathlib.
-  \item \textbf{Bundled layer VJPs} (about 11): each opaque forward
-    (\texttt{conv2d}, \texttt{depthwiseConv2d}, \texttt{mhsa\_layer}) paired
-    with a bundled \(\HasVJP\) existence claim. Gradient-checked numerically
-    in \texttt{check\_axioms.py}.
+  \item \textbf{Chapter 2: Tensor Calculus} --- Axioms.
+  \item \textbf{Chapter 3: MNIST 1D MLP} --- Dense layers, ReLU, softmax CE,
+    the chain rule. The most important chapter: everything after is
+    adding more layers.
+  \item \textbf{Chapter 4: MNIST 2D CNN} --- Convolution, max pooling. The
+    backward pass of conv is another conv with a reversed kernel.
+  \item \textbf{Chapter 5: CIFAR with BatchNorm} --- The first dense Jacobian
+    with a clean closed form. Three terms, one cancellation, and you
+    never have to derive it again.
+  \item \textbf{Chapter 6: ResNet-34} --- Residual connections. Gradients from
+    two paths add at the input.
 \end{itemize}
 
-Everything else --- 48 theorems --- is composition over these axioms, glued
-by the three structural rules (chain, fan-in, product) and five
-closed-form Jacobian tricks (diagonal, sparse toeplitz, binary selection,
-rank-1 correction, outer product).
+\textbf{Spanning models.} We walk up the architecture ladder, one new
+primitive per chapter:
+
+\begin{itemize}
+  \item \textbf{Chapter 7: MobileNetV2} --- Depthwise convolution. Same as
+    regular conv, but diagonal in the channel dimension.
+  \item \textbf{Chapter 8: EfficientNet} --- Squeeze-and-excitation. The
+    product rule: main path times gate, gradients from both paths add.
+  \item \textbf{Chapter 9: LayerNorm and GELU} --- Batchnorm in disguise.
+    Activation functions.
+  \item \textbf{Chapter 10: Vision Transformer} --- Self-attention. Softmax
+    in the middle of the network, three-way fan-in at the input. The
+    capstone.
+\end{itemize}
+
+\textbf{The bestiary.} A catalog of $\sim$20 additional architectures,
+from U-Net to Mamba to diffusion models, each decomposed into the
+framework's primitives in $\sim$2 pages.
+
+\begin{itemize}
+  \item \textbf{Chapter 11: The Bestiary} --- Organized by the question
+    you're asking: ``how do I do detection?'', ``how do I do generation?'',
+    etc. Plus a micro-design appendix for decoding the latest LLM
+    training tricks.
+\end{itemize}
+
+\textbf{Appendices.} Toolchain setup (A) and the complete proof framework
+as a reference (B).
+
+\section*{A note on the proofs}
+
+The proofs in this book compile with \textbf{zero \texttt{sorry}s}. Every
+VJP correctness theorem --- dense layers, convolution, batch normalization,
+residual connections, depthwise convolution, squeeze-and-excitation,
+layer normalization, and self-attention --- is machine-checked by Lean's
+type system. If it builds, it's correct.
+
+The full axiom list, grouped by role, is in Appendix~\ref{app:axioms}.
+
+Everything else is proved from these axioms: the VJP composition
+rule (chain rule), additive and multiplicative fan-in, and the
+correctness of every layer's backward pass. The proofs are not deep
+--- they're undergraduate calculus, formalized. The value is not that
+the math is surprising, but that the compiler verified it matches
+the exact MLIR code that runs on the GPU.
+
+\section*{Let's go}
+
+In 2018, I was on a small team that won Stanford's DAWNBench
+competition --- training ImageNet in 3 hours for \$25 on commodity
+hardware. The lesson from that experience was simple: most of the
+apparent difficulty in modern deep learning isn't fundamental. It's
+accumulated folklore, missing tools, and a culture that takes the math
+on faith.
+
+This book applies that same lesson to the math itself. The folklore
+says backpropagation is complicated. It isn't. It's three rules, five
+tricks, and a lot of bookkeeping. The tools to verify this claim
+finally exist, and you're holding the result.
+
+Three of my favorite citations of the first book are from high school
+students. I don't think that's an accident. The barriers to doing real
+ML research used to be infrastructure --- compute, data, institutional
+access. Those barriers have mostly fallen. What remains is the
+smaller barrier of understanding what you're doing at the level where
+you can verify it, not just run it.
+
+This book is for the person who wants to cross that barrier. It might
+be you. It might be the next kid who picks it up in a library somewhere
+and decides to see how far they can go.
+
+Let's find out.
 
 \chapter{Tensor: Calculus Foundations}
 \label{chap:tensor}
@@ -1077,3 +1376,31 @@ Uses \S~\ref{layer:evoformerBlock} and \S~\ref{layer:structureModule}.
 Dual-representation (MSA + pair) doesn't fit a linear \texttt{NetSpec}
 cleanly; the bestiary shows the two bundled primitives and notes the
 limitation. Variants: full (76M), mini, tiny.
+
+\appendix
+
+\chapter{Axioms at a glance}
+\label{app:axioms}
+
+The Verified VJP Proofs suite contains 30 axioms and 48 theorems across
+nine Lean files, with zero \texttt{sorry}s. The axioms fall into three
+buckets:
+
+\begin{itemize}
+  \item \textbf{Calculus primitives} (8): chain rule, linearity, product
+    rule, identity, reindex --- elementary facts about the partial-derivative
+    function \(\pdiv\). Correspond directly to Mathlib \texttt{HasDerivAt}
+    / \texttt{HasFDerivAt} lemmas.
+  \item \textbf{Elementary Jacobian facts} (about 11): the Jacobian of a
+    specific operation (ReLU diagonal, softmax rank-1, layer-norm 3-term,
+    etc.), stated in \(\pdiv\)-land rather than bridging to Mathlib.
+  \item \textbf{Bundled layer VJPs} (about 11): each opaque forward
+    (\texttt{conv2d}, \texttt{depthwiseConv2d}, \texttt{mhsa\_layer}) paired
+    with a bundled \(\HasVJP\) existence claim. Gradient-checked numerically
+    in \texttt{check\_axioms.py}.
+\end{itemize}
+
+Everything else --- 48 theorems --- is composition over these axioms, glued
+by the three structural rules (chain, fan-in, product) and five
+closed-form Jacobian tricks (diagonal, sparse toeplitz, binary selection,
+rank-1 correction, outer product).
