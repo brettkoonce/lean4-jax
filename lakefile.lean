@@ -173,4 +173,7 @@ lean_exe «bestiary-muzero» where
 lean_exe «bestiary-mobilevit» where
   root := `Bestiary.MobileViT
 
+lean_exe «bestiary-convnext» where
+  root := `Bestiary.ConvNeXt
+
 require checkdecls from git "https://github.com/PatrickMassot/checkdecls.git"

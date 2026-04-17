@@ -191,6 +191,19 @@ def Layer.nParams : Layer → Nat
       let projOut   := dim * ic + 2 * ic
       let fusion    := 18 * ic * ic + 2 * ic
       localConv + projIn + txParams + projOut + fusion
+  | .convNextStage channels nBlocks =>
+      -- Per block:
+      --   DWConv 7×7 (depthwise):     49·c + c       — 50·c
+      --   LayerNorm (γ, β):           2·c
+      --   1×1 expand (c → 4c) + bias: 4·c² + 4·c
+      --   1×1 project (4c → c) + bias: 4·c² + c
+      --   LayerScale (γ per channel): c
+      -- Total per block ≈ 8·c² + 58·c
+      let c := channels
+      nBlocks * (8 * c * c + 58 * c)
+  | .convNextDownsample ic oc =>
+      -- LayerNorm on ic channels + 2×2 conv stride-2 (ic → oc) with bias
+      2 * ic + 4 * ic * oc + oc
   | _                        => 0
 
 def NetSpec.totalParams (s : NetSpec) : Nat :=
@@ -265,7 +278,9 @@ def NetSpec.archStr (s : NetSpec) : String :=
     | .shuffleBlock ic oc g n    => s!"Shuffle{n}({ic}→{oc},g{g})"
     | .evoformerBlock cm cz n    => s!"Evoformer{n}(msa={cm},pair={cz})"
     | .structureModule cs cz n   => s!"StructMod{n}(s={cs},z={cz})"
-    | .mobileVitBlock ic d h m n => s!"MobileViT(ic={ic},d={d},h={h},mlp={m},L={n})")
+    | .mobileVitBlock ic d h m n => s!"MobileViT(ic={ic},d={d},h={h},mlp={m},L={n})"
+    | .convNextStage c n         => s!"ConvNeXt{n}(c={c})"
+    | .convNextDownsample i o    => s!"CNXDown({i}→{o})")
 
 -- ===========================================================================
 -- Validation: catch channel/dimension mismatches at `lake build` time
@@ -298,6 +313,8 @@ def Layer.outChannels : Layer → Nat
   | .evoformerBlock msaCh _ _       => msaCh  -- MSA channels as the "main" dim
   | .structureModule sCh _ _        => sCh    -- single-repr channels
   | .mobileVitBlock ic _ _ _ _      => ic     -- block is ic → ic
+  | .convNextStage c _              => c      -- stage preserves channels
+  | .convNextDownsample _ oc        => oc
   | _                               => 0  -- pool/flatten/GAP: pass-through
 
 /-- Input channels expected by a layer. Returns 0 for layers that accept any input. -/
@@ -327,6 +344,8 @@ def Layer.inChannels : Layer → Nat
   | .evoformerBlock msaCh _ _       => msaCh
   | .structureModule sCh _ _        => sCh
   | .mobileVitBlock ic _ _ _ _      => ic
+  | .convNextStage c _              => c
+  | .convNextDownsample ic _        => ic
   | _                               => 0  -- pool/flatten/GAP: accept anything
 
 /-- Validate that channel dimensions chain correctly through the spec.

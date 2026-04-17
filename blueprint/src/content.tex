@@ -779,6 +779,27 @@ goal is pedagogical shape + parameter accounting, not training runs.
   the transformer proof chapter.
 \end{definition}
 
+\begin{definition}[ConvNeXt stage]
+  \label{layer:convNextStage}
+  \lean{Layer.convNextStage}
+  \leanok
+  ConvNeXt residual block $\times$ \texttt{nBlocks}: 7$\times$7 depthwise
+  conv $\to$ LayerNorm $\to$ 1$\times$1 expand (to $4c$) $\to$ GELU $\to$
+  1$\times$1 project (back to $c$) + residual. The transformer-era CNN
+  block (Liu et al.\ 2022). Does not include downsampling; see
+  \texttt{convNextDownsample}. Signature:
+  \texttt{convNextStage (channels nBlocks : Nat)}.
+\end{definition}
+
+\begin{definition}[ConvNeXt downsampling]
+  \label{layer:convNextDownsample}
+  \lean{Layer.convNextDownsample}
+  \leanok
+  Inter-stage spatial halving $+$ channel-doubling: LayerNorm $+$
+  2$\times$2 conv stride 2. Swin's \texttt{patchMerging} for CNNs.
+  Signature: \texttt{convNextDownsample (ic oc : Nat)}.
+\end{definition}
+
 \section{Bestiary entries}
 \label{sec:bestiary_entries}
 
@@ -842,3 +863,11 @@ Uses \S~\ref{layer:mobileVitBlock} plus existing
 MobileNet V2 body with MobileViT blocks replacing some of the deeper
 inverted-residual stages. Variants: MobileViT-S (5.6M, paper-exact),
 XS (2.3M), XXS (1.3M), tiny fixture.
+
+\subsection*{ConvNeXt (\texttt{Bestiary/ConvNeXt.lean})}
+Uses \S~\ref{layer:convNextStage} and \S~\ref{layer:convNextDownsample}.
+ResNet-50 modernized with transformer design choices: 7$\times$7
+depthwise + inverted bottleneck + LN + GELU + separate inter-stage
+downsamples. Proof-by-construction that CNNs didn't need to die in
+2021. Variants: T (28M), S (50M), B (89M), L (198M), tiny fixture ---
+all matching the paper within 1\%.

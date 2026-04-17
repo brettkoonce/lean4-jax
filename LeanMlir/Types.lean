@@ -87,6 +87,15 @@ inductive Layer where
   --   mlpDim  — FFN dim of the inner transformer
   --   nTxBlocks — number of transformer blocks inside the unit (L)
   | mobileVitBlock (ic dim heads mlpDim nTxBlocks : Nat)
+  -- ConvNeXt stage (Liu et al. 2022): `nBlocks` ConvNeXt residual blocks
+  -- at fixed `channels`. Each block: 7×7 depthwise conv + LN + 1×1
+  -- expand (×4) + GELU + 1×1 project + residual skip.
+  -- Does NOT include downsampling; see `convNextDownsample` for that.
+  | convNextStage (channels nBlocks : Nat)
+  -- ConvNeXt inter-stage downsample: LayerNorm + 2×2 conv stride 2
+  -- (ic → oc). Separated from the residual blocks, following the paper's
+  -- design choice (point 8 of Liu et al.'s modernization recipe).
+  | convNextDownsample (ic oc : Nat)
 deriving Repr
 
 structure NetSpec where
