@@ -28,6 +28,7 @@ like in ~20 lines of Lean."
 | `LeNet.lean`     | LeNet                     | LeNet-5 / LeNet-300-100 | The 1998 original; 60K params, still the template |
 | `Inception.lean` | Inception family          | GoogLeNet (v1) / v3 / v4 | Multi-scale parallel convs; 1×1 dimension-reducer invented here |
 | `Xception.lean`  | Xception                  | canonical / tiny | Extreme Inception — every conv is depthwise-separable |
+| `AlexNet.lean`   | AlexNet                   | canonical / tiny | 2012 ImageNet winner; restarted modern deep learning |
 
 ## Adding a new entry
 

@@ -197,4 +197,7 @@ lean_exe «bestiary-inception» where
 lean_exe «bestiary-xception» where
   root := `Bestiary.Xception
 
+lean_exe «bestiary-alexnet» where
+  root := `Bestiary.AlexNet
+
 require checkdecls from git "https://github.com/PatrickMassot/checkdecls.git"

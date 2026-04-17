@@ -1015,3 +1015,12 @@ design choice that made MobileNet possible a year later. Variants:
 Xception (21.9M, paper-exact at 22M), tiny fixture. Residual skips
 around each block-of-three-sep-convs are implicit in the linear
 NetSpec.
+
+\subsection*{AlexNet (\texttt{Bestiary/AlexNet.lean})}
+Zero new primitives --- five convs, three FCs, pools. The 2012
+ImageNet winner that restarted modern deep learning. Variants:
+AlexNet (62M, paper-exact at 60M) + tiny CIFAR fixture. $\sim$58M of
+the 62M live in the three FC layers, which is precisely why every
+post-2015 CNN dropped FC stacks for \texttt{globalAvgPool} + one final
+dense. LRN is omitted (replaced in the field by BatchNorm in 2015);
+dropout is training-time only.
