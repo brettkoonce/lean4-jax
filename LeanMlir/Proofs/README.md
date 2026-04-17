@@ -55,7 +55,7 @@ All axiom declarations across the proof suite, grouped by file:
 | `pdiv_reindex` | Gather Jacobian: `∂y_{σ(k)}/∂y_i = δ_{i,σ(k)}` |
 | `pdivMat_rowIndep` | Row-independent function ⇒ block-diagonal Jacobian |
 
-> **Progression** — axioms 41 → 30 over several phases:
+> **Progression** — axioms 41 → 31 over several phases:
 > - **Phases 4–5**: `pdivMat`, `pdivMat_comp`, `pdivMat_add`,
 >   `pdivMat_id` and the whole `pdiv3` family collapsed to
 >   definitions + theorems via the `Mat.flatten` / `Tensor3.flatten`
@@ -89,12 +89,21 @@ All axiom declarations across the proof suite, grouped by file:
 >   (any depth via induction on k), and `vit_body_has_vjp_mat`. The book's
 >   claim that "a transformer block uses the same tools as a ResNet block"
 >   is now machine-checked end-to-end.
-> - **Phase 9** (this commit): **Conv/depthwise bias gradients into the
+> - **Phase 9**: **Conv/depthwise bias gradients into the
 >   `HasVJP` framework**. `conv2d_bias_grad_has_vjp` and
 >   `depthwise_bias_grad_has_vjp` mirror the Phase 7 weight-grad bundles,
 >   closing the last "documented but not axiomatized" comment in the suite.
->   Concrete spatial-sum formulas are preserved as `*_formula` functions and
->   gradient-checked numerically.
+> - **Phase 10** (this commit): **The actual grand finale — full ViT as
+>   one `HasVJP`**. `hasVJPMat_to_hasVJP` bridges any `HasVJPMat` to
+>   plain `HasVJP` on flattened endpoints (theorem, no new axioms).
+>   `cls_slice_flat_has_vjp` is a theorem derived from `pdiv_reindex`.
+>   `classifier_flat_has_vjp` composes CLS slice + dense via `vjp_comp`.
+>   `patchEmbed_flat_has_vjp` is a new bundled axiom (patch conv + CLS
+>   token prepend + positional embedding — same pattern as `mhsa_has_vjp_mat`).
+>   `vit_full_has_vjp` chains patchEmbed → body → classifier in one `HasVJP`
+>   claim: `Vec (ic*H*W) → Vec nClasses`, flattened image pixels to logits.
+>   One new axiom (31 total); every other step is composition over existing
+>   theorems.
 >
 > Remaining Mat-level axiom: only `pdivMat_rowIndep` — the
 > genuinely-new-primitive that ties Mat-row structure to Vec-level
@@ -167,11 +176,12 @@ All axiom declarations across the proof suite, grouped by file:
 | `geluScalarDeriv` | GELU derivative |
 | `pdiv_gelu` | GELU Jacobian (diagonal) |
 
-**Attention.lean** — softmax and attention:
+**Attention.lean** — softmax, attention, ViT finale:
 | Axiom | What it says |
 |-------|-------------|
 | `pdiv_softmax` | Softmax Jacobian (rank-1 correction) |
 | `mhsa_has_vjp_mat` | Multi-head self-attention VJP (bundled, Phase 8) |
+| `patchEmbed_flat_has_vjp` | Patch-embedding layer VJP, bundled (Phase 10) |
 
 > All three `sdpa_back_*_correct` statements are now **theorems**, not
 > axioms (Phase 3). Each is proved by constructing a `HasVJPMat` for
@@ -196,7 +206,7 @@ Plus three Lean core axioms (`propext`, `Classical.choice`, `Quot.sound`)
 present in every nontrivial Lean program.
 
 Total: 8 (Tensor) + 4 (MLP) + 6 (CNN) + 3 (BatchNorm) + 4 (Depthwise)
-+ 3 (LayerNorm) + 2 (Attention) = **30 axioms**.
++ 3 (LayerNorm) + 3 (Attention) = **31 axioms**.
 
 Everything else — every `HasVJP` instance, every composition,
 every correctness theorem — is proved from these axioms by
@@ -235,7 +245,11 @@ rowwise_has_vjp_mat    → pdiv, pdivMat_rowIndep                       (Phase 8
 transformerBlock_has_vjp_mat → pdiv, pdivMat_rowIndep, mhsa_has_vjp_mat, pdiv_comp, pdiv_add,
                                pdiv_id, pdiv_dense, pdiv_gelu, pdiv_bn{Affine,Centered,IstdBroadcast}  (Phase 8)
 transformerTower_has_vjp_mat → (same as transformerBlock)             (Phase 8)
-vit_body_has_vjp_mat   → (same as transformerBlock)                   (Phase 8 — the finale)
+vit_body_has_vjp_mat   → (same as transformerBlock)                   (Phase 8 — the backbone)
+hasVJPMat_to_hasVJP    → pdiv                                          (Phase 10, zero new axioms)
+cls_slice_flat_has_vjp → pdiv, pdiv_reindex                           (Phase 10, zero new axioms)
+classifier_flat_has_vjp → pdiv, pdiv_reindex, pdiv_comp, pdiv_dense    (Phase 10)
+vit_full_has_vjp       → (same as vit_body) + patchEmbed_flat_has_vjp + pdiv_reindex  (Phase 10 — the real finale)
 bn_has_vjp             → pdiv, pdiv_bnAffine, pdiv_bnCentered, pdiv_bnIstdBroadcast, pdiv_comp, pdiv_mul
 bn_input_grad_correct  → (same as bn_has_vjp)
 bnNormalize_has_vjp    → pdiv, pdiv_bnCentered, pdiv_bnIstdBroadcast, pdiv_mul

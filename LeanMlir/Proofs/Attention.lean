@@ -1,5 +1,6 @@
 import LeanMlir.Proofs.Tensor
 import LeanMlir.Proofs.MLP
+import LeanMlir.Proofs.CNN          -- needed for Kernel4 in patchEmbed
 import LeanMlir.Proofs.Residual
 import LeanMlir.Proofs.SE
 import LeanMlir.Proofs.LayerNorm
@@ -926,5 +927,219 @@ found the first genuinely new layer of the decade, and you get to
 write the next chapter of this book.
 
 Until then, welcome to the end of the road. -/
+
+-- ════════════════════════════════════════════════════════════════
+-- § 7. The ACTUAL grand finale — full ViT as a single `HasVJP`
+-- ════════════════════════════════════════════════════════════════
+
+/-! ## Bridging ranks: from Mat-land back to Vec-land
+
+`vit_body_has_vjp_mat` lives in `HasVJPMat` territory. The pieces at the
+boundaries — patch embedding (image → tokens) and classifier head (tokens
+→ logits) — change tensor rank. Rather than invent new mixed-rank VJP
+frameworks, we flatten everything to `Vec` at the interfaces and compose
+via plain `HasVJP`, glued by `vjp_comp`.
+
+Two ingredients needed:
+
+- **`hasVJPMat_to_hasVJP`** (Tensor.lean, Phase 10) — bridges any
+  `HasVJPMat` to `HasVJP` on the flattened endpoints. One theorem, no
+  new axioms.
+- **`cls_slice_flat_has_vjp`** — gathers row 0 of a flattened
+  `Mat (N+1) D`. Derivable from `pdiv_reindex`. -/
+
+/-- CLS token extraction, stated on the flattened matrix. Row 0 of a
+    `Mat (N+1) D` is a `Vec D`; on the flattened `Vec ((N+1)*D)` this is
+    the gather `v ↦ fun k => v (fPF (0, k))`. -/
+noncomputable def cls_slice_flat (N D : Nat) :
+    Vec ((N + 1) * D) → Vec D :=
+  fun v k => v (finProdFinEquiv ((0 : Fin (N + 1)), k))
+
+/-- **CLS slice VJP** — gather-style; backward scatters `dy` to row 0.
+    Derived from `pdiv_reindex`. -/
+noncomputable def cls_slice_flat_has_vjp (N D : Nat) :
+    HasVJP (cls_slice_flat N D) where
+  backward := fun _v dy => fun idx =>
+    let p := finProdFinEquiv.symm idx
+    if p.1 = (0 : Fin (N + 1)) then dy p.2 else 0
+  correct := by
+    intro v dy idx
+    set p := finProdFinEquiv.symm idx with hp
+    show (if p.1 = (0 : Fin (N + 1)) then dy p.2 else 0) = _
+    -- Goal RHS: ∑ j, pdiv cls_slice_flat v idx j * dy j
+    -- pdiv_reindex gives: pdiv = if idx = fPF (0, j) then 1 else 0.
+    simp_rw [show ∀ j : Fin D,
+        pdiv (cls_slice_flat N D) v idx j =
+          (if idx = finProdFinEquiv ((0 : Fin (N + 1)), j) then 1 else 0) from
+      fun j => pdiv_reindex
+                 (fun k : Fin D => finProdFinEquiv ((0 : Fin (N + 1)), k))
+                 v idx j]
+    -- Sum of (if idx = fPF(0, j) then 1 else 0) * dy j over j.
+    -- If p.1 = 0 then idx = fPF (0, p.2), so the unique matching j is p.2.
+    by_cases hrow : p.1 = (0 : Fin (N + 1))
+    · rw [if_pos hrow]
+      rw [Finset.sum_eq_single p.2
+          (fun j _ hne => by
+            rw [if_neg ?_, zero_mul]
+            intro heq
+            apply hne
+            -- idx = fPF (0, j), and idx = fPF p = fPF (p.1, p.2) = fPF (0, p.2)
+            have hfpf : finProdFinEquiv (p.1, p.2) = idx := by
+              show finProdFinEquiv p = idx
+              rw [hp]; exact Equiv.apply_symm_apply _ _
+            have heq2 : finProdFinEquiv (p.1, p.2) = finProdFinEquiv ((0 : Fin (N + 1)), j) := by
+              rw [hfpf]; exact heq
+            have := finProdFinEquiv.injective heq2
+            have : p.2 = j := (Prod.mk.inj this).2
+            exact this.symm)
+          (fun h => absurd (Finset.mem_univ p.2) h)]
+      rw [if_pos]
+      · ring
+      · -- idx = fPF (0, p.2)
+        have hfpf : finProdFinEquiv (p.1, p.2) = idx := by
+          show finProdFinEquiv p = idx
+          rw [hp]; exact Equiv.apply_symm_apply _ _
+        rw [hrow] at hfpf
+        exact hfpf.symm
+    · rw [if_neg hrow]
+      symm
+      apply Finset.sum_eq_zero
+      intro j _
+      rw [if_neg ?_, zero_mul]
+      intro heq
+      apply hrow
+      -- idx = fPF (0, j), so p.1 = 0.
+      have hfpf : finProdFinEquiv (p.1, p.2) = idx := by
+        show finProdFinEquiv p = idx
+        rw [hp]; exact Equiv.apply_symm_apply _ _
+      have heq2 : finProdFinEquiv (p.1, p.2) = finProdFinEquiv ((0 : Fin (N + 1)), j) := by
+        rw [hfpf]; exact heq
+      exact (Prod.mk.inj (finProdFinEquiv.injective heq2)).1
+
+/-- **Classifier head**: flattened CLS slice + dense projection to `Vec nClasses`.
+
+    `fun v : Vec ((N+1)*D) => dense W_cls b_cls (cls_slice_flat v)` -/
+noncomputable def classifier_flat (N D nClasses : Nat)
+    (Wcls : Mat D nClasses) (bcls : Vec nClasses) :
+    Vec ((N + 1) * D) → Vec nClasses :=
+  (dense Wcls bcls) ∘ (cls_slice_flat N D)
+
+/-- **Classifier head VJP** — theorem, composition via `vjp_comp`. -/
+noncomputable def classifier_flat_has_vjp (N D nClasses : Nat)
+    (Wcls : Mat D nClasses) (bcls : Vec nClasses) :
+    HasVJP (classifier_flat N D nClasses Wcls bcls) :=
+  vjp_comp _ _ (cls_slice_flat_has_vjp N D) (dense_has_vjp Wcls bcls)
+
+/-! ## Patch embedding — the one new axiom for Phase 10
+
+The patch embedding takes an image `Tensor3 ic H W` and produces
+`Mat (N+1) D` where N = num_patches (= (H/patchSize) * (W/patchSize)):
+
+1. Conv projection with stride = patchSize: `Tensor3 ic H W → Tensor3 D H' W'`
+   where H' = H/patchSize, W' = W/patchSize. (Uses `conv2d` under the hood.)
+2. Reshape spatial `(D, H', W')` to tokens `(N, D)` — a pure permutation.
+3. Prepend learnable CLS token at row 0 → `(N+1, D)`.
+4. Add learnable positional embedding matrix → `(N+1, D)`.
+
+Each step is either an opaque forward (conv) or a `pdiv_reindex`/
+`pdiv_add` operation. The composite is stated on flattened endpoints
+`Vec (ic*H*W) → Vec ((N+1)*D)` and bundled as one `HasVJP` axiom —
+mirror of `conv2d_weight_grad_has_vjp` and `mhsa_has_vjp_mat`. Formalizing
+each step's rank-crossing would require a unified rank-polymorphic VJP
+framework; bundling here keeps the finale clean and honest. -/
+
+/-- Patch embedding forward on flattened endpoints.
+
+    Opaque: the actual computation (conv + reshape + CLS prepend + pos
+    embed) is implemented in the codegen. We axiomatize that this forward
+    function has a well-defined VJP; the closed-form backward equals the
+    step-by-step sum of conv's weight/input gradients + CLS and positional
+    gradients + reshape index permutation. Gradient-checkable. -/
+noncomputable opaque patchEmbed_flat
+    (ic H W patchSize N D : Nat)
+    (W_conv : Kernel4 D ic patchSize patchSize) (b_conv : Vec D)
+    (cls_token : Vec D) (pos_embed : Mat (N + 1) D) :
+    Vec (ic * H * W) → Vec ((N + 1) * D)
+
+/-- **Patch embedding VJP — Phase 10 bundled axiom.** -/
+axiom patchEmbed_flat_has_vjp
+    (ic H W patchSize N D : Nat)
+    (W_conv : Kernel4 D ic patchSize patchSize) (b_conv : Vec D)
+    (cls_token : Vec D) (pos_embed : Mat (N + 1) D) :
+    HasVJP (patchEmbed_flat ic H W patchSize N D W_conv b_conv cls_token pos_embed)
+
+/-! ## The full ViT theorem
+
+Compose patch embed + ViT body (via the Mat→Vec bridge) + classifier.
+All three are `HasVJP`s on `Vec`, so `vjp_comp` chains them directly. -/
+
+/-- **vit_full** — full ViT forward from flattened image pixels to logits.
+
+    `Vec (ic*H*W) → Vec nClasses`
+
+    Composition: `patchEmbed → (flatten ∘ vit_body ∘ unflatten) → classifier`.
+    Uses `D := heads * d_head` directly (no separate `D` parameter) so the
+    type-level reinterpretation at the body is a no-op. -/
+noncomputable def vit_full
+    (ic H W patchSize N mlpDim heads d_head kBlocks nClasses : Nat)
+    (W_conv : Kernel4 (heads * d_head) ic patchSize patchSize)
+    (b_conv : Vec (heads * d_head))
+    (cls_token : Vec (heads * d_head))
+    (pos_embed : Mat (N + 1) (heads * d_head))
+    (ε γ1 β1 : ℝ)
+    (Wq Wk Wv Wo : Mat (heads * d_head) (heads * d_head))
+    (bq bk bv bo : Vec (heads * d_head))
+    (γ2 β2 : ℝ)
+    (Wfc1 : Mat (heads * d_head) mlpDim) (bfc1 : Vec mlpDim)
+    (Wfc2 : Mat mlpDim (heads * d_head)) (bfc2 : Vec (heads * d_head))
+    (γF βF : ℝ)
+    (Wcls : Mat (heads * d_head) nClasses) (bcls : Vec nClasses) :
+    Vec (ic * H * W) → Vec nClasses :=
+  (classifier_flat N (heads * d_head) nClasses Wcls bcls) ∘
+  (fun v : Vec ((N + 1) * (heads * d_head)) =>
+    Mat.flatten
+      (vit_body kBlocks (N + 1) heads d_head mlpDim ε γ1 β1
+         Wq Wk Wv Wo bq bk bv bo γ2 β2 Wfc1 bfc1 Wfc2 bfc2 γF βF
+       (Mat.unflatten v))) ∘
+  (patchEmbed_flat ic H W patchSize N (heads * d_head)
+    W_conv b_conv cls_token pos_embed)
+
+/-- **vit_full VJP — the real grand finale, theorem.**
+
+    Full ViT training-step backward, flattened pixels → flattened logits.
+    Three `vjp_comp` steps glue three independently-justified pieces:
+
+    - `patchEmbed_flat_has_vjp` (axiom, Phase 10)
+    - `hasVJPMat_to_hasVJP (vit_body_has_vjp_mat ...)` (theorem, backbone)
+    - `classifier_flat_has_vjp` (theorem, CLS-slice + dense)
+
+    One new axiom (patch embed); everything else is composition. -/
+noncomputable def vit_full_has_vjp
+    (ic H W patchSize N mlpDim heads d_head kBlocks nClasses : Nat)
+    (W_conv : Kernel4 (heads * d_head) ic patchSize patchSize)
+    (b_conv : Vec (heads * d_head))
+    (cls_token : Vec (heads * d_head))
+    (pos_embed : Mat (N + 1) (heads * d_head))
+    (ε γ1 β1 : ℝ)
+    (Wq Wk Wv Wo : Mat (heads * d_head) (heads * d_head))
+    (bq bk bv bo : Vec (heads * d_head))
+    (γ2 β2 : ℝ)
+    (Wfc1 : Mat (heads * d_head) mlpDim) (bfc1 : Vec mlpDim)
+    (Wfc2 : Mat mlpDim (heads * d_head)) (bfc2 : Vec (heads * d_head))
+    (γF βF : ℝ)
+    (Wcls : Mat (heads * d_head) nClasses) (bcls : Vec nClasses) :
+    HasVJP (vit_full ic H W patchSize N mlpDim heads d_head kBlocks nClasses
+              W_conv b_conv cls_token pos_embed
+              ε γ1 β1 Wq Wk Wv Wo bq bk bv bo
+              γ2 β2 Wfc1 bfc1 Wfc2 bfc2
+              γF βF Wcls bcls) :=
+  vjp_comp _ _
+    (vjp_comp _ _
+      (patchEmbed_flat_has_vjp ic H W patchSize N (heads * d_head)
+        W_conv b_conv cls_token pos_embed)
+      (hasVJPMat_to_hasVJP
+        (vit_body_has_vjp_mat kBlocks (N + 1) heads d_head mlpDim ε γ1 β1
+          Wq Wk Wv Wo bq bk bv bo γ2 β2 Wfc1 bfc1 Wfc2 bfc2 γF βF)))
+    (classifier_flat_has_vjp N (heads * d_head) nClasses Wcls bcls)
 
 end Proofs

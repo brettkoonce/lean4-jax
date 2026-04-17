@@ -74,7 +74,8 @@ jobs:
           sudo apt-get install -y \
             graphviz libgraphviz-dev pkg-config \
             texlive-latex-base texlive-latex-extra texlive-fonts-extra \
-            texlive-xetex texlive-science
+            texlive-xetex texlive-science texlive-pictures \
+            texlive-plain-generic texlive-font-utils latexmk
 
       - name: Install leanblueprint
         run: |

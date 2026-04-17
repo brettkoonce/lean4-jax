@@ -396,6 +396,59 @@ noncomputable def identityMat_has_vjp (a b : Nat) :
     rw [Finset.sum_eq_single j (by intro l _ hne; simp [Ne.symm hne]) (by simp)]
     simp
 
+/-- **Bridge: `HasVJPMat` → `HasVJP` via the `Mat.flatten` bijection.**
+
+    Given a matrix-level VJP for `f : Mat a b → Mat c d`, produce a
+    vector-level VJP for the flattened version
+    `fun v : Vec (a*b) => Mat.flatten (f (Mat.unflatten v))`. The backward
+    reshapes the input/output flat vectors to matrices, applies the
+    matrix backward, and flattens the result.
+
+    Lets us compose `HasVJPMat` pieces (vit_body, transformer blocks)
+    with rank-crossing pieces (patch embed, classifier head) that live
+    natively as `Vec → Vec` by first bridging everything to `HasVJP`. -/
+noncomputable def hasVJPMat_to_hasVJP {a b c d : Nat} {f : Mat a b → Mat c d}
+    (hf : HasVJPMat f) :
+    HasVJP (fun v : Vec (a * b) =>
+              Mat.flatten (f (Mat.unflatten v))) where
+  backward := fun v dy => fun idx =>
+    let ij := finProdFinEquiv.symm idx
+    hf.backward (Mat.unflatten v) (Mat.unflatten dy) ij.1 ij.2
+  correct := by
+    intro v dy idx
+    set ij := finProdFinEquiv.symm idx with hij
+    show hf.backward (Mat.unflatten v) (Mat.unflatten dy) ij.1 ij.2 = _
+    rw [hf.correct]
+    unfold pdivMat
+    simp only [Mat.flatten_unflatten]
+    have hidx : finProdFinEquiv (ij.1, ij.2) = idx := by
+      show finProdFinEquiv ij = idx
+      rw [hij]; exact Equiv.apply_symm_apply _ _
+    simp_rw [hidx]
+    -- Goal: ∑ k ∑ l, pdiv F v idx (fPF (k,l)) * Mat.unflatten dy k l = ∑ j', pdiv F v idx j' * dy j'
+    -- Step-by-step conversion using `calc`:
+    -- Σ k Σ l, ... = Σ p : Fin c × Fin d, ... = Σ j' : Fin (c*d), ...
+    set F : Vec (a * b) → Vec (c * d) :=
+      fun w => Mat.flatten (f (Mat.unflatten w)) with hF
+    calc (∑ k : Fin c, ∑ l : Fin d,
+              pdiv F v idx (finProdFinEquiv (k, l)) *
+              Mat.unflatten dy k l)
+        = ∑ p : Fin c × Fin d,
+              pdiv F v idx (finProdFinEquiv p) *
+              Mat.unflatten dy p.1 p.2 := by
+          rw [Fintype.sum_prod_type]
+      _ = ∑ p : Fin c × Fin d,
+              pdiv F v idx (finProdFinEquiv p) *
+              dy (finProdFinEquiv p) := by
+          apply Finset.sum_congr rfl
+          intro p _; rfl
+      _ = ∑ j' : Fin (c * d), pdiv F v idx j' * dy j' := by
+          exact Fintype.sum_equiv finProdFinEquiv
+            (fun p : Fin c × Fin d =>
+              pdiv F v idx (finProdFinEquiv p) * dy (finProdFinEquiv p))
+            (fun j' : Fin (c * d) => pdiv F v idx j' * dy j')
+            (fun _ => rfl)
+
 -- ════════════════════════════════════════════════════════════════
 -- § Matrix VJP Building Blocks (matmul, row-independent functions)
 -- ════════════════════════════════════════════════════════════════
