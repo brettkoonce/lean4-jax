@@ -1,0 +1,27 @@
+% This file makes a web version of the blueprint
+% It should include all the \usepackage needed for this version.
+% The template includes standard AMS packages.
+% It is otherwise a very minimal preamble (you should probably at least
+% add cleveref and tikz-cd).
+
+\documentclass{report}
+
+\usepackage{amssymb, amsthm, amsmath}
+\usepackage{hyperref}
+\usepackage[showmore, dep_graph]{blueprint}
+
+
+\input{macros/common}
+\input{macros/web}
+
+\home{https://brettkoonce.github.io/lean4-jax}
+\github{https://github.com/brettkoonce/lean4-jax}
+\dochome{https://brettkoonce.github.io/lean4-jax/docs}
+
+\title{My formalization project}
+\author{brett koonce}
+
+\begin{document}
+\maketitle
+\input{content}
+\end{document}

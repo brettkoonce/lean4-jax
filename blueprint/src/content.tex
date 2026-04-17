@@ -1,0 +1,636 @@
+% Blueprint for the Verified VJP Proofs suite (LeanMlir/Proofs/)
+%
+% Every axiom, definition, and theorem in the suite is annotated below so
+% leanblueprint can render the dependency graph. Each block cites its
+% Lean declaration via \lean{...}, marks proved claims with \leanok, and
+% lists upstream dependencies via \uses{...}.
+
+\chapter{Overview}
+
+This blueprint visualizes the Verified VJP Proofs suite: machine-checked
+proofs that every layer's backward pass (vector-Jacobian product) matches
+its forward-pass Jacobian. The suite contains 30 axioms and 48 theorems
+across nine Lean files, with zero \texttt{sorry}s.
+
+The axioms fall into three buckets:
+\begin{itemize}
+  \item \textbf{Calculus primitives} (8): chain rule, linearity, product
+    rule, identity, reindex --- elementary facts about the partial-derivative
+    function \(\pdiv\). Correspond directly to Mathlib \texttt{HasDerivAt}
+    / \texttt{HasFDerivAt} lemmas.
+  \item \textbf{Elementary Jacobian facts} (about 11): the Jacobian of a
+    specific operation (ReLU diagonal, softmax rank-1, layer-norm 3-term,
+    etc.), stated in \(\pdiv\)-land rather than bridging to Mathlib.
+  \item \textbf{Bundled layer VJPs} (about 11): each opaque forward
+    (\texttt{conv2d}, \texttt{depthwiseConv2d}, \texttt{mhsa\_layer}) paired
+    with a bundled \(\HasVJP\) existence claim. Gradient-checked numerically
+    in \texttt{check\_axioms.py}.
+\end{itemize}
+
+Everything else --- 48 theorems --- is composition over these axioms, glued
+by the three structural rules (chain, fan-in, product) and five
+closed-form Jacobian tricks (diagonal, sparse toeplitz, binary selection,
+rank-1 correction, outer product).
+
+\chapter{Tensor: Calculus Foundations}
+\label{chap:tensor}
+
+The algebraic framework: 1D \(\mathsf{Vec}\), 2D \(\mathsf{Mat}\), 3D
+\(\mathsf{Tensor3}\) types, the partial-derivative function \(\pdiv\) and
+its structural rules, and three VJP record types (\(\HasVJP\),
+\(\HasVJPMat\), \(\HasVJPthree\)) that package a backward function together
+with its correctness claim.
+
+\begin{axiom}[Partial derivative]
+  \label{ax:pdiv}
+  \lean{Proofs.pdiv}
+  \leanok
+  The partial derivative function. For \(f : \Vect{m} \to \Vect{n}\),
+  \(\pdiv\, f\, x\, i\, j\) is the \((i, j)\)-entry of the Jacobian at \(x\).
+\end{axiom}
+
+\begin{axiom}[Chain rule]
+  \label{ax:pdiv_comp}
+  \lean{Proofs.pdiv_comp}
+  \leanok
+  \uses{ax:pdiv}
+  \(\pdiv(g \circ f)\, x\, i\, k = \sum_j \pdiv f\, x\, i\, j \cdot \pdiv g\, (f\, x)\, j\, k\).
+\end{axiom}
+
+\begin{axiom}[Sum rule]
+  \label{ax:pdiv_add}
+  \lean{Proofs.pdiv_add}
+  \leanok
+  \uses{ax:pdiv}
+  Linearity of the derivative.
+\end{axiom}
+
+\begin{axiom}[Product rule]
+  \label{ax:pdiv_mul}
+  \lean{Proofs.pdiv_mul}
+  \leanok
+  \uses{ax:pdiv}
+  Pointwise Leibniz rule for elementwise products.
+\end{axiom}
+
+\begin{axiom}[Identity Jacobian]
+  \label{ax:pdiv_id}
+  \lean{Proofs.pdiv_id}
+  \leanok
+  \uses{ax:pdiv}
+  \(\pdiv(\mathrm{id})\, x\, i\, j = \delta_{ij}\).
+\end{axiom}
+
+\begin{axiom}[Constant has zero Jacobian]
+  \label{ax:pdiv_const}
+  \lean{Proofs.pdiv_const}
+  \leanok
+  \uses{ax:pdiv}
+\end{axiom}
+
+\begin{axiom}[Gather / reindex Jacobian]
+  \label{ax:pdiv_reindex}
+  \lean{Proofs.pdiv_reindex}
+  \leanok
+  \uses{ax:pdiv}
+  Covers permutations, reshapes, slicing. Generalizes \texttt{pdiv\_id}.
+\end{axiom}
+
+\begin{axiom}[Row-independence for matrices]
+  \label{ax:pdivMat_rowIndep}
+  \lean{Proofs.pdivMat_rowIndep}
+  \leanok
+  \uses{ax:pdiv}
+  Applying a vector function per-row to a matrix has block-diagonal Jacobian.
+  The one genuinely-new primitive at the \(\mathsf{Mat}\) level.
+\end{axiom}
+
+\begin{theorem}[Finite-sum rule]
+  \label{thm:pdiv_finset_sum}
+  \lean{Proofs.pdiv_finset_sum}
+  \leanok
+  \uses{ax:pdiv, ax:pdiv_add, ax:pdiv_const}
+  Linearity extended to arbitrary finite sums by induction.
+\end{theorem}
+
+\begin{theorem}[VJP chain rule]
+  \label{thm:vjp_comp}
+  \lean{Proofs.vjp_comp}
+  \leanok
+  \uses{ax:pdiv, ax:pdiv_comp}
+  Given \(\HasVJP\, f\) and \(\HasVJP\, g\), get \(\HasVJP\, (g \circ f)\).
+\end{theorem}
+
+\begin{theorem}[Additive fan-in VJP]
+  \label{thm:biPath_has_vjp}
+  \lean{Proofs.biPath_has_vjp}
+  \leanok
+  \uses{ax:pdiv, ax:pdiv_add}
+  VJP of \(f + g\). Used for residual connections.
+\end{theorem}
+
+\begin{theorem}[Multiplicative fan-in VJP]
+  \label{thm:elemwiseProduct_has_vjp}
+  \lean{Proofs.elemwiseProduct_has_vjp}
+  \leanok
+  \uses{ax:pdiv, ax:pdiv_mul}
+  VJP of elementwise product. Used for Squeeze-and-Excitation.
+\end{theorem}
+
+\begin{theorem}[Identity VJP]
+  \label{thm:identity_has_vjp}
+  \lean{Proofs.identity_has_vjp}
+  \leanok
+  \uses{ax:pdiv, ax:pdiv_id}
+\end{theorem}
+
+\begin{theorem}[Matrix-level chain rule]
+  \label{thm:vjpMat_comp}
+  \lean{Proofs.vjpMat_comp}
+  \leanok
+  \uses{thm:vjp_comp}
+  Lifts \texttt{vjp\_comp} via the \(\mathsf{Mat.flatten}\) bijection.
+\end{theorem}
+
+\begin{theorem}[Matrix-level additive fan-in]
+  \label{thm:biPathMat_has_vjp}
+  \lean{Proofs.biPathMat_has_vjp}
+  \leanok
+  \uses{thm:biPath_has_vjp}
+\end{theorem}
+
+\begin{theorem}[Matrix-level identity]
+  \label{thm:identityMat_has_vjp}
+  \lean{Proofs.identityMat_has_vjp}
+  \leanok
+  \uses{thm:identity_has_vjp}
+\end{theorem}
+
+\begin{theorem}[Scalar-scale Jacobian]
+  \label{thm:pdivMat_scalarScale}
+  \lean{Proofs.pdivMat_scalarScale}
+  \leanok
+  \uses{ax:pdiv_mul, ax:pdiv_const, ax:pdiv_id}
+  Phase 6 derivation.
+\end{theorem}
+
+\begin{theorem}[Transpose Jacobian]
+  \label{thm:pdivMat_transpose}
+  \lean{Proofs.pdivMat_transpose}
+  \leanok
+  \uses{ax:pdiv_reindex}
+\end{theorem}
+
+\begin{theorem}[Matmul Jacobian, left factor fixed]
+  \label{thm:pdivMat_matmul_left_const}
+  \lean{Proofs.pdivMat_matmul_left_const}
+  \leanok
+  \uses{ax:pdiv_const, ax:pdiv_reindex, thm:pdiv_finset_sum}
+  Phase 6: derived, not axiomatized.
+\end{theorem}
+
+\begin{theorem}[Matmul Jacobian, right factor fixed]
+  \label{thm:pdivMat_matmul_right_const}
+  \lean{Proofs.pdivMat_matmul_right_const}
+  \leanok
+  \uses{ax:pdiv_const, ax:pdiv_reindex, thm:pdiv_finset_sum}
+\end{theorem}
+
+\begin{theorem}[Matmul VJP, left factor fixed]
+  \label{thm:matmul_left_const_has_vjp}
+  \lean{Proofs.matmul_left_const_has_vjp}
+  \leanok
+  \uses{thm:pdivMat_matmul_left_const}
+\end{theorem}
+
+\begin{theorem}[Matmul VJP, right factor fixed]
+  \label{thm:matmul_right_const_has_vjp}
+  \lean{Proofs.matmul_right_const_has_vjp}
+  \leanok
+  \uses{thm:pdivMat_matmul_right_const}
+\end{theorem}
+
+\begin{theorem}[Scalar-scale VJP]
+  \label{thm:scalarScale_has_vjp}
+  \lean{Proofs.scalarScale_has_vjp}
+  \leanok
+  \uses{thm:pdivMat_scalarScale}
+\end{theorem}
+
+\begin{theorem}[Transpose VJP]
+  \label{thm:transpose_has_vjp}
+  \lean{Proofs.transpose_has_vjp}
+  \leanok
+  \uses{thm:pdivMat_transpose}
+\end{theorem}
+
+\begin{theorem}[Row-wise lifting of any \(\HasVJP\)]
+  \label{thm:rowwise_has_vjp_mat}
+  \lean{Proofs.rowwise_has_vjp_mat}
+  \leanok
+  \uses{ax:pdivMat_rowIndep}
+  Phase 8 generic helper: lifts any \(\HasVJP\, (g : \Vect{n} \to \Vect{p})\)
+  to a \(\HasVJPMat\) on \(\Mat{m}{n} \to \Mat{m}{p}\).
+\end{theorem}
+
+\begin{theorem}[3D chain rule]
+  \label{thm:pdiv3_comp}
+  \lean{Proofs.pdiv3_comp}
+  \leanok
+  \uses{ax:pdiv_comp}
+\end{theorem}
+
+\begin{theorem}[3D VJP chain rule]
+  \label{thm:vjp3_comp}
+  \lean{Proofs.vjp3_comp}
+  \leanok
+  \uses{thm:pdiv3_comp}
+\end{theorem}
+
+\begin{theorem}[3D additive fan-in]
+  \label{thm:biPath3_has_vjp}
+  \lean{Proofs.biPath3_has_vjp}
+  \leanok
+  \uses{ax:pdiv_add}
+\end{theorem}
+
+\chapter{MLP: Dense Layer}
+\label{chap:mlp}
+
+The workhorse: \(y = Wx + b\) plus ReLU and softmax cross-entropy loss.
+
+\begin{axiom}[Dense Jacobian wrt input]
+  \label{ax:pdiv_dense}
+  \lean{Proofs.pdiv_dense}
+  \leanok
+  \uses{ax:pdiv}
+  \(\partial (Wx + b)_j / \partial x_i = W_{ij}\).
+\end{axiom}
+
+\begin{axiom}[Dense Jacobian wrt weight]
+  \label{ax:pdiv_dense_W}
+  \lean{Proofs.pdiv_dense_W}
+  \leanok
+  \uses{ax:pdiv}
+  \(\partial (Wx + b)_j / \partial W_{i'j'} = x_{i'} \delta_{jj'}\). Phase 7.
+\end{axiom}
+
+\begin{axiom}[ReLU Jacobian]
+  \label{ax:pdiv_relu}
+  \lean{Proofs.pdiv_relu}
+  \leanok
+  \uses{ax:pdiv}
+\end{axiom}
+
+\begin{axiom}[Softmax cross-entropy gradient]
+  \label{ax:softmaxCE_grad}
+  \lean{Proofs.softmaxCE_grad}
+  \leanok
+  \uses{ax:pdiv}
+  \(\partial L / \partial z = \mathrm{softmax}(z) - \mathrm{onehot}(y)\).
+\end{axiom}
+
+\begin{theorem}[Dense VJP]
+  \label{thm:dense_has_vjp}
+  \lean{Proofs.dense_has_vjp}
+  \leanok
+  \uses{ax:pdiv_dense}
+\end{theorem}
+
+\begin{theorem}[Dense weight gradient is the outer product]
+  \label{thm:dense_weight_grad_correct}
+  \lean{Proofs.dense_weight_grad_correct}
+  \leanok
+  \uses{ax:pdiv_dense_W}
+  \(dW = x \otimes dy\). Phase 7 promoted from vacuous \texttt{rfl} to theorem.
+\end{theorem}
+
+\begin{theorem}[Dense bias gradient is identity]
+  \label{thm:dense_bias_grad_correct}
+  \lean{Proofs.dense_bias_grad_correct}
+  \leanok
+  \uses{ax:pdiv_add, ax:pdiv_const, ax:pdiv_id}
+  \(db = dy\). Phase 7: derived, no new axiom.
+\end{theorem}
+
+\begin{theorem}[ReLU VJP]
+  \label{thm:relu_has_vjp}
+  \lean{Proofs.relu_has_vjp}
+  \leanok
+  \uses{ax:pdiv_relu}
+\end{theorem}
+
+\chapter{CNN: Convolution and Pooling}
+\label{chap:cnn}
+
+\begin{axiom}[Conv2d forward]
+  \label{ax:conv2d}
+  \lean{Proofs.conv2d}
+  \leanok
+  Opaque function declaration. Codegen provides the actual
+  \texttt{stablehlo.convolution}; proofs reason about it as a black box.
+\end{axiom}
+
+\begin{axiom}[Conv2d input VJP]
+  \label{ax:conv2d_has_vjp3}
+  \lean{Proofs.conv2d_has_vjp3}
+  \leanok
+  \uses{ax:conv2d}
+  Reversed-kernel convolution formula, numerically gradient-checked.
+\end{axiom}
+
+\begin{axiom}[Conv2d weight VJP]
+  \label{ax:conv2d_weight_grad_has_vjp}
+  \lean{Proofs.conv2d_weight_grad_has_vjp}
+  \leanok
+  \uses{ax:conv2d}
+  Phase 7: the transpose-trick formula via \texttt{Kernel4.flatten}.
+\end{axiom}
+
+\begin{axiom}[Conv2d bias VJP]
+  \label{ax:conv2d_bias_grad_has_vjp}
+  \lean{Proofs.conv2d_bias_grad_has_vjp}
+  \leanok
+  \uses{ax:conv2d}
+  Phase 9: sum cotangent over spatial dims per channel.
+\end{axiom}
+
+\begin{axiom}[MaxPool 2x2 stride 2 forward]
+  \label{ax:maxPool2}
+  \lean{Proofs.maxPool2}
+  \leanok
+\end{axiom}
+
+\begin{axiom}[MaxPool input VJP]
+  \label{ax:maxPool2_has_vjp3}
+  \lean{Proofs.maxPool2_has_vjp3}
+  \leanok
+  \uses{ax:maxPool2}
+  Routes gradient to the argmax position within each pooling window.
+\end{axiom}
+
+\chapter{BatchNorm: the hard one}
+\label{chap:bn}
+
+\begin{axiom}[BN affine step Jacobian]
+  \label{ax:pdiv_bnAffine}
+  \lean{Proofs.pdiv_bnAffine}
+  \leanok
+  \uses{ax:pdiv}
+  \(\partial (\gamma v + \beta) / \partial v_i = \gamma \delta_{ij}\).
+\end{axiom}
+
+\begin{axiom}[BN centering Jacobian]
+  \label{ax:pdiv_bnCentered}
+  \lean{Proofs.pdiv_bnCentered}
+  \leanok
+  \uses{ax:pdiv}
+  \(\partial (x_j - \mu) / \partial x_i = \delta_{ij} - 1/n\).
+\end{axiom}
+
+\begin{axiom}[BN inverse-stddev broadcast Jacobian]
+  \label{ax:pdiv_bnIstdBroadcast}
+  \lean{Proofs.pdiv_bnIstdBroadcast}
+  \leanok
+  \uses{ax:pdiv}
+\end{axiom}
+
+\begin{theorem}[BN normalize 3-term VJP]
+  \label{thm:bnNormalize_has_vjp}
+  \lean{Proofs.bnNormalize_has_vjp}
+  \leanok
+  \uses{ax:pdiv_bnCentered, ax:pdiv_bnIstdBroadcast, ax:pdiv_mul}
+  The consolidated 3-term backward: factor \(\mathrm{bnXhat}\) as
+  \((x - \mu) \cdot \mathrm{istd}\), apply product rule, collapse.
+\end{theorem}
+
+\begin{theorem}[BN affine VJP]
+  \label{thm:bnAffine_has_vjp}
+  \lean{Proofs.bnAffine_has_vjp}
+  \leanok
+  \uses{ax:pdiv_bnAffine}
+\end{theorem}
+
+\begin{theorem}[Full BN VJP]
+  \label{thm:bn_has_vjp}
+  \lean{Proofs.bn_has_vjp}
+  \leanok
+  \uses{thm:bnNormalize_has_vjp, thm:bnAffine_has_vjp, thm:vjp_comp}
+  \(\mathrm{bn} = \mathrm{affine} \circ \mathrm{normalize}\).
+\end{theorem}
+
+\chapter{Residual: Skip Connections}
+\label{chap:residual}
+
+\begin{theorem}[Residual block VJP]
+  \label{thm:residual_has_vjp}
+  \lean{Proofs.residual_has_vjp}
+  \leanok
+  \uses{thm:biPath_has_vjp, thm:identity_has_vjp}
+  Residual = \(f + \mathrm{id}\).
+\end{theorem}
+
+\chapter{Depthwise Convolution}
+\label{chap:depthwise}
+
+\begin{axiom}[Depthwise conv forward]
+  \label{ax:depthwiseConv2d}
+  \lean{Proofs.depthwiseConv2d}
+  \leanok
+\end{axiom}
+
+\begin{axiom}[Depthwise input VJP]
+  \label{ax:depthwise_has_vjp3}
+  \lean{Proofs.depthwise_has_vjp3}
+  \leanok
+  \uses{ax:depthwiseConv2d}
+\end{axiom}
+
+\begin{axiom}[Depthwise weight VJP]
+  \label{ax:depthwise_weight_grad_has_vjp3}
+  \lean{Proofs.depthwise_weight_grad_has_vjp3}
+  \leanok
+  \uses{ax:depthwiseConv2d}
+  Phase 7: reuses \(\HasVJPthree\) directly since \texttt{DepthwiseKernel}
+  is definitionally \(\mathsf{Tensor3}\).
+\end{axiom}
+
+\begin{axiom}[Depthwise bias VJP]
+  \label{ax:depthwise_bias_grad_has_vjp}
+  \lean{Proofs.depthwise_bias_grad_has_vjp}
+  \leanok
+  \uses{ax:depthwiseConv2d}
+  Phase 9.
+\end{axiom}
+
+\chapter{Squeeze-and-Excitation}
+\label{chap:se}
+
+\begin{theorem}[SE block VJP]
+  \label{thm:seBlock_has_vjp}
+  \lean{Proofs.seBlock_has_vjp}
+  \leanok
+  \uses{thm:elemwiseProduct_has_vjp, thm:dense_has_vjp, thm:identity_has_vjp}
+  SE multiplies input by a sigmoid-gated channel mask.
+\end{theorem}
+
+\chapter{LayerNorm and GELU}
+\label{chap:layernorm}
+
+\begin{axiom}[GELU scalar function]
+  \label{ax:geluScalar}
+  \lean{Proofs.geluScalar}
+  \leanok
+\end{axiom}
+
+\begin{axiom}[GELU scalar derivative]
+  \label{ax:geluScalarDeriv}
+  \lean{Proofs.geluScalarDeriv}
+  \leanok
+\end{axiom}
+
+\begin{axiom}[GELU Jacobian]
+  \label{ax:pdiv_gelu}
+  \lean{Proofs.pdiv_gelu}
+  \leanok
+  \uses{ax:pdiv, ax:geluScalarDeriv}
+  Diagonal activation Jacobian.
+\end{axiom}
+
+\begin{theorem}[LayerNorm VJP]
+  \label{thm:layerNorm_has_vjp}
+  \lean{Proofs.layerNorm_has_vjp}
+  \leanok
+  \uses{thm:bn_has_vjp}
+  LayerNorm = BatchNorm on a different axis; same primitive.
+\end{theorem}
+
+\begin{theorem}[GELU VJP]
+  \label{thm:gelu_has_vjp}
+  \lean{Proofs.gelu_has_vjp}
+  \leanok
+  \uses{ax:pdiv_gelu}
+\end{theorem}
+
+\chapter{Attention and the ViT finale}
+\label{chap:attention}
+
+\begin{axiom}[Softmax Jacobian]
+  \label{ax:pdiv_softmax}
+  \lean{Proofs.pdiv_softmax}
+  \leanok
+  \uses{ax:pdiv}
+  \(\partial \mathrm{softmax}(z)_j / \partial z_i = p_j (\delta_{ij} - p_i)\).
+\end{axiom}
+
+\begin{theorem}[Standalone softmax VJP]
+  \label{thm:softmax_has_vjp}
+  \lean{Proofs.softmax_has_vjp}
+  \leanok
+  \uses{ax:pdiv_softmax}
+  Closed-form collapse: \(dz_i = p_i (dy_i - \langle p, dy \rangle)\).
+\end{theorem}
+
+\begin{theorem}[Row-wise softmax VJP on a matrix]
+  \label{thm:rowSoftmax_has_vjp_mat}
+  \lean{Proofs.rowSoftmax_has_vjp_mat}
+  \leanok
+  \uses{ax:pdivMat_rowIndep, thm:softmax_has_vjp}
+\end{theorem}
+
+\begin{theorem}[SDPA backward wrt Q]
+  \label{thm:sdpa_back_Q_correct}
+  \lean{Proofs.sdpa_back_Q_correct}
+  \leanok
+  \uses{thm:matmul_right_const_has_vjp, thm:scalarScale_has_vjp, thm:rowSoftmax_has_vjp_mat, thm:vjpMat_comp}
+  Composed from four proved \(\HasVJPMat\) building blocks.
+\end{theorem}
+
+\begin{theorem}[SDPA backward wrt K]
+  \label{thm:sdpa_back_K_correct}
+  \lean{Proofs.sdpa_back_K_correct}
+  \leanok
+  \uses{thm:matmul_right_const_has_vjp, thm:matmul_left_const_has_vjp, thm:scalarScale_has_vjp, thm:rowSoftmax_has_vjp_mat, thm:transpose_has_vjp, thm:vjpMat_comp}
+\end{theorem}
+
+\begin{theorem}[SDPA backward wrt V]
+  \label{thm:sdpa_back_V_correct}
+  \lean{Proofs.sdpa_back_V_correct}
+  \leanok
+  \uses{thm:matmul_left_const_has_vjp}
+\end{theorem}
+
+\begin{axiom}[Multi-head SDPA VJP]
+  \label{ax:mhsa_has_vjp_mat}
+  \lean{Proofs.mhsa_has_vjp_mat}
+  \leanok
+  Phase 8: the one bundled axiom needed to lift single-head SDPA to full
+  multi-head attention. The "vmap over head axis" primitive.
+\end{axiom}
+
+\begin{theorem}[Per-token LayerNorm lifted to a matrix]
+  \label{thm:layerNorm_per_token_has_vjp_mat}
+  \lean{Proofs.layerNorm_per_token_has_vjp_mat}
+  \leanok
+  \uses{thm:rowwise_has_vjp_mat, thm:layerNorm_has_vjp}
+\end{theorem}
+
+\begin{theorem}[Per-token dense lifted to a matrix]
+  \label{thm:dense_per_token_has_vjp_mat}
+  \lean{Proofs.dense_per_token_has_vjp_mat}
+  \leanok
+  \uses{thm:rowwise_has_vjp_mat, thm:dense_has_vjp}
+\end{theorem}
+
+\begin{theorem}[Per-token GELU lifted to a matrix]
+  \label{thm:gelu_per_token_has_vjp_mat}
+  \lean{Proofs.gelu_per_token_has_vjp_mat}
+  \leanok
+  \uses{thm:rowwise_has_vjp_mat, thm:gelu_has_vjp}
+\end{theorem}
+
+\begin{theorem}[Transformer MLP sublayer VJP]
+  \label{thm:transformerMlp_has_vjp_mat}
+  \lean{Proofs.transformerMlp_has_vjp_mat}
+  \leanok
+  \uses{thm:dense_per_token_has_vjp_mat, thm:gelu_per_token_has_vjp_mat, thm:vjpMat_comp}
+\end{theorem}
+
+\begin{theorem}[Transformer attention sublayer with residual VJP]
+  \label{thm:transformerAttnSublayer_has_vjp_mat}
+  \lean{Proofs.transformerAttnSublayer_has_vjp_mat}
+  \leanok
+  \uses{thm:biPathMat_has_vjp, thm:identityMat_has_vjp, thm:layerNorm_per_token_has_vjp_mat, ax:mhsa_has_vjp_mat, thm:vjpMat_comp}
+\end{theorem}
+
+\begin{theorem}[Transformer MLP sublayer with residual VJP]
+  \label{thm:transformerMlpSublayer_has_vjp_mat}
+  \lean{Proofs.transformerMlpSublayer_has_vjp_mat}
+  \leanok
+  \uses{thm:biPathMat_has_vjp, thm:identityMat_has_vjp, thm:layerNorm_per_token_has_vjp_mat, thm:transformerMlp_has_vjp_mat, thm:vjpMat_comp}
+\end{theorem}
+
+\begin{theorem}[Transformer block VJP]
+  \label{thm:transformerBlock_has_vjp_mat}
+  \lean{Proofs.transformerBlock_has_vjp_mat}
+  \leanok
+  \uses{thm:transformerAttnSublayer_has_vjp_mat, thm:transformerMlpSublayer_has_vjp_mat, thm:vjpMat_comp}
+  One \texttt{vjpMat\_comp} glueing the two sublayers.
+\end{theorem}
+
+\begin{theorem}[Transformer tower, any depth via induction]
+  \label{thm:transformerTower_has_vjp_mat}
+  \lean{Proofs.transformerTower_has_vjp_mat}
+  \leanok
+  \uses{thm:transformerBlock_has_vjp_mat, thm:identityMat_has_vjp, thm:vjpMat_comp}
+  Covers ViT-Tiny (12 blocks), ViT-Base (12), ViT-Large (24).
+\end{theorem}
+
+\begin{theorem}[ViT body: the grand finale]
+  \label{thm:vit_body_has_vjp_mat}
+  \lean{Proofs.vit_body_has_vjp_mat}
+  \leanok
+  \uses{thm:transformerTower_has_vjp_mat, thm:layerNorm_per_token_has_vjp_mat, thm:vjpMat_comp}
+  The full ViT transformer backbone as one \(\HasVJPMat\), derived from
+  exactly one new axiom (\texttt{mhsa\_has\_vjp\_mat}).
+\end{theorem}
