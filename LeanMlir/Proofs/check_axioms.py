@@ -277,6 +277,86 @@ def test_dense_bias_grad():
     return err < TOL
 
 # ════════════════════════════════════════════════════════════════
+# Conv2d bias grad: db = sum output cotangent over spatial, per channel
+# (Phase 9: new axiom conv2d_bias_grad_has_vjp.)
+# ════════════════════════════════════════════════════════════════
+def test_conv2d_bias_grad():
+    ic, oc, h, w, kH, kW = 2, 3, 6, 6, 3, 3
+    W = np.random.randn(oc, ic, kH, kW)
+    pad = (kH - 1) // 2
+
+    def conv(inp, kernel, p):
+        ci, hi, wi = inp.shape
+        co = kernel.shape[0]
+        out = np.zeros((co, hi, wi))
+        for o in range(co):
+            for c in range(ci):
+                for khi in range(kH):
+                    for kwi in range(kW):
+                        for i in range(hi):
+                            for j in range(wi):
+                                ii, jj = i + khi - p, j + kwi - p
+                                if 0 <= ii < hi and 0 <= jj < wi:
+                                    out[o, i, j] += inp[c, ii, jj] * kernel[o, c, khi, kwi]
+        return out
+
+    x = np.random.randn(ic, h, w)
+    dy = np.random.randn(oc, h, w)
+
+    # Finite-diff: perturb each b entry, measure <Δoutput, dy>
+    def fwd(bv):
+        return conv(x, W, pad) + bv.reshape(oc, 1, 1)
+    b = np.random.randn(oc)
+    db_fd = np.zeros(oc)
+    for idx in range(oc):
+        bp = b.copy(); bp[idx] += EPS
+        bm = b.copy(); bm[idx] -= EPS
+        db_fd[idx] = np.sum(((fwd(bp) - fwd(bm)) / (2 * EPS)) * dy)
+
+    # Claimed: db[o] = Σ_{h,w} dy[o, h, w]
+    db_claimed = dy.sum(axis=(1, 2))
+
+    err = np.max(np.abs(db_fd - db_claimed))
+    status = "PASS" if err < TOL else "FAIL"
+    print(f"  {status}: {'conv2d_bias_grad (spatial sum)':30s} max_err={err:.2e}")
+    return err < TOL
+
+# ════════════════════════════════════════════════════════════════
+# Depthwise bias grad: same spatial sum, per channel (Phase 9)
+# ════════════════════════════════════════════════════════════════
+def test_depthwise_bias_grad():
+    c, h, w, kH, kW = 3, 6, 6, 3, 3
+    W = np.random.randn(c, kH, kW)
+    pad = (kH - 1) // 2
+
+    def dw_fwd(bv):
+        x = np.random.RandomState(1).randn(c, h, w)  # fixed x
+        out = np.zeros((c, h, w))
+        for ch in range(c):
+            for kh in range(kH):
+                for kw in range(kW):
+                    for i in range(h):
+                        for j in range(w):
+                            ii, jj = i + kh - pad, j + kw - pad
+                            if 0 <= ii < h and 0 <= jj < w:
+                                out[ch, i, j] += x[ch, ii, jj] * W[ch, kh, kw]
+            out[ch] += bv[ch]
+        return out
+
+    dy = np.random.randn(c, h, w)
+    b = np.random.randn(c)
+    db_fd = np.zeros(c)
+    for idx in range(c):
+        bp = b.copy(); bp[idx] += EPS
+        bm = b.copy(); bm[idx] -= EPS
+        db_fd[idx] = np.sum(((dw_fwd(bp) - dw_fwd(bm)) / (2 * EPS)) * dy)
+    db_claimed = dy.sum(axis=(1, 2))
+    err = np.max(np.abs(db_fd - db_claimed))
+    status = "PASS" if err < TOL else "FAIL"
+    print(f"  {status}: {'depthwise_bias_grad':30s} max_err={err:.2e}")
+    return err < TOL
+
+# ════════════════════════════════════════════════════════════════
 # MaxPool2: gradient routes to argmax
 # ════════════════════════════════════════════════════════════════
 def test_maxpool2():
@@ -644,6 +724,7 @@ if __name__ == "__main__":
     results.append(("MLP.lean",     "softmaxCE_grad",       test_softmax_ce()))
     results.append(("CNN.lean",     "conv2d_input_grad",    test_conv2d_input_grad_formula()))
     results.append(("CNN.lean",     "conv2d_weight_grad",   test_conv2d_weight_grad()))
+    results.append(("CNN.lean",     "conv2d_bias_grad",     test_conv2d_bias_grad()))
     results.append(("CNN.lean",     "maxPool2_input_grad",  test_maxpool2()))
     results.append(("BatchNorm",    "pdiv_bnNormalize",     test_bn_normalize()))
     results.append(("BatchNorm",    "pdiv_bnCentered",      test_bn_centered()))
@@ -655,6 +736,7 @@ if __name__ == "__main__":
     results.append(("Attention",    "sdpa_back_V",          test_sdpa_back_V()))
     results.append(("Depthwise",    "depthwise_input_grad", test_depthwise_input_grad()))
     results.append(("Depthwise",    "depthwise_weight_grad", test_depthwise_weight_grad()))
+    results.append(("Depthwise",    "depthwise_bias_grad",   test_depthwise_bias_grad()))
     try:
         results.append(("LayerNorm", "pdiv_gelu",           test_gelu()))
     except ImportError:

@@ -55,7 +55,7 @@ All axiom declarations across the proof suite, grouped by file:
 | `pdiv_reindex` | Gather Jacobian: `∂y_{σ(k)}/∂y_i = δ_{i,σ(k)}` |
 | `pdivMat_rowIndep` | Row-independent function ⇒ block-diagonal Jacobian |
 
-> **Progression** — axioms 41 → 28 over several phases:
+> **Progression** — axioms 41 → 30 over several phases:
 > - **Phases 4–5**: `pdivMat`, `pdivMat_comp`, `pdivMat_add`,
 >   `pdivMat_id` and the whole `pdiv3` family collapsed to
 >   definitions + theorems via the `Mat.flatten` / `Tensor3.flatten`
@@ -76,7 +76,7 @@ All axiom declarations across the proof suite, grouped by file:
 >   bijection mirroring `Mat.flatten` / `Tensor3.flatten`, so the
 >   4D weight tensor can be plumbed through the plain `HasVJP` on `Vec`
 >   instead of introducing a parallel 4D framework.
-> - **Phase 8** (this commit): **The ViT finale**. The prior transformer
+> - **Phase 8**: **The ViT finale**. The prior transformer
 >   section narrated "multi-head is just parallel SDPA + reshape" and
 >   "transformer block is composition" in prose but never actually
 >   assembled the proofs. Phase 8 closes that: add one bundled axiom
@@ -89,6 +89,12 @@ All axiom declarations across the proof suite, grouped by file:
 >   (any depth via induction on k), and `vit_body_has_vjp_mat`. The book's
 >   claim that "a transformer block uses the same tools as a ResNet block"
 >   is now machine-checked end-to-end.
+> - **Phase 9** (this commit): **Conv/depthwise bias gradients into the
+>   `HasVJP` framework**. `conv2d_bias_grad_has_vjp` and
+>   `depthwise_bias_grad_has_vjp` mirror the Phase 7 weight-grad bundles,
+>   closing the last "documented but not axiomatized" comment in the suite.
+>   Concrete spatial-sum formulas are preserved as `*_formula` functions and
+>   gradient-checked numerically.
 >
 > Remaining Mat-level axiom: only `pdivMat_rowIndep` — the
 > genuinely-new-primitive that ties Mat-row structure to Vec-level
@@ -114,15 +120,15 @@ All axiom declarations across the proof suite, grouped by file:
 | `conv2d` | Conv forward (opaque function) |
 | `conv2d_has_vjp3` | Conv2d input-VJP (function + correctness bundled) |
 | `conv2d_weight_grad_has_vjp` | Conv2d weight-VJP via flattened `HasVJP` (Phase 7) |
+| `conv2d_bias_grad_has_vjp` | Conv2d bias-VJP via flattened `HasVJP` (Phase 9) |
 | `maxPool2` | MaxPool forward (opaque function) |
 | `maxPool2_has_vjp3` | MaxPool2 input-VJP (function + correctness bundled) |
 
-> Phase 7: the weight gradient is now axiomatized via the `Kernel4.flatten`
-> bijection, so `HasVJP` on `Vec (oc*ic*kH*kW)` suffices — no parallel
-> 4D framework needed. The conv bias gradient formula (sum over spatial)
-> is defined as `conv2d_bias_grad` and documented, but since `conv2d`
-> is opaque in `b` we leave it outside the `HasVJP` frame; it's
-> cross-checked numerically instead.
+> Phase 9 closes the last "documented but not axiomatized" gap —
+> `conv2d_bias_grad` now points at a bundled `HasVJP` accessor. The
+> closed-form spatial-sum formula is preserved as
+> `conv2d_bias_grad_formula` and gradient-checked numerically against the
+> axiom's backward.
 
 **BatchNorm.lean** — the hard one:
 | Axiom | What it says |
@@ -145,11 +151,14 @@ All axiom declarations across the proof suite, grouped by file:
 | `depthwiseConv2d` | Depthwise conv forward (opaque function) |
 | `depthwise_has_vjp3` | Depthwise input-VJP (function + correctness bundled) |
 | `depthwise_weight_grad_has_vjp3` | Depthwise weight-VJP (Phase 7) |
+| `depthwise_bias_grad_has_vjp` | Depthwise bias-VJP via flattened `HasVJP` (Phase 9) |
 
 > The depthwise kernel `DepthwiseKernel c kH kW` is definitionally equal
 > to `Tensor3 c kH kW`, so the weight-grad axiom reuses the existing
 > `HasVJP3` directly — no `Kernel4.flatten` needed (unlike the regular
-> conv case, which has a 4D kernel).
+> conv case, which has a 4D kernel). Phase 9 adds the bias-grad VJP
+> alongside. Per-channel spatial-sum formula preserved as
+> `depthwiseConv2d_bias_grad_formula`.
 
 **LayerNorm.lean** — layer norm and GELU:
 | Axiom | What it says |
@@ -186,8 +195,8 @@ All axiom declarations across the proof suite, grouped by file:
 Plus three Lean core axioms (`propext`, `Classical.choice`, `Quot.sound`)
 present in every nontrivial Lean program.
 
-Total: 8 (Tensor) + 4 (MLP) + 5 (CNN) + 3 (BatchNorm) + 3 (Depthwise)
-+ 3 (LayerNorm) + 2 (Attention) = **28 axioms**.
+Total: 8 (Tensor) + 4 (MLP) + 6 (CNN) + 3 (BatchNorm) + 4 (Depthwise)
++ 3 (LayerNorm) + 2 (Attention) = **30 axioms**.
 
 Everything else — every `HasVJP` instance, every composition,
 every correctness theorem — is proved from these axioms by

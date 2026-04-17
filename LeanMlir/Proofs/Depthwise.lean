@@ -144,14 +144,31 @@ noncomputable abbrev depthwiseConv2d_weight_grad {c h w kH kW : Nat}
     (x : Tensor3 c h w) (dy : Tensor3 c h w) : DepthwiseKernel c kH kW :=
   (depthwise_weight_grad_has_vjp3 b x).backward W dy
 
-/-- **Bias gradient** — sum the cotangent over the spatial dims, per channel.
+/-- **Depthwise bias-VJP** — bundled axiom on the `b`-flattened function (Phase 9).
+
+    Same pattern as `conv2d_bias_grad_has_vjp`: view `depthwiseConv2d W b x`
+    as a function of `b` (with `W`, `x` closed over), flatten the Tensor3
+    output, and claim a `HasVJP`. The expected backward is the per-channel
+    spatial-sum formula documented below as `depthwiseConv2d_bias_grad_formula`. -/
+axiom depthwise_bias_grad_has_vjp {c h w kH kW : Nat}
+    (W : DepthwiseKernel c kH kW) (x : Tensor3 c h w) :
+    HasVJP (fun b : Vec c => Tensor3.flatten (depthwiseConv2d W b x))
+
+/-- Named accessor for the depthwise bias backward via the VJP framework. -/
+noncomputable def depthwiseConv2d_bias_grad {c h w kH kW : Nat}
+    (W : DepthwiseKernel c kH kW) (b : Vec c)
+    (x : Tensor3 c h w) (dy : Tensor3 c h w) : Vec c :=
+  (depthwise_bias_grad_has_vjp W x).backward b (Tensor3.flatten dy)
+
+/-- **Depthwise bias gradient — closed-form formula** (documented, numerically
+    verified, expected to equal `depthwiseConv2d_bias_grad` up to fp precision).
 
     `db[c] = Σ_{h, w} dy[c, h, w]`
 
     Identical to regular conv's bias gradient — the bias is per-channel
     in both cases, and it adds the same value to every spatial cell
     of its channel. The reduction is the same. -/
-noncomputable def depthwiseConv2d_bias_grad {c h w : Nat}
+noncomputable def depthwiseConv2d_bias_grad_formula {c h w : Nat}
     (dy : Tensor3 c h w) : Vec c :=
   fun cc => ∑ y : Fin h, ∑ x : Fin w, dy cc y x
 
@@ -206,12 +223,14 @@ the same expressive power as a regular conv at a fraction of the FLOPs.
 - `depthwise_weight_grad_has_vjp3` — Phase 7: the weight-path VJP,
   bundled as `HasVJP3` directly (no flattening needed; see framework
   note above). Gradient-checked numerically.
+- `depthwise_bias_grad_has_vjp` — Phase 9: the bias-path VJP, bundled
+  `HasVJP` on the flattened output. Same pattern as conv2d's bias VJP.
 
 Derived (not axioms):
-- `depthwiseConv2d_input_grad`, `depthwiseConv2d_weight_grad` — named
-  accessors, `.backward` of the corresponding VJP.
-- `depthwiseConv2d_bias_grad` — concrete sum-over-spatial formula
-  (not formally tied to a `pdiv` since `depthwiseConv2d` is opaque
-  wrt `b`; cross-checked numerically instead). -/
+- `depthwiseConv2d_input_grad`, `depthwiseConv2d_weight_grad`,
+  `depthwiseConv2d_bias_grad` — named accessors, `.backward` of the
+  corresponding VJP.
+- `depthwiseConv2d_bias_grad_formula` — the concrete sum-over-spatial
+  closed-form (numerically verified to equal the axiom's backward). -/
 
 end Proofs

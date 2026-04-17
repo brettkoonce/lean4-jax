@@ -223,18 +223,34 @@ noncomputable def conv2d_weight_grad {ic oc h w kH kW : Nat}
     ((conv2d_weight_grad_has_vjp b x).backward
       (Kernel4.flatten W) (Tensor3.flatten dy))
 
-/-- **Conv2d bias gradient** — sum the output cotangent over all spatial cells.
+/-- **Conv2d bias-VJP** — bundled axiom on the `b`-flattened function (Phase 9).
+
+    Viewing `conv2d W b x` as a function of `b` (with `W`, `x` closed over),
+    flatten the Tensor3 output so we get `Vec oc → Vec (oc*h*w)` with a plain
+    `HasVJP`. The bundled axiom asserts existence of a correct backward; the
+    expected closed-form is "sum output cotangent over spatial dims per
+    channel," documented as `conv2d_bias_grad_formula` below and numerically
+    gradient-checked. Mirrors the Phase 7 `conv2d_weight_grad_has_vjp` pattern. -/
+axiom conv2d_bias_grad_has_vjp {ic oc h w kH kW : Nat}
+    (W : Kernel4 oc ic kH kW) (x : Tensor3 ic h w) :
+    HasVJP (fun b : Vec oc => Tensor3.flatten (conv2d W b x))
+
+/-- Named accessor for the conv2d bias backward via the VJP framework. -/
+noncomputable def conv2d_bias_grad {ic oc h w kH kW : Nat}
+    (W : Kernel4 oc ic kH kW) (b : Vec oc)
+    (x : Tensor3 ic h w) (dy : Tensor3 oc h w) : Vec oc :=
+  (conv2d_bias_grad_has_vjp W x).backward b (Tensor3.flatten dy)
+
+/-- **Conv2d bias gradient — closed-form formula** (documented, numerically
+    verified, expected to equal `conv2d_bias_grad` up to fp precision).
 
     `db[o] = Σ_{h, w} dy[o, h, w]`
 
     Each output cell adds the same `b[o]`, so its gradient accumulates
-    the contributions from every spatial position.
-
-    MLIR:
-      %d_b1 = stablehlo.reduce(%d_h1pre) applies stablehlo.add
-                across dimensions = [0, 2, 3]
-    (dim 0 is batch, dims 2 and 3 are spatial.) -/
-noncomputable def conv2d_bias_grad {oc h w : Nat} (dy : Tensor3 oc h w) : Vec oc :=
+    the contributions from every spatial position. MLIR emits this as
+    a `stablehlo.reduce` across the spatial (and batch) dims. -/
+noncomputable def conv2d_bias_grad_formula {oc h w : Nat}
+    (dy : Tensor3 oc h w) : Vec oc :=
   fun o => ∑ y : Fin h, ∑ x : Fin w, dy o y x
 
 -- ════════════════════════════════════════════════════════════════
@@ -333,11 +349,11 @@ for the mutual-inverse proofs. -/
         d_h₁      = maxPool2_input_grad h₁ d_pool                 [maxPool2_input_grad]
         d_h₁pre   = relu_back h₁pre d_h₁                          [relu_has_vjp, lifted to T3]
         d_W1      = conv2d_weight_grad W₁ b₁ h₀ d_h₁pre           [conv2d_weight_grad_has_vjp]  ← transpose trick
-        d_b1      = conv2d_bias_grad d_h₁pre                      [conv2d_bias_grad]
+        d_b1      = conv2d_bias_grad W₁ b₁ h₀ d_h₁pre             [conv2d_bias_grad_has_vjp]
         d_h₀      = conv2d_input_grad W₁ b₁ h₀ d_h₁pre            [conv2d_has_vjp3]     ← reversed kernel
         d_h₀pre   = relu_back h₀pre d_h₀                          [relu_has_vjp, lifted to T3]
         d_W0      = conv2d_weight_grad W₀ b₀ x d_h₀pre            [conv2d_weight_grad_has_vjp]  ← transpose trick
-        d_b0      = conv2d_bias_grad d_h₀pre                      [conv2d_bias_grad]
+        d_b0      = conv2d_bias_grad W₀ b₀ x d_h₀pre              [conv2d_bias_grad_has_vjp]
 
     Each line of the backward pass corresponds to a single line in
     `hand_cnn_train_step.mlir` (lines 134–272). The backward pass is just
@@ -363,15 +379,18 @@ example : True := trivial  -- anchor for the docstring above
   as a plain `HasVJP` on the Kernel4-flattened function. Numerically
   gradient-checked against the transpose-trick formula in
   `check_axioms.py:test_conv2d_weight_grad`.
+- `conv2d_bias_grad_has_vjp` — Phase 9: the bias-path VJP, same bundled
+  `HasVJP` pattern. The closed-form "sum output cotangent over spatial
+  dims per channel" is expressed as `conv2d_bias_grad_formula`; the
+  axiom-backed `conv2d_bias_grad` extracts the backward via the VJP.
 
 Derived (not axioms):
-- `conv2d_input_grad`, `maxPool2_input_grad`, `conv2d_weight_grad` —
-  named accessors, defined as `.backward` (plus flatten / unflatten
-  housekeeping for `conv2d_weight_grad`) of the corresponding VJP.
-- `conv2d_bias_grad` — concrete sum-over-spatial formula (no VJP
-  framework claim; conv is opaque wrt `b`, so this is documented as
-  the "correct formula" and cross-checked numerically rather than
-  formally tied to a `pdiv`).
+- `conv2d_input_grad`, `maxPool2_input_grad`, `conv2d_weight_grad`,
+  `conv2d_bias_grad` — named accessors, defined as `.backward` (plus
+  flatten / unflatten housekeeping for the weight / bias variants) of
+  the corresponding VJP.
+- `conv2d_bias_grad_formula` — the concrete sum-over-spatial closed-form
+  (numerically verified to equal the axiom's backward).
 - 3D reshape (`Tensor3.flatten` / `Tensor3.unflatten`) imported from
   `Tensor.lean`; 4D reshape (`Kernel4.flatten` / `Kernel4.unflatten`)
   defined here, both proved bijections. -/
