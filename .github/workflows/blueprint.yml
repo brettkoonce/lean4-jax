@@ -50,16 +50,13 @@ jobs:
           restore-keys: |
             lake-${{ runner.os }}-
 
-      - name: Regenerate lake manifest with dev deps
-        # doc-gen4 pulls in transitive deps (plausible, MD4Lean, BibtexQuery)
-        # with versions that can conflict with Mathlib's. Our lakefile puts
-        # `require mathlib` last so Mathlib's constraints win, but the
-        # manifest needs to be regenerated to reflect that ordering. Run
-        # `update` with -Kenv=dev so doc-gen4 is visible and its deps get
-        # reconciled against Mathlib's pins up front, before cache-fetch
-        # tries to hash the manifest.
-        run: |
-          lake -R -Kenv=dev update
+      # NOTE: we don't run `lake update` on every CI build — that would
+      # ratchet Mathlib forward and trigger a toolchain upgrade every time
+      # Mathlib bumps Lean, which exposed us to transient network failures
+      # when the Lean release server returned 504. Instead: run `lake
+      # -R -Kenv=dev update` locally when adding/changing a dep, commit
+      # the resulting lake-manifest.json + lean-toolchain, and CI just
+      # reads them. Same pattern Mathlib itself uses.
 
       - name: Fetch Mathlib cache
         run: |
