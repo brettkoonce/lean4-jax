@@ -50,6 +50,17 @@ jobs:
           restore-keys: |
             lake-${{ runner.os }}-
 
+      - name: Regenerate lake manifest with dev deps
+        # doc-gen4 pulls in transitive deps (plausible, MD4Lean, BibtexQuery)
+        # with versions that can conflict with Mathlib's. Our lakefile puts
+        # `require mathlib` last so Mathlib's constraints win, but the
+        # manifest needs to be regenerated to reflect that ordering. Run
+        # `update` with -Kenv=dev so doc-gen4 is visible and its deps get
+        # reconciled against Mathlib's pins up front, before cache-fetch
+        # tries to hash the manifest.
+        run: |
+          lake -R -Kenv=dev update
+
       - name: Fetch Mathlib cache
         run: |
           # If actions/cache restored .lake already, `cache get` is a fast no-op.
@@ -110,12 +121,10 @@ jobs:
 
       - name: Build Lean API docs (doc-gen4)
         # Generates HTML documentation for the Lean library + its transitive
-        # imports (Mathlib, etc.). Output lands at .lake/build/doc/. The
-        # `-Kenv=dev` flag activates the conditional doc-gen4 require in
-        # lakefile.lean. First run is slow (pulls + builds doc-gen4); the
-        # .lake cache from earlier steps above covers most of Mathlib.
+        # imports (Mathlib, etc.). Output lands at .lake/build/doc/. Manifest
+        # was already regenerated with -Kenv=dev earlier in the workflow,
+        # so this is just the build.
         run: |
-          lake -R -Kenv=dev update doc-gen4
           lake -R -Kenv=dev build LeanMlir:docs
 
       - name: Build blueprint web version
