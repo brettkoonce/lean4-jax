@@ -91,6 +91,7 @@ procedure, and the bestiary entry exists to make that point.
 | `BERT.lean`      | BERT / RoBERTa            | base / large × 2 + tiny | Encoder-only transformer; RoBERTa = BERT architecturally |
 | `GPT.lean`       | GPT-1 / GPT-2             | GPT-1 + GPT-2 small/med/large/XL + tiny | Decoder-only transformer; BERT with a causal mask and tied LM head |
 | `WaveNet.lean`   | WaveNet                   | speech / 3-stack / music / tiny | Dilated causal convs for audio; exponential receptive field |
+| `Whisper.lean`   | Whisper                   | tiny / base / small / medium / large + decoder + tiny | Audio → text encoder-decoder transformer; multitask via token prefix |
 | `NeRF.lean`      | NeRF                      | canonical / fast / tiny | 3D scene as an MLP; the magic is in positional encoding |
 | `CLIP.lean`      | CLIP                      | RN50 / ViT-B/32 / ViT-L/14 / tiny | Dual encoder + contrastive; zero new primitives |
 | `Evoformer.lean` | AlphaFold 2 Evoformer     | full / mini / tiny | Dual-representation (MSA + pair) via triangle updates |

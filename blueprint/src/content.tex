@@ -1433,6 +1433,24 @@ limitation: the residual-vs-skip dual-output pattern doesn't
 linearize cleanly, so the 3-stack variant uses a simplified
 channel-flow approximation.
 
+\subsection*{Whisper (\texttt{Bestiary/Whisper.lean})}
+\emph{Zero} new primitives. Encoder-decoder transformer over log-mel
+spectrograms (Radford et al.\ 2022). Encoder is
+\texttt{.transformerEncoder} on the 1500 post-stem audio tokens;
+decoder is \texttt{.transformerDecoder} (from DETR) with
+\texttt{nQueries = 0} --- a clean seq2seq decoder with self-attn +
+cross-attn + FFN, text tokens coming from a separate
+\texttt{.dense vocab$\to$D} stand-in tied to the LM head. Variants:
+tiny (7M enc, paper 39M total), base (19M enc, paper 74M), small
+(85M enc + 153M dec+emb = 238M vs paper 244M), medium (302M enc,
+paper 769M), large (629M enc, paper 1.55B total), plus a shared
+decoder spec and tinyWhisper fixture. Encoder and decoder are the
+same size per variant; adding them together recovers paper totals
+within 2--3\%. The multitask interface (swap a prefix token to change
+language or switch between transcribe / translate) is
+prompt-engineering, not architecture --- Whisper's architectural
+novelty is essentially zero.
+
 \subsection*{NeRF (\texttt{Bestiary/NeRF.lean})}
 Uses \S~\ref{layer:positionalEncoding} and \S~\ref{layer:nerfMLP}. The
 "it's literally just an MLP" paper. Under 600K params at canonical
