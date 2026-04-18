@@ -1429,6 +1429,149 @@ Some numbers worth noticing:
   Phase 9.
 \end{axiom}
 
+\section{Example: MobileNet V2 on Imagenette}
+\label{sec:depthwise_mnv2_example}
+
+Depthwise convolution on its own is rarely used directly --- you
+almost always see it wrapped in a \emph{depthwise-separable}
+sandwich: $1 \times 1$ expand, $3 \times 3$ depthwise, $1 \times 1$
+project, with a residual connection around the whole thing. That
+sandwich is the inverted-residual block that defines MobileNet V2,
+and it's how depthwise convolutions got their fame.
+
+The point of depthwise is \emph{parameter efficiency}. A normal
+$3 \times 3$ conv over 64 channels uses $3 \times 3 \times 64
+\times 64 = 36864$ weights. A depthwise version uses $3 \times 3
+\times 64 = 576$ weights. 64$\times$ fewer. The depthwise-separable
+block recovers the missing cross-channel expressivity with the
+surrounding $1 \times 1$ convs, at a combined cost far below a full
+$3 \times 3$. MobileNet V2 is what you get when you stack 17 of
+these blocks and call it a network.
+
+\subsection*{The architecture}
+
+\begin{verbatim}
+-- 1
+import LeanMlir
+
+-- 2
+def mobilenetV2 : NetSpec where
+  name   := "MobileNet-v2"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .convBn 3 32 3 2 .same,                    -- stem 224→112
+    .invertedResidual  32  16 1 1 1,           -- 112, expand 1×
+    .invertedResidual  16  24 6 2 2,           -- 112→56, t=6
+    .invertedResidual  24  32 6 2 3,           -- 56→28, t=6
+    .invertedResidual  32  64 6 2 4,           -- 28→14, t=6
+    .invertedResidual  64  96 6 1 3,           -- 14, t=6
+    .invertedResidual  96 160 6 2 3,           -- 14→7, t=6
+    .invertedResidual 160 320 6 1 1,           -- 7, t=6
+    .convBn 320 1280 1 1 .same,                -- 1×1 to 1280
+    .globalAvgPool,
+    .dense 1280 10 .identity
+  ]
+
+-- 3
+def mobilenetV2Config : TrainConfig where
+  learningRate   := 0.001
+  batchSize      := 32
+  epochs         := 80
+  useAdam        := true
+  weightDecay    := 0.0001
+  cosineDecay    := true
+  warmupEpochs   := 3
+  augment        := true
+  labelSmoothing := 0.1
+
+-- 4
+def main (args : List String) : IO Unit :=
+  mobilenetV2.train mobilenetV2Config (args.head?.getD "data/imagenette")
+\end{verbatim}
+
+The \texttt{.invertedResidual} primitive takes
+\texttt{(ic, oc, expandRatio, stride, nBlocks)}. Internally each
+block is: $1 \times 1$ conv to \texttt{ic*expandRatio} channels,
+$3 \times 3$ depthwise at that width, $1 \times 1$ project to
+\texttt{oc}, plus a residual skip when \texttt{ic == oc} and
+\texttt{stride == 1}. The VJP is
+\S~\ref{ax:depthwise_has_vjp3} for the depthwise conv composed with
+the existing dense / BN / biPath theorems we already proved.
+Training config is identical to ResNet-34's
+(Appendix~\ref{app:getting_started}): Adam + cosine + warmup + wd
++ augmentation + label smoothing, the same production recipe.
+
+\subsection*{Results}
+
+\begin{verbatim}
+$ IREE_BACKEND=rocm IREE_CHIP=gfx1100 \
+    ./.lake/build/bin/mobilenet-v2-train
+MobileNet-v2: 2236682 params
+Generating train step MLIR...
+  741020 chars
+Compiling vmfbs...
+  forward compiled
+  eval forward (fixed BN) compiled
+  compiled
+  session loaded
+  train: 9469 images (256×256)
+  2236682 params + m + v (25 MB)
+training: 295 batches/epoch, batch=32, Adam, lr=0.001000,
+          cosine, label_smooth=0.1, wd=1e-4
+  BN layers: 52, BN stat floats: 34112
+  step 0/295: loss=2.327938 (832ms)
+Epoch  1/80: loss=1.968284 lr=0.000333 (243839ms)
+Epoch  2/80: loss=(dropping) lr=0.000667 ...
+...
+Epoch 79/80: loss=0.532640 lr=0.000002 (244123ms)
+Epoch 80/80: loss=0.532729 lr=0.000000 (244070ms)
+  val accuracy (running BN): 3400/3904 = 87.09%
+\end{verbatim}
+
+(Full log in \texttt{logs/mnv2\_train.log}.)
+
+Final val accuracy \textbf{87.09\%} --- 3.2 points below ResNet-34's
+90.29\% on the same dataset and training config, at \textbf{9.5$\times$
+fewer parameters} (2.24M vs 21.29M). That's the depthwise-separable
+trade: you give up a couple of accuracy points to get an order-of-
+magnitude reduction in parameter count. For mobile and embedded
+deployment, that's a deal you want.
+
+A few observations worth calling out:
+
+- \textbf{Per-step time is faster}, not slower: 830\,ms vs
+  ResNet-34's 1400\,ms. Even though the network has \emph{more}
+  layers (17 inverted-residual blocks $\times$ 3 sub-layers each =
+  51+ internal conv layers, vs ResNet-34's 34), the depthwise convs
+  are so cheap that overall throughput improves. Fewer parameters
+  \emph{and} faster training, at a modest accuracy cost.
+
+- \textbf{MLIR is actually bigger}, not smaller: 741\,020 chars vs
+  ResNet-34's 517\,912. That's counterintuitive --- the network has
+  fewer params but emits more StableHLO. The reason: each
+  depthwise-separable block has three separate convs (expand,
+  depthwise, project) plus their BN ops, so there are more
+  \emph{operations} even though each operation has fewer weights.
+  IREE emits per-op, so the char count tracks op count, not param
+  count.
+
+- \textbf{52 BN layers}, up from ResNet-34's 36. Same reason ---
+  more internal conv layers means more BN-after-conv
+  pairs. Each one still proves its VJP via
+  \S~\ref{thm:bn_has_vjp}.
+
+- \textbf{9.5$\times$ fewer parameters, 5.4 hours total
+  training} vs ResNet-34's 9.5 hours. The speedup comes entirely
+  from the smaller per-step time; the epoch count is the same.
+
+The general pattern ---  deeper + narrower + per-channel conv +
+surrounding $1 \times 1$ expansion --- carries forward to MobileNet
+V3 and the EfficientNet family. All of those add their own small
+modifications on top (SE blocks, Swish activations, compound scaling)
+but the core depthwise-separable scaffolding is exactly what this
+chapter formalized.
+
 \chapter{Squeeze-and-Excitation}
 \label{chap:se}
 
