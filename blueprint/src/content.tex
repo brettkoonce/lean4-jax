@@ -660,9 +660,11 @@ digit class.
 
 \subsection*{Code: the full training program}
 
-The entire training program in Lean is about twenty-five lines. Put
-it in a file called \texttt{MainMlpTrainF32.lean} and wire it up in
-\texttt{lakefile.lean}:
+The entire training program in Lean is about twenty-five lines. This
+is the old-school SGD baseline --- the exact config the Swift for
+TensorFlow book used in its Chapter 1 (SGD with learning rate 0.1,
+12 epochs, no regularization tricks). In our repo this config is
+\texttt{s4tfBaseline} in \texttt{MainAblation.lean}:
 
 \begin{verbatim}
 -- 1
@@ -680,19 +682,20 @@ def mnistMlp : NetSpec where
   ]
 
 -- 3
-def mnistMlpConfig : TrainConfig where
-  learningRate  := 0.001
-  batchSize     := 128
-  epochs        := 12
-  useAdam       := true
-  weightDecay   := 0.0001
-  cosineDecay   := true
-  warmupEpochs  := 1
-  augment       := false
+def s4tfBaseline : TrainConfig where
+  learningRate   := 0.1    -- old-school SGD learning rate
+  batchSize      := 128
+  epochs         := 12
+  useAdam        := false  -- plain SGD, no momentum, no moment buffers
+  weightDecay    := 0.0
+  cosineDecay    := false
+  warmupEpochs   := 0
+  augment        := false
+  labelSmoothing := 0.0
 
 -- 4
 def main (args : List String) : IO Unit :=
-  mnistMlp.train mnistMlpConfig (args.head?.getD "data") .mnist
+  mnistMlp.train s4tfBaseline (args.head?.getD "data") .mnist
 \end{verbatim}
 
 Walking through the numbered sections:
@@ -700,8 +703,8 @@ Walking through the numbered sections:
 \textbf{1. The import.} One line. \texttt{LeanMlir} is the framework
 implemented in the \texttt{LeanMlir/} directory of the repo --- it
 exposes \texttt{NetSpec}, \texttt{TrainConfig}, and the
-\texttt{train} method. Everything downstream in this chapter and the
-next is a specialization of this framework.
+\texttt{train} method. Everything downstream in this chapter and
+the next is a specialization of this framework.
 
 \textbf{2. The architecture.} \texttt{NetSpec} is a plain data
 structure: a name, input dimensions, and a list of \texttt{Layer}
@@ -713,56 +716,97 @@ entire model definition --- no class, no forward-pass function, no
 from the layer list, and the backward pass is \emph{proved} correct
 (see the theorems earlier in this chapter).
 
-\textbf{3. The training hyperparameters.} Learning rate, batch size,
-epochs, optimizer choice (Adam instead of plain SGD), weight decay,
-learning-rate schedule (cosine decay with a one-epoch linear
-warmup). These are the standard knobs from modern ML. No surprises;
-the values are conventional for MLP-scale MNIST.
+\textbf{3. The training hyperparameters.} Plain SGD at learning rate
+0.1, batch size 128, 12 epochs. No Adam, no weight decay, no cosine
+schedule, no warmup, no augmentation, no label smoothing. This is
+the deliberately minimal ``Chapter 1'' baseline --- the Swift for
+TensorFlow book shipped exactly this config as its reference
+example, and it's a pedagogically useful starting point because
+every later chapter's tweak (Adam, cosine, BN, residuals, augmentation)
+then has a clean baseline to measure against. The repo's
+\texttt{MainAblation.lean} ships a dozen other configs beside this
+one so you can run each ablation and see the delta.
 
 \textbf{4. The program entry point.} One line. Call
 \texttt{mnistMlp.train} with the config, the data directory (default
 \texttt{data/}), and the dataset kind (\texttt{.mnist}). Everything
-inside \texttt{.train} --- data loading, mini-batching, forward pass
-MLIR generation, IREE compilation, gradient descent loop, evaluation
-loop, logging --- is already formalized in the framework. The user-
-facing program is just "specify the network, specify the knobs,
-run."
+inside \texttt{.train} --- data loading, mini-batching, forward-pass
+MLIR generation, IREE compilation, gradient-descent loop, evaluation
+loop, logging --- is already formalized in the framework. The
+user-facing program is just ``specify the network, specify the
+knobs, run.''
 
 That's the whole thing. The parts people usually have to write by
-hand every time (the training loop, the evaluation loop, the
-gradient-computation machinery) are hidden inside the framework
-because \emph{they were the same every time}. The correctness of
-what's inside \texttt{.train} is what the proof chapters prove.
+hand every time (the training loop, the eval loop, the gradient-
+computation machinery) are hidden inside the framework because
+\emph{they were the same every time}. The correctness of what's
+inside \texttt{.train} is what the proof chapters prove.
 
 \subsection*{Results}
 
-Building and running the trainer is two commands from the repo root:
+Build the ablation runner and invoke it with the \texttt{mlp-sgd}
+config. Output below is from a real run, captured verbatim from
+\texttt{logs/ablation\_mlp-sgd.log}, on an AMD 7900 XTX (ROCm,
+gfx1100):
 
 \begin{verbatim}
-$ lake build mnist-mlp-train-f32
-Building LeanMlir.Train
-Building MainMlpTrainF32
-Linking mnist-mlp-train-f32
+$ lake build ablation
 $ IREE_BACKEND=rocm IREE_CHIP=gfx1100 \
-    ./.lake/build/bin/mnist-mlp-train-f32 data/
-MNIST-MLP: 669706 params
+    ./.lake/build/bin/ablation mlp-sgd
+Ablation: mlp-sgd
+  spec: MNIST-MLP, optimizer: SGD
+  lr: 0.100000, cosine: false, wd: 0.000000
+  aug: false, label_smooth: 0.000000
+MNIST-MLP-mlp-sgd: 669706 params
 Generating train step MLIR...
-  20502 chars
+  10375 chars
 Compiling vmfbs...
   forward compiled
   eval forward compiled
   train step compiled
-[epoch  1/12] train_loss=0.4523  val_acc=0.9522
-[epoch  2/12] train_loss=0.1691  val_acc=0.9694
-[epoch  3/12] train_loss=0.1135  val_acc=0.9743
-...
-[epoch 12/12] train_loss=0.0142  val_acc=0.9791
+  session loaded
+  train: 60000 images (784 floats/image)
+training: 468 batches/epoch, batch=128, SGD, lr=0.100000
+  step 0/468: loss=2.437782 (34ms)
+Epoch  1/12: loss=0.218235 lr=0.100000 (9417ms)
+Epoch  2/12: loss=0.082146 lr=0.100000 (9269ms)
+Epoch  3/12: loss=0.050954 lr=0.100000 (9280ms)
+Epoch  4/12: loss=0.035614 lr=0.100000 (9171ms)
+Epoch  5/12: loss=0.025503 lr=0.100000 (9119ms)
+Epoch  6/12: loss=0.017866 lr=0.100000 (9118ms)
+Epoch  7/12: loss=0.011806 lr=0.100000 (9153ms)
+Epoch  8/12: loss=0.009618 lr=0.100000 (9169ms)
+Epoch  9/12: loss=0.005895 lr=0.100000 (9250ms)
+Epoch 10/12: loss=0.003566 lr=0.100000 (9262ms)
+  val accuracy: 9795/9984 = 98.11%
+Epoch 11/12: loss=0.002229 lr=0.100000 (9114ms)
+Epoch 12/12: loss=0.000999 lr=0.100000 (9093ms)
+  val accuracy: 9841/9984 = 98.57%
+Saved params + BN stats.
 \end{verbatim}
 
-On an AMD 7900 XTX (ROCm), 12 epochs take about 90 seconds. On a
-laptop CPU via the Docker image in Appendix~\ref{app:getting_started}
-it's closer to 5 minutes. Either way the final test accuracy lands
-around 97.9\%.
+Twelve epochs, about 9~seconds per epoch, $\sim$110~seconds total.
+Training loss drops from $2.44$ at step 0 (random-initialization
+cross-entropy on 10 classes: $\log 10 \approx 2.303$, plus a bit of
+noise) down below $10^{-3}$ by the end. Final test accuracy lands at
+\textbf{98.57\%}, which is the going rate for a three-layer MLP on
+MNIST with plain SGD --- not bad for a model that barely counts as
+a neural network by 2020s standards. The matching CPU run via the
+Docker image in Appendix~\ref{app:getting_started} takes about 5
+minutes and lands at the same accuracy.
+
+Notice that the emitted MLIR is only 10\,375 characters --- about
+half of what the Adam variant would emit. Plain SGD's per-step
+update is a single \texttt{param = param - lr * grad} subtraction,
+while Adam has to maintain and update first- and second-moment
+estimate buffers and apply a bias-corrected update. Same network,
+same data, same backward pass --- the optimizer choice alone doubles
+the emitted compute.
+
+Chapter 2 (\texttt{MNIST 2D CNN}) runs the same \texttt{s4tfBaseline}
+config against a CNN architecture for a direct apples-to-apples
+comparison. Later chapters switch to Adam + cosine + weight decay
+once we can benchmark the deltas against this baseline.
 
 \subsection*{What is actually in those ``20\,502 chars''}
 
