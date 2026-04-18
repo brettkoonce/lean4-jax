@@ -53,6 +53,7 @@ is the recurring pattern; UNet is the canonical instance.
 | File | Architecture | Variants | Notes |
 |------|--------------|----------|-------|
 | `UNet.lean`      | UNet                      | original / RGB / small / tiny | Encoder-decoder with skip connections; diffusion backbone |
+| `SAM.lean`       | SAM (Segment Anything)    | ViT-B / L / H encoders + mask decoder + tiny | Promptable segmentation; ViT backbone does 99% of the work |
 
 ## Image generation
 

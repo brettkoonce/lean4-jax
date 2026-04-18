@@ -212,4 +212,7 @@ lean_exe «bestiary-gpt» where
 lean_exe «bestiary-diffusion» where
   root := `Bestiary.Diffusion
 
+lean_exe «bestiary-sam» where
+  root := `Bestiary.SAM
+
 require checkdecls from git "https://github.com/PatrickMassot/checkdecls.git"

@@ -1327,6 +1327,20 @@ pairs with the $i$-th \texttt{unetDown} from the top. Variants:
 original (1-channel, 2-class), RGB, small, tiny. Original lands at 31M
 params matching Ronneberger.
 
+\subsection*{SAM (\texttt{Bestiary/SAM.lean})}
+\emph{Zero} new primitives. Promptable segmentation (Kirillov et
+al.\ 2023): a ViT image encoder runs once per image, a tiny prompt
+encoder tokenizes clicks / boxes / masks, a lightweight transformer
+mask decoder cross-attends between image tokens, prompt tokens, and
+a handful of learned output queries. Image encoder is
+\texttt{.patchEmbed} + \texttt{.transformerEncoder} (the ViT kit);
+mask decoder is a small \texttt{.transformerDecoder} (from DETR,
+4 queries, 2 blocks). Variants: SAM ViT-B encoder (88M, paper total
+91M), ViT-L (307M, paper 308M), ViT-H (635M, paper 636M), shared
+3.3M mask decoder, tinySAM fixture. The image encoder accounts for
+$\sim$99\% of each variant's parameter budget, which is why
+EfficientSAM (Xiong et al.\ 2023) focused its distillation there.
+
 \subsection*{\textmd{\textsc{Group IV.}} Image generation}
 
 Networks whose output is a novel image. Backbones overlap heavily with
