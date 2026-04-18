@@ -1180,6 +1180,20 @@ goal is pedagogical shape + parameter accounting, not training runs.
   \texttt{cspBlock (ic oc nBlocks : Nat)}.
 \end{definition}
 
+\begin{definition}[Atrous Spatial Pyramid Pooling]
+  \label{layer:asppModule}
+  \lean{Layer.asppModule}
+  \leanok
+  DeepLab v3+'s marquee module (Chen et al.\ 2018). Five parallel
+  branches emitting \texttt{oc} channels each: (1) 1$\times$1 conv, (2--4)
+  3$\times$3 atrous convs at dilation rates 6 / 12 / 18, (5) global avg-pool
+  + 1$\times$1 conv + bilinear upsample. Concatenate, then a 1$\times$1
+  fusion conv back to \texttt{oc}. All branches include BN + ReLU.
+  Atrous rates widen the effective receptive field without changing
+  param count; the pool branch supplies image-level context. Signature:
+  \texttt{asppModule (ic oc : Nat)}.
+\end{definition}
+
 \begin{definition}[Inception module]
   \label{layer:inceptionModule}
   \lean{Layer.inceptionModule}
@@ -1326,6 +1340,22 @@ connections are implicit --- the $i$-th \texttt{unetUp} from the bottom
 pairs with the $i$-th \texttt{unetDown} from the top. Variants:
 original (1-channel, 2-class), RGB, small, tiny. Original lands at 31M
 params matching Ronneberger.
+
+\subsection*{DeepLab v3+ (\texttt{Bestiary/DeepLabV3Plus.lean})}
+Uses \S~\ref{layer:asppModule}. The pre-transformer segmentation
+workhorse (Chen et al.\ 2018) --- still deployed widely in remote
+sensing, medical imaging, and autonomous-driving perception
+pipelines. Two ideas: atrous (dilated) convolutions in the
+backbone's last stage (param-count-free receptive-field expansion)
++ an ASPP module for dense multi-scale context at the deepest
+feature resolution. The ``+'' in v3+ adds a lightweight decoder that
+upsamples the ASPP output 4$\times$ and concatenates a low-level skip
+from backbone stage 2. Variants: ResNet-101 backbone (59M, paper
+$\sim$63M), MobileNet v2 backbone (5.7M, paper $\sim$6M mobile
+variant), tinyDeepLab fixture. The ASPP skip-to-stage-2 in the
+decoder doesn't linearize cleanly; same hack as UNet / WaveNet use.
+SegFormer (next entry) argues ``do ASPP's multi-scale context via a
+transformer pyramid''; different mechanism, same goal.
 
 \subsection*{SegFormer (\texttt{Bestiary/SegFormer.lean})}
 \emph{Zero} new primitives. Semantic segmentation via a hierarchical

@@ -145,6 +145,19 @@ inductive Layer where
   --   b4: 3×3 maxPool + 1×1 (ic → b4out)
   -- Output channels = b1out + b2out + b3out + b4out.
   | inceptionModule (ic b1out b2reduce b2out b3reduce b3out b4out : Nat)
+  -- Atrous Spatial Pyramid Pooling (Chen et al.\ 2018, DeepLab v3+).
+  -- Five parallel branches that all emit `oc` channels, concatenated
+  -- and fused by a 1×1 conv back to `oc`:
+  --   B1: 1×1 conv (ic → oc)
+  --   B2/B3/B4: 3×3 atrous convs at rates 6, 12, 18 (ic → oc)
+  --     (atrous changes receptive field, not param count)
+  --   B5: global avg-pool + 1×1 conv (ic → oc) + bilinear upsample
+  --   fusion: 1×1 conv (5·oc → oc)
+  -- All branches include BN + ReLU. The atrous rates give the module
+  -- a dense multi-scale receptive field at a single feature resolution,
+  -- which is why the paper could drop the encoder's last-stage stride
+  -- and keep the output resolution high.
+  | asppModule (ic oc : Nat)
 deriving Repr
 
 structure NetSpec where

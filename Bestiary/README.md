@@ -55,6 +55,7 @@ is the recurring pattern; UNet is the canonical instance.
 | `UNet.lean`      | UNet                      | original / RGB / small / tiny | Encoder-decoder with skip connections; diffusion backbone |
 | `SAM.lean`       | SAM (Segment Anything)    | ViT-B / L / H encoders + mask decoder + tiny | Promptable segmentation; ViT backbone does 99% of the work |
 | `SegFormer.lean` | SegFormer                 | B0 / B2 / B5 + decoder + tiny | Hierarchical transformer pyramid + trivial MLP decoder |
+| `DeepLabV3Plus.lean` | DeepLab v3+           | ResNet-101 / MobileNet v2 / tiny | Atrous convs + ASPP + lightweight decoder; remote-sensing workhorse |
 
 ## Image generation
 

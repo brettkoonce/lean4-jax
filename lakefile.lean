@@ -230,4 +230,7 @@ lean_exe «bestiary-segformer» where
 lean_exe «bestiary-vae» where
   root := `Bestiary.VAE
 
+lean_exe «bestiary-deeplab» where
+  root := `Bestiary.DeepLabV3Plus
+
 require checkdecls from git "https://github.com/PatrickMassot/checkdecls.git"

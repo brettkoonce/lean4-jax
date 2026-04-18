@@ -168,6 +168,18 @@ def Layer.nParams : Layer → Nat
       --   with c = oc/2 → 2c² + 19c = oc²/2 + 19·oc/2 params.
       let basicUnit := (oc * oc) / 2 + (19 * oc) / 2
       downsample + (nUnits - 1) * basicUnit
+  | .asppModule ic oc =>
+      -- Five parallel branches, all oc channels, concat+fusion to oc.
+      -- B1: 1×1 (ic → oc) + BN → ic·oc + oc + 2·oc
+      let b1 := ic * oc + oc + 2 * oc
+      -- B2/B3/B4: 3×3 atrous convs at rates 6/12/18 (params same as
+      -- regular 3×3; dilation is a forward-pass detail). Each + BN.
+      let b234 := 3 * (9 * ic * oc + oc + 2 * oc)
+      -- B5: global avg-pool + 1×1 (ic → oc) + BN. Pool is parameter-free.
+      let b5 := ic * oc + oc + 2 * oc
+      -- Fusion: concat(5·oc) + 1×1 → oc + BN
+      let fusion := 5 * oc * oc + oc + 2 * oc
+      b1 + b234 + b5 + fusion
   | .evoformerBlock msaChannels pairChannels nBlocks =>
       -- Per-block breakdown (approx, matching AlphaFold 2 supplementary):
       --   MSA row-attn w/ pair bias:   ~ 4·cm²          (Q/K/V/O on MSA channels)
@@ -347,6 +359,7 @@ def NetSpec.archStr (s : NetSpec) : String :=
     | .detrHeads dim c           => s!"DETR-heads({dim}→cls{c+1}+box4)"
     | .shuffleBlock ic oc g n    => s!"Shuffle{n}({ic}→{oc},g{g})"
     | .shuffleV2Block ic oc n    => s!"ShuffleV2{n}({ic}→{oc})"
+    | .asppModule ic oc          => s!"ASPP({ic}→{oc})"
     | .evoformerBlock cm cz n    => s!"Evoformer{n}(msa={cm},pair={cz})"
     | .structureModule cs cz n   => s!"StructMod{n}(s={cs},z={cz})"
     | .mobileVitBlock ic d h m n => s!"MobileViT(ic={ic},d={d},h={h},mlp={m},L={n})"
@@ -389,6 +402,7 @@ def Layer.outChannels : Layer → Nat
   | .detrHeads _ nClasses           => nClasses + 1  -- class-head output width (informational)
   | .shuffleBlock _ oc _ _          => oc
   | .shuffleV2Block _ oc _          => oc
+  | .asppModule _ oc                => oc
   | .evoformerBlock msaCh _ _       => msaCh  -- MSA channels as the "main" dim
   | .structureModule sCh _ _        => sCh    -- single-repr channels
   | .mobileVitBlock ic _ _ _ _      => ic     -- block is ic → ic
@@ -427,6 +441,7 @@ def Layer.inChannels : Layer → Nat
   | .detrHeads dim _                => dim
   | .shuffleBlock ic _ _ _          => ic
   | .shuffleV2Block ic _ _          => ic
+  | .asppModule ic _                => ic
   | .evoformerBlock msaCh _ _       => msaCh
   | .structureModule sCh _ _        => sCh
   | .mobileVitBlock ic _ _ _ _      => ic
