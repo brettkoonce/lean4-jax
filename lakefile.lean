@@ -242,4 +242,7 @@ lean_exe «bestiary-dcgan» where
 lean_exe «bestiary-cyclegan» where
   root := `Bestiary.CycleGAN
 
+lean_exe «bestiary-alphago» where
+  root := `Bestiary.AlphaGo
+
 require checkdecls from git "https://github.com/PatrickMassot/checkdecls.git"

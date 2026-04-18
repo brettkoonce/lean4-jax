@@ -81,6 +81,7 @@ in the outer loop.
 
 | File | Architecture | Variants | Notes |
 |------|--------------|----------|-------|
+| `AlphaGo.lean`   | AlphaGo (2016)            | policy + value + rollout + tiny | Three separate nets, 48 hand-crafted features; the pre-Zero original |
 | `AlphaZero.lean` | AlphaZero / AlphaGo Zero  | original Go, chess, tiny | Two-headed (policy + value) |
 | `MuZero.lean`    | MuZero                    | Go / Atari / tiny | AlphaZero + learned dynamics; three networks (rep + dyn + pred) |
 

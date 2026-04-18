@@ -1521,6 +1521,19 @@ Two-headed (policy + value) networks wrapped in a self-play + MCTS
 outer loop. The architectural side is a stack of residual CNN blocks;
 the complexity lives in the outer loop, not the network.
 
+\subsubsection*{AlphaGo (\texttt{Bestiary/AlphaGo.lean})}
+\emph{Zero} new primitives. The original 2016 Lee Sedol system.
+Three separate networks: a 13-layer conv \emph{policy} network
+($\sim$3.9M) trained first on 30M human games then fine-tuned via
+self-play, a 13-layer conv + FC-head \emph{value} network
+($\sim$4M), and a shallow linear \emph{rollout} policy used inside
+MCTS for fast tree playouts. Input is 48 hand-crafted Go feature
+planes (liberties, ladder patterns, 3$\times$3 stone arrangements,
+etc.). AlphaGo Zero (next entry) throws all of this out --- raw
+board only, one two-headed net, self-play only --- and plays better
+(5185 Elo vs 3140). The one-sentence lesson is written into every
+follow-up paper: features the network can learn on its own, it will.
+
 \subsubsection*{AlphaZero (\texttt{Bestiary/AlphaZero.lean})}
 Uses existing primitives only (\texttt{convBn} + \texttt{residualBlock}
 + \texttt{conv2d} + \texttt{dense}). Two-headed (policy + value),
