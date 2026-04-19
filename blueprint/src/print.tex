@@ -13,6 +13,12 @@
 \documentclass[a4paper]{report}
 
 \usepackage{geometry}
+\geometry{margin=0.9in}
+
+% Shrink verbatim font so long NetSpec comments don't wrap at default width.
+\makeatletter
+\renewcommand{\verbatim@font}{\ttfamily\small}
+\makeatother
 
 \usepackage{expl3}
 
@@ -32,5 +38,6 @@
 
 \begin{document}
 \maketitle
+\tableofcontents
 \input{content}
 \end{document}
