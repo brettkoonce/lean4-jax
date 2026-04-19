@@ -23,3 +23,12 @@ div.corollary_thmcontent {
 div.proof_content {
 	border-left: .08rem solid grey;
 }
+
+/* NetSpec verbatim blocks: inline comments run ~80 chars wide; default
+ * theme wraps them mid-content. Force non-wrap + horizontal scroll and
+ * shrink slightly so the alignment stays readable. */
+pre {
+	white-space: pre;
+	overflow-x: auto;
+	font-size: 0.9em;
+}
