@@ -287,23 +287,6 @@ framework's primitives in $\sim$2 pages.
 \textbf{Appendices.} Toolchain setup (A) and the complete proof framework
 as a reference (B).
 
-\section*{A note on the proofs}
-
-The proofs in this book compile with \textbf{zero \texttt{sorry}s}. Every
-VJP correctness theorem --- dense layers, convolution, batch normalization,
-residual connections, depthwise convolution, squeeze-and-excitation,
-layer normalization, and self-attention --- is machine-checked by Lean's
-type system. If it builds, it's correct.
-
-The full axiom list, grouped by role, is in Appendix~\ref{app:axioms}.
-
-Everything else is proved from these axioms: the VJP composition
-rule (chain rule), additive and multiplicative fan-in, and the
-correctness of every layer's backward pass. The proofs are not deep
---- they're undergraduate calculus, formalized. The value is not that
-the math is surprising, but that the compiler verified it matches
-the exact MLIR code that runs on the GPU.
-
 \section*{Let's go}
 
 In 2018, I was on a small team that won Stanford's DAWNBench
@@ -3195,9 +3178,18 @@ per axiom.
 \chapter{Axioms at a glance}
 \label{app:axioms}
 
+The proofs in this book compile with \textbf{zero \texttt{sorry}s}. Every
+VJP correctness theorem --- dense layers, convolution, batch normalization,
+residual connections, depthwise convolution, squeeze-and-excitation,
+layer normalization, and self-attention --- is machine-checked by Lean's
+type system. If it builds, it's correct.
+
+The proofs are not deep --- they're undergraduate calculus, formalized.
+The value is not that the math is surprising, but that the compiler
+verified it matches the exact MLIR code that runs on the GPU.
+
 The Verified VJP Proofs suite contains 30 axioms and 48 theorems across
-nine Lean files, with zero \texttt{sorry}s. The axioms fall into three
-buckets:
+nine Lean files. The axioms fall into three buckets:
 
 \begin{itemize}
   \item \textbf{Calculus primitives} (8): chain rule, linearity, product
