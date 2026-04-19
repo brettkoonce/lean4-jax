@@ -3950,6 +3950,15 @@ nine Lean files. The axioms fall into three buckets:
     in \texttt{check\_axioms.py}.
 \end{itemize}
 
+The bundled-primitive axioms are the only ones not proved symbolically
+in Lean --- they're instead validated by \textbf{finite-difference
+gradient checks} in \texttt{LeanMlir/Proofs/check\_axioms.py}. For each
+opaque forward, the script perturbs the input by $\varepsilon$, compares
+the claimed VJP to the centered difference
+$(f(x + \varepsilon) - f(x - \varepsilon)) / 2\varepsilon$, and asserts
+agreement within tolerance. Between Lean's composition proofs and
+Python's numerical checks, nothing is taken on faith.
+
 Everything else --- 48 theorems --- is composition over these axioms, glued
 by the three structural rules (chain, fan-in, product) and five
 closed-form Jacobian tricks (diagonal, sparse toeplitz, binary selection,
