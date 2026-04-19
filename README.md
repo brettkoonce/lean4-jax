@@ -3,7 +3,7 @@
 **Interactive proof blueprint: [brettkoonce.github.io/lean4-mlir/blueprint/](https://brettkoonce.github.io/lean4-mlir/blueprint/)**
 (or [PDF](https://brettkoonce.github.io/lean4-mlir/blueprint.pdf))
 — clickable dependency DAG for the full VJP proof suite, from `pdiv` primitives
-up to `vit_body_has_vjp_mat`. 30 axioms, 48 theorems, zero `sorry`s.
+up to `vit_body_has_vjp_mat`. 30 axioms, 45 theorems, zero `sorry`s.
 
 Lean 4 as a specification language for neural networks. Declare architecture
 in Lean, generate StableHLO MLIR (forward + loss + backward + optimizer all

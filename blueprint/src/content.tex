@@ -2287,7 +2287,7 @@ composes from the same small set of primitives plus a handful of
 architecture-specific bundled layers. Three rules (chain, additive
 fan-in, multiplicative fan-in). Five Jacobian tricks (diagonal,
 sparse Toeplitz, binary selection, rank-1 correction, outer
-product). Thirty axioms. Forty-eight theorems. Zero sorrys.
+product). 30 axioms, 45 theorems, zero sorrys.
 
 That's the whole framework. The rest of the book is picking
 architectures off the shelf. Stamp collecting, as Rutherford would say.
@@ -3933,8 +3933,8 @@ The proofs are not deep --- they're undergraduate calculus, formalized.
 The value is not that the math is surprising, but that the compiler
 verified it matches the exact MLIR code that runs on the GPU.
 
-The Verified VJP Proofs suite contains 30 axioms and 48 theorems across
-nine Lean files. The axioms fall into three buckets:
+The Verified VJP Proofs suite contains 30 axioms and 45 theorems across
+9 Lean files. The axioms fall into three buckets:
 
 \begin{itemize}
   \item \textbf{Calculus primitives} (8): chain rule, linearity, product
@@ -3959,7 +3959,7 @@ $(f(x + \varepsilon) - f(x - \varepsilon)) / 2\varepsilon$, and asserts
 agreement within tolerance. Between Lean's composition proofs and
 Python's numerical checks, nothing is taken on faith.
 
-Everything else --- 48 theorems --- is composition over these axioms, glued
+Everything else --- 45 theorems --- is composition over these axioms, glued
 by the three structural rules (chain, fan-in, product) and five
 closed-form Jacobian tricks (diagonal, sparse toeplitz, binary selection,
 rank-1 correction, outer product).
