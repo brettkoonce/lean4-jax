@@ -14,6 +14,12 @@ in Lean.
 Companion code for the upcoming book *Verified Deep Learning with Lean4*
 (follow-up to [Convolutional Neural Networks with Swift for TensorFlow](https://doi.org/10.1007/978-1-4842-6168-2), Apress).
 
+**Current version: `v0.5`** — first cross-backend-verified release. MNIST
+MLP loss agrees to **float32 ULP at step 1** between two independent
+compilation pipelines (Lean→IREE→GPU vs Lean→JAX→XLA) on both NVIDIA and
+AMD hardware. See [`traces/CROSS_BACKEND_RESULTS.md`](traces/CROSS_BACKEND_RESULTS.md)
+for the four-corner verification table.
+
 ## Three phases
 
 This project went through three implementations of the same idea — "Lean 4 as a
@@ -74,6 +80,23 @@ architecture means extending `LeanMlir/MlirCodegen.lean` with:
 - `FwdRec` recording for backward intermediates
 
 The training executable, FFI, and IREE runtime are unchanged.
+
+## Cross-backend verification
+
+Phase 2 and Phase 3 share the same Lean `NetSpec` ADT but compile through
+*completely independent* stacks (JAX/XLA vs IREE). Differential testing
+confirms both stacks produce the same training dynamics on the same input:
+
+| diff                              | step 1 Δ | step 2 Δ |
+|-----------------------------------|----------|----------|
+| phase 2 (JAX)  vs phase 3 (IREE)  | ~1e-7    | ~1e-4    |
+| phase 3 ROCm   vs phase 3 CUDA    | **0**    | **0**    |
+| phase 2 CPU    vs phase 2 CUDA    | ~1e-6    | ~1e-4    |
+
+Step-1 agreement to float32 ULP across compilers, plus bit-identical
+output across IREE backends, gives JAX-as-oracle verification of the
+hand-derived VJPs in `MlirCodegen.lean`. Reproducible in 5 minutes via
+`traces/CROSS_BACKEND_RESULTS.md`.
 
 ## Results (Imagenette, 10 classes, 224×224)
 
