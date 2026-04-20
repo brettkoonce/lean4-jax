@@ -2,7 +2,15 @@
 """Compare two training-trace .jsonl files for numerical agreement.
 
 Usage:
-    python3 tests/diff_traces.py <trace_a.jsonl> <trace_b.jsonl>
+    python3 tests/diff_traces.py <trace_a.jsonl> <trace_b.jsonl> [--mode=MODE]
+
+Modes (controls numeric tolerance):
+    strict       atol=1e-4, rtol=1e-3   (default; same platform, same seed)
+    cross-gpu    atol=1e-3, rtol=1e-2   (different GPU HALs — accommodates
+                                         IEEE-754 reduction-order drift
+                                         between matmul kernels)
+    cross-comp   atol=1e-2, rtol=1e-1   (different compilers entirely, e.g.
+                                         Lean→IREE vs Lean→JAX+XLA)
 
 Exits 0 on agreement, 1 on any mismatch. Prints a compact summary.
 
@@ -13,8 +21,12 @@ import math
 import sys
 from pathlib import Path
 
-ATOL = 1e-4
-RTOL = 1e-3
+MODES = {
+    "strict":      (1e-4, 1e-3),
+    "cross-gpu":   (1e-3, 1e-2),
+    "cross-comp":  (1e-2, 1e-1),
+}
+DEFAULT_MODE = "strict"
 # Required numeric fields on every step record.
 NUMERIC_REQUIRED = ("loss", "lr")
 # Optional numeric fields — compared only when present in BOTH traces.
@@ -47,11 +59,11 @@ def check_headers(ha: dict, hb: dict) -> list[str]:
     return diffs
 
 
-def close(a: float, b: float) -> bool:
-    return math.isclose(a, b, rel_tol=RTOL, abs_tol=ATOL)
+def close(a: float, b: float, atol: float, rtol: float) -> bool:
+    return math.isclose(a, b, rel_tol=rtol, abs_tol=atol)
 
 
-def check_steps(sa: list[dict], sb: list[dict]) -> list[str]:
+def check_steps(sa: list[dict], sb: list[dict], atol: float, rtol: float) -> list[str]:
     diffs = []
     if len(sa) != len(sb):
         diffs.append(f"step count mismatch: {len(sa)} vs {len(sb)}")
@@ -63,7 +75,7 @@ def check_steps(sa: list[dict], sb: list[dict]) -> list[str]:
             if va is None or vb is None:
                 diffs.append(f"step {i} {field}: missing ({va} vs {vb})")
                 continue
-            if not close(va, vb):
+            if not close(va, vb, atol, rtol):
                 delta = abs(va - vb)
                 diffs.append(
                     f"step {i} {field}: {va:.6f} vs {vb:.6f} (delta={delta:.2e})"
@@ -73,7 +85,7 @@ def check_steps(sa: list[dict], sb: list[dict]) -> list[str]:
             va, vb = a.get(field), b.get(field)
             if va is None or vb is None:
                 continue  # skip — missing from one side is OK
-            if not close(va, vb):
+            if not close(va, vb, atol, rtol):
                 delta = abs(va - vb)
                 diffs.append(
                     f"step {i} {field}: {va:.6f} vs {vb:.6f} (delta={delta:.2e})"
@@ -81,22 +93,40 @@ def check_steps(sa: list[dict], sb: list[dict]) -> list[str]:
     return diffs
 
 
-def main() -> int:
-    if len(sys.argv) != 3:
+def parse_args(argv: list[str]) -> tuple[Path, Path, str]:
+    args = [a for a in argv[1:] if not a.startswith("--")]
+    flags = [a for a in argv[1:] if a.startswith("--")]
+    if len(args) != 2:
         print(__doc__, file=sys.stderr)
-        return 2
+        sys.exit(2)
+    mode = DEFAULT_MODE
+    for f in flags:
+        if f.startswith("--mode="):
+            mode = f.split("=", 1)[1]
+        elif f in ("-h", "--help"):
+            print(__doc__); sys.exit(0)
+        else:
+            print(f"unknown flag: {f}", file=sys.stderr); sys.exit(2)
+    if mode not in MODES:
+        print(f"unknown mode {mode!r}; valid: {list(MODES)}", file=sys.stderr)
+        sys.exit(2)
+    return Path(args[0]), Path(args[1]), mode
 
-    pa, pb = Path(sys.argv[1]), Path(sys.argv[2])
+
+def main() -> int:
+    pa, pb, mode = parse_args(sys.argv)
+    atol, rtol = MODES[mode]
+
     ha, sa = load_trace(pa)
     hb, sb = load_trace(pb)
 
     header_diffs = check_headers(ha, hb)
-    step_diffs   = check_steps(sa, sb)
+    step_diffs   = check_steps(sa, sb, atol, rtol)
 
-    print(f"Comparing:")
+    print(f"Comparing (mode={mode}):")
     print(f"  A: {pa}  (phase={ha.get('phase')}, steps={len(sa)})")
     print(f"  B: {pb}  (phase={hb.get('phase')}, steps={len(sb)})")
-    print(f"Tolerance: atol={ATOL}, rtol={RTOL}")
+    print(f"Tolerance: atol={atol}, rtol={rtol}")
     print()
 
     if not header_diffs and not step_diffs:

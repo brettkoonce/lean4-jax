@@ -98,3 +98,33 @@ traces/
 Committed canonical traces serve as the reproducibility baseline: a reader
 runs either phase with the matching seed and `diff_traces.py` against the
 committed trace to verify their build matches ours.
+
+## A finding from the first cross-backend run
+
+Empirically (MNIST MLP on `phase3-rocm` vs `phase3-cuda`):
+
+- **Steps 1–92: bit-identical to 6 decimal places.** Two different GPU HALs
+  produce the same loss values for the first ~100 steps. As tight as
+  cross-hardware float agreement gets.
+- **Steps ~93–200: O(1e-3) drift.** IEEE-754 non-associativity in matmul
+  reduction trees compounds across a few dozen steps.
+- **Steps 200+: trajectory divergence.** Stochastic gradient descent on a
+  neural network is *chaotic* in the dynamical-systems sense — tiny early
+  differences in parameter updates snowball into meaningfully different
+  later weight states. Both trainings are doing *correct* SGD; they're
+  just visiting different batches' losses by then. Final val accuracy on
+  the two runs agrees within noise.
+
+**Implication for the comparator.** Naive per-step agreement across GPU
+HALs is fundamentally impossible past the first few hundred steps of
+training — not because of a bug, because of the math. A useful
+cross-backend verification needs a smarter aggregation:
+
+- Per-step tight agreement for the first ~100 steps (catches codegen bugs
+  where the math diverges from the axioms).
+- Epoch-averaged loss trajectory (the chaos averages out).
+- Final val accuracy within ~0.5pp (the "did training succeed" check).
+
+The `cross-gpu` and `cross-comp` tolerance modes above are useful for
+*same-config reruns* and for *early-step comparison*. The "smart cross-
+backend verification" is an open follow-up.
