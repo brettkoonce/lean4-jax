@@ -4,6 +4,17 @@ on:
   push:
     branches:
       - main
+    # Only rebuild when something that actually affects published content
+    # changes: the blueprint LaTeX, the Lean source feeding doc-gen4, or
+    # project config. Skips README/traces/data/tests/historical edits.
+    paths:
+      - 'blueprint/**'
+      - 'LeanMlir/**'
+      - 'Bestiary/**'
+      - 'lakefile.lean'
+      - 'lean-toolchain'
+      - 'lake-manifest.json'
+      - '.github/workflows/blueprint.yml'
   workflow_dispatch:
 
 concurrency:
