@@ -11,6 +11,16 @@
 set -u
 cd "$(dirname "$0")/../.."  # → repo root
 
+# Auto-default IREE_BACKEND and JAX_PLATFORMS on AMD hosts. Needed
+# because LeanMlir/Train.lean defaults IREE_BACKEND to "cuda", and
+# JAX-ROCm segfaults on conv on gfx1100 (ROCm/MIOpen#3955). User env
+# wins. Detect via /dev/kfd (the ROCm kernel-fusion-driver device)
+# or /opt/rocm — rocminfo isn't always on PATH.
+if [ -z "${IREE_BACKEND:-}" ] && { [ -e /dev/kfd ] || [ -d /opt/rocm ]; }; then
+  export IREE_BACKEND=rocm
+  export JAX_PLATFORMS="${JAX_PLATFORMS:-cpu}"
+fi
+
 CASES=("${@:-dense}")
 FAIL=0
 
