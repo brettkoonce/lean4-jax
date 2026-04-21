@@ -53,3 +53,7 @@ lean_exe «vgg16bn» where
 
 lean_exe «vit-tiny» where
   root := `MainVit
+
+-- VJP oracle — one binary per axiom under test. See tests/vjp_oracle/.
+lean_exe «vjp-oracle-dense» where
+  root := `MainVjpOracleDense

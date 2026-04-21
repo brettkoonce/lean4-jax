@@ -111,6 +111,14 @@ lean_exe «cifar-cnn-train-f32» where
   moreLinkArgs := ireeLink
 
 -- ═══════════════════════════════════════════════════════════════════
+-- VJP oracle — one binary per axiom under test. See tests/vjp_oracle/.
+-- ═══════════════════════════════════════════════════════════════════
+
+lean_exe «vjp-oracle-dense» where
+  root := `MainVjpOracleDense
+  moreLinkArgs := ireeLink
+
+-- ═══════════════════════════════════════════════════════════════════
 -- Tests + benchmarks
 -- ═══════════════════════════════════════════════════════════════════
 
