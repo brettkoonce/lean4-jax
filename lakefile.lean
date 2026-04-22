@@ -111,43 +111,45 @@ lean_exe «cifar-cnn-train-f32» where
   moreLinkArgs := ireeLink
 
 -- ═══════════════════════════════════════════════════════════════════
--- VJP oracle — one binary per axiom under test. See tests/vjp_oracle/.
+-- VJP oracle — one binary per axiom under test.
+-- Trainers live in tests/vjp_oracle/phase3/ so the root isn't crowded
+-- with test-only files. See tests/vjp_oracle/README.md.
 -- ═══════════════════════════════════════════════════════════════════
 
 lean_exe «vjp-oracle-dense» where
-  root := `MainVjpOracleDense
+  root := `tests.vjp_oracle.phase3.MainVjpOracleDense
   moreLinkArgs := ireeLink
 
 lean_exe «vjp-oracle-dense-relu» where
-  root := `MainVjpOracleDenseRelu
+  root := `tests.vjp_oracle.phase3.MainVjpOracleDenseRelu
   moreLinkArgs := ireeLink
 
 lean_exe «vjp-oracle-conv» where
-  root := `MainVjpOracleConv
+  root := `tests.vjp_oracle.phase3.MainVjpOracleConv
   moreLinkArgs := ireeLink
 
 lean_exe «vjp-oracle-convbn» where
-  root := `MainVjpOracleConvBn
+  root := `tests.vjp_oracle.phase3.MainVjpOracleConvBn
   moreLinkArgs := ireeLink
 
 lean_exe «vjp-oracle-conv-pool» where
-  root := `MainVjpOracleConvPool
+  root := `tests.vjp_oracle.phase3.MainVjpOracleConvPool
   moreLinkArgs := ireeLink
 
 lean_exe «vjp-oracle-residual» where
-  root := `MainVjpOracleResidual
+  root := `tests.vjp_oracle.phase3.MainVjpOracleResidual
   moreLinkArgs := ireeLink
 
 lean_exe «vjp-oracle-depthwise» where
-  root := `MainVjpOracleDepthwise
+  root := `tests.vjp_oracle.phase3.MainVjpOracleDepthwise
   moreLinkArgs := ireeLink
 
 lean_exe «vjp-oracle-attention» where
-  root := `MainVjpOracleAttention
+  root := `tests.vjp_oracle.phase3.MainVjpOracleAttention
   moreLinkArgs := ireeLink
 
 lean_exe «vjp-oracle-mbconv» where
-  root := `MainVjpOracleMbConv
+  root := `tests.vjp_oracle.phase3.MainVjpOracleMbConv
   moreLinkArgs := ireeLink
 
 -- ═══════════════════════════════════════════════════════════════════

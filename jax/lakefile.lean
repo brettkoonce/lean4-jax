@@ -54,30 +54,32 @@ lean_exe «vgg16bn» where
 lean_exe «vit-tiny» where
   root := `MainVit
 
--- VJP oracle — one binary per axiom under test. See tests/vjp_oracle/.
+-- VJP oracle — one binary per axiom under test. Trainers live in
+-- tests/vjp_oracle/phase2/ so jax/ isn't crowded with test-only files.
+-- See tests/vjp_oracle/README.md at the repo root.
 lean_exe «vjp-oracle-dense» where
-  root := `MainVjpOracleDense
+  root := `tests.vjp_oracle.phase2.MainVjpOracleDense
 
 lean_exe «vjp-oracle-dense-relu» where
-  root := `MainVjpOracleDenseRelu
+  root := `tests.vjp_oracle.phase2.MainVjpOracleDenseRelu
 
 lean_exe «vjp-oracle-conv» where
-  root := `MainVjpOracleConv
+  root := `tests.vjp_oracle.phase2.MainVjpOracleConv
 
 lean_exe «vjp-oracle-convbn» where
-  root := `MainVjpOracleConvBn
+  root := `tests.vjp_oracle.phase2.MainVjpOracleConvBn
 
 lean_exe «vjp-oracle-conv-pool» where
-  root := `MainVjpOracleConvPool
+  root := `tests.vjp_oracle.phase2.MainVjpOracleConvPool
 
 lean_exe «vjp-oracle-residual» where
-  root := `MainVjpOracleResidual
+  root := `tests.vjp_oracle.phase2.MainVjpOracleResidual
 
 lean_exe «vjp-oracle-depthwise» where
-  root := `MainVjpOracleDepthwise
+  root := `tests.vjp_oracle.phase2.MainVjpOracleDepthwise
 
 lean_exe «vjp-oracle-attention» where
-  root := `MainVjpOracleAttention
+  root := `tests.vjp_oracle.phase2.MainVjpOracleAttention
 
 lean_exe «vjp-oracle-mbconv» where
-  root := `MainVjpOracleMbConv
+  root := `tests.vjp_oracle.phase2.MainVjpOracleMbConv
