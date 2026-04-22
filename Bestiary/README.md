@@ -143,3 +143,26 @@ shared-body graph. Fixing this would require either:
 Both are real refactors. For bestiary purposes, showing the two forks
 side-by-side is both honest and pedagogically clearer than a tree that
 might obscure how simple AlphaZero really is.
+
+## Param-count regression test
+
+`tests/test_bestiary_params.py` runs every `bestiary-*` binary and
+compares its reported `NetSpec.totalParams` against the golden table
+in `tests/bestiary_params.yml` — 37 binaries, 167 variants. Intended
+as a regression guard: if anyone tweaks a layer def and a param count
+shifts (even by one), the test flags it with `CHANGED old → new` so
+you can decide whether the change was intentional.
+
+```bash
+# Run the suite
+tests/test_bestiary_params.py
+# → PASS  37 binaries, 167 variants, all counts match
+
+# Regenerate golden after a deliberate architectural change
+tests/test_bestiary_params.py --update-golden
+```
+
+The golden entries are currently "whatever the code emits today."
+Over time, back-fill `# source:` annotations on rows where we've
+verified against the paper / torchvision / timm / HF reference count,
+so the test also documents what each spec *claims* to be.

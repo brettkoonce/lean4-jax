@@ -1,0 +1,214 @@
+# Golden table of NetSpec.totalParams for every bestiary variant.
+# Captured 2026-04-22. Test fails if any variant's count changes,
+# if a new variant is added, or if a variant disappears. Regenerate
+# this file only when a count change is intentional.
+#
+# Long term: back-fill a `# source:` annotation per row pointing at
+# the paper / torchvision / timm / HF reference count the spec aims to
+# match. For now these are pinned to whatever the current code emits.
+
+bestiary-alexnet:
+  "AlexNet (Krizhevsky 2012)": 62378440
+  "tiny-AlexNet": 2033290
+bestiary-alphago:
+  "AlphaGo policy network": 3884737
+  "AlphaGo value network": 3977666
+  "AlphaGo rollout policy (hand-crafted linear softmax)": 131044
+  "tiny-AlphaGo policy (9×9 board)": 130369
+bestiary-alphazero:
+  "AlphaGo Zero (policy head)": 22734688
+  "AlphaGo Zero (value head)": 22565634
+  "AlphaZero chess (policy head)": 69352585
+  "AlphaZero chess (value head)": 47518722
+  "Tiny AlphaZero (policy head)": 245368
+  "Tiny AlphaZero (value head)": 237250
+bestiary-bert:
+  "BERT-base": 109088256
+  "BERT-large": 334616576
+  "RoBERTa-base": 124250880
+  "RoBERTa-large": 354833408
+  "tiny-BERT": 937984
+bestiary-clip:
+  "CLIP-RN50 (image encoder)": 25606208
+  "CLIP (text encoder)": 63389696
+  "CLIP-ViT-B/32 (image encoder)": 87848960
+  "CLIP (text encoder)": 63389696
+  "CLIP-ViT-L/14 (image encoder)": 303965952
+  "CLIP-ViT-L/14 (text encoder)": 123592704
+  "tiny-CLIP (image encoder)": 140960
+  "tiny-CLIP (text encoder)": 272448
+bestiary-convnext:
+  "ConvNeXt-T": 28587496
+  "ConvNeXt-S": 50222056
+  "ConvNeXt-B": 88589288
+  "ConvNeXt-L": 197764072
+  "tiny-ConvNeXt": 413130
+bestiary-cyclegan:
+  "CycleGAN generator (9-block ResNet, 256×256 RGB)": 11383427
+  "CycleGAN PatchGAN discriminator (256×256 RGB → N×N grid)": 2765697
+  "tiny-CycleGAN generator": 273059
+  "tiny-CycleGAN discriminator": 42977
+bestiary-dcgan:
+  "DCGAN noise projector (100 → 4×4×1024)": 1654784
+  "DCGAN generator (64×64 RGB)": 11146115
+  "DCGAN discriminator (64×64 RGB → 1)": 11036417
+  "tiny-DCGAN generator (32×32)": 173027
+  "tiny-DCGAN discriminator (32×32)": 167873
+bestiary-deeplab:
+  "DeepLab v3+ (ResNet-101 backbone)": 59222357
+  "DeepLab v3+ (MobileNet v2 backbone)": 5705237
+  "tiny-DeepLab v3+": 331658
+bestiary-detr:
+  "DETR-R50": 41738400
+  "DETR-R101": 60730528
+  "tiny-DETR": 314809
+bestiary-diffusion:
+  "DDPM (CIFAR-10, backbone approx)": 8038787
+  "DDPM (256×256, backbone approx)": 24314883
+  "tiny-DDPM": 266147
+  "DDPM timestep-embedding MLP": 328704
+bestiary-evoformer:
+  "AlphaFold 2 (Evoformer + StructureModule)": 76394496
+  "AlphaFold 2 Mini (16 + 4)": 13965312
+  "tiny-Evoformer (4 blocks)": 443392
+bestiary-gpt:
+  "GPT-1": 116143872
+  "GPT-2 small": 123654144
+  "GPT-2 medium": 353775616
+  "GPT-2 large": 772720640
+  "GPT-2 XL": 1555974400
+  "tiny-GPT": 921472
+bestiary-inception:
+  "GoogLeNet (Inception v1)": 7005832
+  "Inception-v3 (bestiary approximation)": 23816456
+  "Inception-v4 (bestiary approximation)": 33403816
+bestiary-lenet:
+  "LeNet-5": 61706
+  "LeNet-300-100 (MLP baseline)": 266610
+bestiary-llava:
+  "LLaVA vision encoder (CLIP ViT-L/14 @ 336px)": 303506432
+  "LLaVA-1 projector (single linear)": 4198400
+  "LLaVA-1.5 projector (2-layer MLP)": 20979712
+  "LLaVA 7B LM (LLaMA-7B backbone)": 5165780992
+  "LLaVA 13B LM (LLaMA-13B backbone)": 10022865920
+  "tiny-LLaVA": 4069760
+bestiary-mamba:
+  "Mamba-130M": 125572200
+  "Mamba-370M": 358786152
+  "Mamba-790M": 764646504
+  "tiny-Mamba": 577000
+bestiary-maskrcnn:
+  "Mask R-CNN backbone (ResNet-101-FPN)": 45844544
+  "Mask R-CNN RPN (shared across pyramid levels)": 591706
+  "Mask R-CNN box head (FC 1024 → 1024, COCO 80 classes)": 14306705
+  "Mask R-CNN mask head (COCO 80 classes, 28×28 masks)": 2643280
+  "tiny-MaskRCNN": 1592736
+bestiary-mobilevit:
+  "MobileViT-XXS": 1272920
+  "MobileViT-XS": 2319288
+  "MobileViT-S": 5580920
+  "tiny-MobileViT": 162618
+bestiary-muzero:
+  "MuZero Go — representation h": 18930432
+  "MuZero Go — dynamics g (next-state path)": 19483392
+  "MuZero Go — dynamics g (reward head)": 46722
+  "MuZero Go — prediction f (policy head)": 2623584
+  "MuZero Go — prediction f (value head)": 2454530
+  "MuZero Atari — representation h": 11660032
+  "tiny MuZero — representation": 231872
+  "tiny MuZero — dynamics": 259520
+bestiary-nerf:
+  "NeRF (canonical)": 592900
+  "NeRF-fast (hidden=128)": 166660
+  "tiny-NeRF": 46212
+bestiary-nystromformer:
+  "Nyströmformer base (BERT-base-shaped, O(n) attention)": 108497664
+  "Nyströmformer large (BERT-large-shaped)": 333566976
+  "tiny-Nyströmformer": 921472
+bestiary-pix2pix:
+  "Pix2Pix generator (8-level UNet, 256×256 RGB)": 67227971
+  "Pix2Pix PatchGAN discriminator (256×256 → N×N grid)": 2765697
+  "tiny-Pix2Pix generator (4-level UNet, 64×64)": 319086
+  "tiny-Pix2Pix discriminator": 42977
+bestiary-qanet:
+  "QANet encoder block (4× sep-conv + self-attn + FFN)": 270720
+  "QANet model encoder stack (7 blocks, deep body)": 1895040
+  "tiny-QANet (2 blocks, dim 32)": 31296
+bestiary-sam:
+  "SAM ViT-B image encoder": 88793856
+  "SAM ViT-L image encoder": 307295232
+  "SAM ViT-H image encoder": 635910400
+  "SAM mask decoder (shared)": 3290112
+  "tiny-SAM": 924800
+bestiary-segformer:
+  "SegFormer MiT-B0 encoder": 2641984
+  "SegFormer MiT-B2 encoder": 18860992
+  "SegFormer MiT-B5 encoder": 61178176
+  "SegFormer MLP decoder (single-scale approx at B2 widths)": 1099926
+  "tiny-SegFormer": 157402
+bestiary-shufflenet:
+  "ShuffleNet 0.5× (g=3)": 731416
+  "ShuffleNet 1.0× (g=3)": 1914736
+  "ShuffleNet 2.0× (g=3)": 5642176
+  "tiny-ShuffleNet (g=2)": 13514
+bestiary-shufflenetv2:
+  "ShuffleNet v2 0.5×": 1369560
+  "ShuffleNet v2 1.0×": 2286710
+  "ShuffleNet v2 1.5×": 3516440
+  "ShuffleNet v2 2.0×": 7411126
+  "tiny-ShuffleV2": 46314
+bestiary-squeezenet:
+  "SqueezeNet 1.0": 1251400
+  "SqueezeNet 1.1": 1238440
+  "tiny-SqueezeNet": 16906
+bestiary-stable-diffusion:
+  "SD VAE encoder (image → latent)": 6975368
+  "SD VAE decoder (latent → image)": 6646147
+  "SD text encoder (CLIP ViT-L/14 text tower)": 123002112
+  "SD 1.5 UNet denoiser (backbone approx)": 202616004
+  "SD spatial transformer block (1280-dim, 1 layer)": 26238720
+  "tiny-StableDiffusion (UNet + spatial transformer)": 2883332
+bestiary-swin:
+  "Swin-T": 28589218
+  "Swin-S": 49907122
+  "Swin-B": 88169376
+  "tiny-Swin": 2289894
+bestiary-unet:
+  "UNet (original, grayscale → 2-class)": 31036546
+  "UNet (RGB → 10-class)": 31038218
+  "UNet (small, depth 3)": 1927075
+  "tiny-UNet (depth 2)": 117361
+bestiary-vae:
+  "MNIST VAE encoder (MLP, 20-dim latent)": 330040
+  "MNIST VAE decoder (MLP, 20-dim latent)": 322784
+  "CIFAR VAE encoder (conv, 4×4×4 spatial latent)": 963656
+  "CIFAR VAE decoder (conv, 4×4×4 spatial latent)": 1346243
+  "tiny-VAE encoder (4×4×2 spatial latent)": 1340
+  "tiny-VAE decoder (4×4×2 spatial latent)": 2945
+bestiary-wavenet:
+  "WaveNet (single stack, speech)": 426464
+  "WaveNet (3 stacks, architecturally simplified)": 31924704
+  "WaveNet (music, single stack)": 4139776
+  "tiny-WaveNet": 24560
+bestiary-whisper:
+  "Whisper tiny encoder": 7098624
+  "Whisper base encoder": 18915328
+  "Whisper small encoder": 85056000
+  "Whisper medium encoder": 302311424
+  "Whisper large encoder (v1/v2/v3)": 629680640
+  "Whisper small decoder (shared shape)": 153254400
+  "tiny-Whisper encoder": 396800
+bestiary-xception:
+  "Xception": 21924976
+  "tiny-Xception": 38602
+bestiary-yolo:
+  "YOLOv1 (Redmon 2016)": 271703550
+  "Fast YOLOv1": 66648926
+  "tiny-YOLO (fixture)": 3686271
+  "YOLOv3 (single-scale view)": 40846303
+  "YOLOv5s (single-scale view)": 3025055
+  "YOLOv5m (single-scale view)": 8096895
+  "YOLOv8n (single-scale view)": 741520
+  "YOLOv8s (single-scale view)": 2883216
+  "YOLOv11n (single-scale view)": 838992
+  "YOLOv11m (single-scale view)": 9082000
