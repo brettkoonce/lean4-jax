@@ -248,9 +248,9 @@ layers, convolution, and normalization. The second half climbs the
 ladder to ViT.
 
 \begin{itemize}
-  \item \textbf{Chapter 2: The backward pass: axioms} --- Chain rule, sum
-    rule, product rule for partial derivatives. Every backward function in
-    the book is a VJP (vector-Jacobian product) built by composing these.
+  \item \textbf{Chapter 2: You Are Here} --- Chain rule, sum rule, product
+    rule for partial derivatives. Every backward function in the book is
+    a VJP (vector-Jacobian product) built by composing these.
   \item \textbf{Chapter 3: MNIST 1D MLP} --- Dense layers, ReLU, softmax CE,
     the chain rule. The most important chapter: everything after is
     adding more layers.
@@ -309,7 +309,7 @@ and decides to see how far they can go.
 
 Let's find out.
 
-\chapter{The backward pass: axioms}
+\chapter{You Are Here}
 \label{chap:tensor}
 
 A VJP (vector-Jacobian product) is the backward function for a layer:
@@ -605,7 +605,7 @@ as given) and new theorems (proven compositions Lean's typechecker
 verified). The totals across the book are 30 axioms and 45 theorems,
 with zero \texttt{sorry}s.
 
-\textbf{This chapter (2, Tensor calculus)} does the structural heavy
+\textbf{This chapter (Ch 2)} does the structural heavy
 lifting: 8 axioms --- the chain rule, additive and multiplicative
 fan-in, identity, reindexing, and three structural supports --- and
 20 theorems that compose them into the VJPs every later chapter will
@@ -657,7 +657,7 @@ through every one of them.
 \hline
 Chapter & New (ax + th) & Cumulative (ax + th) & Architectures unlocked \\
 \hline
-2 (Tensor calculus)    & 8 + 20 &  8 + 20 & foundation \\
+2 (You Are Here)       & 8 + 20 &  8 + 20 & foundation \\
 3 (MLP)                & 4 + 4  & 12 + 24 & MLP \\
 4 (CNN)                & 6 + 0  & 18 + 24 & $+$ CNN \\
 5 (BN)                 & 3 + 3  & 21 + 27 & $+$ BN-nets \\
