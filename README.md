@@ -206,7 +206,8 @@ runs reuse the cached vmfbs unless you clear `.lake/build/`.
 HIP_VISIBLE_DEVICES=0 IREE_BACKEND=rocm .lake/build/bin/resnet34-train
 
 # Or via the included shell wrapper that sets the env vars correctly
-bash run_effnet.sh
+bash run.sh resnet34                  # GPU 0, ROCm (defaults)
+bash run.sh efficientnet-v2 1 cuda    # GPU 1, CUDA
 ```
 
 For CUDA, set `IREE_BACKEND=cuda` (the default) and use `CUDA_VISIBLE_DEVICES`.
