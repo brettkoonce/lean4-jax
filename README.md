@@ -182,7 +182,9 @@ See [`IREE_BUILD.md`](IREE_BUILD.md) for build instructions.
 ### 3. Get data
 
 ```bash
-./download_imagenette.sh   # Imagenette 320px → preprocessed binary
+./download_mnist.sh        # MNIST (Ch 3-4 trainers)
+./download_cifar.sh        # CIFAR-10 (Ch 5 trainers)
+./download_imagenette.sh   # Imagenette 320px → preprocessed binary (Ch 6+)
 ```
 
 ### 4. Build a trainer
