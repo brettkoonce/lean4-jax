@@ -245,6 +245,40 @@ theorem pdivFD_comp_of_diff {m n p : Nat} (f : Vec m → Vec n) (g : Vec n → V
   show v j * fderiv ℝ g (f x) (basisVec j) k = _
   rfl
 
+/-- **Finset-sum rule for `pdivFD`** — theorem, derived from
+    `pdivFD_add_of_diff` and `pdivFD_const` by induction on the Finset.
+    Linearity of the derivative extended to arbitrary finite sums.
+    Requires each `f s` to be differentiable at `x`. -/
+theorem pdivFD_finset_sum {m n : Nat} {α : Type*} [DecidableEq α]
+    (S : Finset α) (f : α → Vec m → Vec n) (x : Vec m)
+    (hdiff : ∀ s ∈ S, DifferentiableAt ℝ (f s) x)
+    (i : Fin m) (j : Fin n) :
+    pdivFD (fun y k => ∑ s ∈ S, f s y k) x i j =
+    ∑ s ∈ S, pdivFD (f s) x i j := by
+  induction S using Finset.induction_on with
+  | empty =>
+    simp only [Finset.sum_empty]
+    exact pdivFD_const (fun _ : Fin n => (0 : ℝ)) x i j
+  | @insert a T ha ih =>
+    have hdiff_a : DifferentiableAt ℝ (f a) x :=
+      hdiff a (Finset.mem_insert_self a T)
+    have hdiff_T : ∀ s ∈ T, DifferentiableAt ℝ (f s) x := fun s hs =>
+      hdiff s (Finset.mem_insert_of_mem hs)
+    have hdiff_sumT :
+        DifferentiableAt ℝ (fun y : Vec m => fun k : Fin n => ∑ s ∈ T, f s y k) x := by
+      have heq_curry : (fun y : Vec m => fun k : Fin n => ∑ s ∈ T, f s y k)
+                     = (fun y : Vec m => ∑ s ∈ T, f s y) := by
+        funext y k; rw [Finset.sum_apply]
+      rw [heq_curry]
+      exact DifferentiableAt.fun_sum (fun s hs => hdiff_T s hs)
+    have heq :
+        (fun (y : Vec m) (k : Fin n) => ∑ s ∈ insert a T, f s y k) =
+        (fun y k => f a y k + (fun y' k' => ∑ s ∈ T, f s y' k') y k) := by
+      funext y k
+      rw [Finset.sum_insert ha]
+    rw [heq, pdivFD_add_of_diff _ _ _ hdiff_a hdiff_sumT, ih hdiff_T,
+        Finset.sum_insert ha]
+
 /-- **Finset-sum rule for `pdiv`** — theorem, derived from `pdiv_add`
     and `pdiv_const` by induction on the Finset. Linearity of the
     derivative extended to arbitrary finite sums. -/
