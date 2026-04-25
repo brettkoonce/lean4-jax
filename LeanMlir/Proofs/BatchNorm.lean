@@ -324,21 +324,53 @@ theorem bnXhat_eq_product (n : Nat) (ε : ℝ) (x : Vec n) :
   unfold bnXhat bnCentered bnIstdBroadcast
   rfl
 
-/-- **Centered-input Jacobian** — axiomatized elementary fact.
+/-- **Centered-input Jacobian** — proved from foundation rules.
 
     `∂(xⱼ - μ(x))/∂xᵢ = δᵢⱼ - 1/n`
 
-    The mean `μ(x) = (1/n) Σₖ xₖ` is a linear combination with
-    constant coefficients `1/n`, so its partial derivative w.r.t. each
-    input is `1/n`.  Subtracting from the identity gives `δᵢⱼ - 1/n`.
-
-    **Mathlib correspondence**: follows from `HasFDerivAt.sub` applied
-    to `id` (derivative = identity map) and `(1/n) · (∑ x)`
-    (derivative = constant `1/n`).  We axiomatize the `pdiv` form
-    directly to stay in our framework. -/
-axiom pdiv_bnCentered (n : Nat) (x : Vec n) (i j : Fin n) :
+    Decomposition: `bnCentered y k = y k - (∑ s, y s)/n` factors as
+    `(id y) k + (-(1/n)) * (∑ s, y s)`. The first half collapses via
+    `pdiv_id`; the second factors as `(constant) * (sum)` and uses
+    `pdiv_mul` + `pdiv_const` + `pdiv_finset_sum` + `pdiv_reindex` to
+    yield `-1/n`. -/
+theorem pdiv_bnCentered (n : Nat) (x : Vec n) (i j : Fin n) :
     pdiv (bnCentered n) x i j =
-      (if i = j then (1 : ℝ) else 0) - 1 / (n : ℝ)
+      (if i = j then (1 : ℝ) else 0) - 1 / (n : ℝ) := by
+  -- Step 1: rewrite bnCentered as `id + (-(∑ ·)/n)`.
+  rw [show (bnCentered n : Vec n → Vec n) =
+        (fun y k =>
+          (fun (y' : Vec n) => y') y k +
+          (fun (y' : Vec n) (_ : Fin n) => -((∑ s : Fin n, y' s) / (n : ℝ))) y k) from by
+    funext y k
+    unfold bnCentered bnMean
+    ring]
+  rw [pdiv_add, pdiv_id]
+  -- Step 2: factor the negMean term as (constant -1/n) * (sum).
+  rw [show (fun (y' : Vec n) (_ : Fin n) => -((∑ s : Fin n, y' s) / (n : ℝ))) =
+        (fun y' k =>
+          (fun (_ : Vec n) (_ : Fin n) => -(1 / (n : ℝ))) y' k *
+          (fun (z : Vec n) (_ : Fin n) => ∑ s : Fin n, z s) y' k) from by
+    funext y' k
+    ring]
+  rw [pdiv_mul]
+  rw [show pdiv (fun (_ : Vec n) (_ : Fin n) => -(1 / (n : ℝ))) x i j = 0
+      from pdiv_const (fun _ : Fin n => -(1 / (n : ℝ))) x i j]
+  -- Step 3: pdiv of `∑ s, z s` via pdiv_finset_sum + pdiv_reindex.
+  rw [show (fun (z : Vec n) (_ : Fin n) => ∑ s : Fin n, z s) =
+        (fun z k => ∑ s : Fin n,
+          (fun (z' : Vec n) (_ : Fin n) => z' s) z k) from rfl]
+  rw [pdiv_finset_sum]
+  have h_term : ∀ s : Fin n,
+      pdiv (fun (z' : Vec n) (_ : Fin n) => z' s) x i j =
+        if i = s then (1 : ℝ) else 0 := by
+    intro s
+    rw [show (fun (z' : Vec n) (_ : Fin n) => z' s) =
+          (fun z' => fun k' : Fin n => z' ((fun _ : Fin n => s) k')) from rfl]
+    rw [pdiv_reindex (fun _ : Fin n => s)]
+  simp_rw [h_term]
+  rw [Finset.sum_ite_eq Finset.univ i (fun _ : Fin n => (1 : ℝ))]
+  simp
+  ring
 
 /-- **Broadcast inverse-stddev Jacobian** — axiomatized elementary fact.
 
