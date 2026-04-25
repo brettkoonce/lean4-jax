@@ -1,7 +1,10 @@
 # VJP.md — Atomic Flip Plan for the Next Session
 
-**Branch:** `axiom-elimination` (head: `e033da0`)
+**Branch:** `axiom-elimination` (head: `336045d`)
 **Project axiom count:** 23. **Goal:** drop to ~15 after the flip, ~13 if bonus removals land.
+
+> **2026-04-25 update — flip attempt #2 made and reverted.**
+> An attempt was made and committed (was `59b3e35`). It was discovered to be **unsound** in two places and reverted (now back at `336045d`). Read the **Soundness analysis** section below before attempting again. The plan in this file as written reproduces the soundness bug; do not execute it without addressing the issues.
 
 ---
 
@@ -155,6 +158,46 @@ What's left after this session (13 axioms):
 These 13 are the long tail. Each is multi-day proof work.
 
 ---
+
+## Soundness analysis (2026-04-25, after flip attempt #2)
+
+The flip in this plan **does not preserve soundness** as written. Two problems:
+
+### 1. `pdiv_relu` axiom contradicts fderiv-based `pdiv` in multi-D
+
+The axiom (`MLP.lean:217`) says
+
+```lean
+pdiv (relu n) x i j = if i = j then (if x i > 0 then 1 else 0) else 0
+```
+
+For `n ≥ 2`, take `x = (1, 0) : Vec 2`. The function `relu 2` is **not** `Differentiable` at this point — the second coordinate `y_1 ↦ if y_1 > 0 then y_1 else 0` is not differentiable at `y_1 = 0`, and Mathlib's `fderiv_pi` says a Pi-valued function is differentiable iff each coordinate is. So `fderiv ℝ (relu 2) (1, 0) = 0` (Mathlib's junk default), making `pdiv (relu 2) (1, 0) 0 0 = 0`. But the axiom asserts `1` (since `x 0 = 1 > 0`). **0 ≠ 1, so the axiom + the def derive False.**
+
+The axiom is consistent with the *axiomatic* `pdiv` (since the pure axiom doesn't pin down values) but **not** with the fderiv-grounded def.
+
+### 2. Unconditional `pdiv_add` / `pdiv_mul` / `pdiv_comp` axioms contradict fderiv
+
+If, to avoid threading `Differentiable` everywhere, one keeps the bilinear rules as **unconditional** axioms (a path #2 attempt to minimize downstream churn), the same kind of contradiction arises immediately. Counterexample for `pdiv_add`: take `f y = fun _ => abs (y 0)` (not Diff at 0) and `g y = fun _ => y 0` (= identity, Diff with `fderiv = id`). Then at `x_0 = 0`:
+
+- `f + g` has a kink at 0, so `fderiv (f+g)` is junk = 0, so LHS = `pdiv (f+g) x 0 0 = 0`.
+- `pdiv f x 0 0` is junk = 0; `pdiv g x 0 0 = 1`. So RHS = `0 + 1 = 1`.
+- Axiom claims LHS = RHS, i.e., `0 = 1`.
+
+This is the same gotcha already flagged in `project_axiom_elimination.md`.
+
+### Why the project's `HasVJP` framework relies on axiomatic `pdiv`
+
+`HasVJP f` requires `correct` to hold *for all `x`*. For ReLU at the kink, the only way `correct` can hold is if `pdiv (relu n) x` returns the subgradient convention (`1` if `x_i > 0` else `0`). That convention contradicts `fderiv`'s junk = 0 at multi-D non-smooth points (problem #1 above). So `HasVJP` for non-smooth functions fundamentally **needs** `pdiv` to be axiomatic, not fderiv-grounded.
+
+### What a sound flip would have to do
+
+Any future flip that switches `pdiv` to a `def` must simultaneously:
+
+- Replace the `pdiv_relu` axiom (and similarly any other "specific value at this point" axiom) with one that is consistent with `fderiv`'s junk default — e.g., guarded by a `(∀ k, x k ≠ 0)` hypothesis. Or, redefine `relu` (and its kin) as smooth approximations.
+- **Or** weaken `HasVJP`'s `correct` field so it only constrains the backward at points where `f` is differentiable (and supplies a separate subgradient-convention obligation at non-smooth points). This is a project-wide change.
+- **Or** keep the bilinear rules `pdiv_add` / `pdiv_mul` / `pdiv_comp` unconditional, but redefine `pdiv` as something other than `fderiv ℝ f x (basisVec i) j` — e.g., a Hahn-Banach-style choice that satisfies the unconditional rules.
+
+None of these are small changes. Until one is done, the project axiom count stays at 23. The parallel-track `pdivFD_*` proofs remain useful as documentation that, *for the smooth subset*, `pdiv` could be fderiv-grounded.
 
 ## Risk areas / known pitfalls
 
