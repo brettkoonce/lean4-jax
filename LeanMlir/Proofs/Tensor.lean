@@ -1630,6 +1630,78 @@ theorem pdiv3_add {c₁ h₁ w₁ c₂ h₂ w₂ : Nat}
     rfl
   rw [h_flat, pdiv_add]
 
+-- ════════════════════════════════════════════════════════════════
+-- § 3-tensor-level pdivFD (parallel to pdiv3, Mathlib-grounded)
+--
+-- Mirrors `pdiv3` but built on `pdivFD`. Same structure as the
+-- matrix-level `pdivFDMat` block, just one extra dimension via
+-- `Tensor3.flatten`/`Tensor3.unflatten`.
+-- ════════════════════════════════════════════════════════════════
+
+/-- 3-tensor partial derivative using `pdivFD` (Mathlib's `fderiv`).
+    Same shape as `pdiv3`. -/
+noncomputable def pdivFD3 {c₁ h₁ w₁ c₂ h₂ w₂ : Nat}
+    (f : Tensor3 c₁ h₁ w₁ → Tensor3 c₂ h₂ w₂)
+    (x : Tensor3 c₁ h₁ w₁)
+    (ci : Fin c₁) (hi : Fin h₁) (wi : Fin w₁)
+    (co : Fin c₂) (ho : Fin h₂) (wo : Fin w₂) : ℝ :=
+  pdivFD (fun v : Vec (c₁ * h₁ * w₁) =>
+          Tensor3.flatten (f (Tensor3.unflatten v)))
+    (Tensor3.flatten x)
+    (finProdFinEquiv (finProdFinEquiv (ci, hi), wi))
+    (finProdFinEquiv (finProdFinEquiv (co, ho), wo))
+
+/-- **Identity Jacobian for `pdivFD3`** — proved from `pdivFD_id`.
+    Mirrors `pdiv3_id`. -/
+theorem pdivFD3_id {c h w : Nat} (x : Tensor3 c h w)
+    (ci : Fin c) (hi : Fin h) (wi : Fin w)
+    (co : Fin c) (ho : Fin h) (wo : Fin w) :
+    pdivFD3 (fun (t : Tensor3 c h w) => t) x ci hi wi co ho wo =
+      if ci = co ∧ hi = ho ∧ wi = wo then 1 else 0 := by
+  unfold pdivFD3
+  have h_id : (fun v : Vec (c * h * w) =>
+                Tensor3.flatten (Tensor3.unflatten v)) =
+              (fun v : Vec (c * h * w) => v) := by
+    funext v; exact Tensor3.flatten_unflatten v
+  rw [h_id, pdivFD_id]
+  by_cases h : ci = co ∧ hi = ho ∧ wi = wo
+  · obtain ⟨hc, hh, hw⟩ := h
+    subst hc; subst hh; subst hw; simp
+  · rw [if_neg h, if_neg]
+    intro heq
+    apply h
+    have step1 := finProdFinEquiv.injective heq
+    have hw_eq : wi = wo := (Prod.mk.inj step1).2
+    have step2 := finProdFinEquiv.injective (Prod.mk.inj step1).1
+    exact ⟨(Prod.mk.inj step2).1, (Prod.mk.inj step2).2, hw_eq⟩
+
+/-- **Sum rule for `pdivFD3`** — proved from `pdivFD_add_of_diff` via
+    `Tensor3.flatten`. Requires both `f` and `g` (in their flattened
+    forms) to be differentiable at `flatten x`. Mirrors `pdiv3_add`. -/
+theorem pdivFD3_add_of_diff {c₁ h₁ w₁ c₂ h₂ w₂ : Nat}
+    (f g : Tensor3 c₁ h₁ w₁ → Tensor3 c₂ h₂ w₂)
+    (x : Tensor3 c₁ h₁ w₁)
+    (hf_diff : DifferentiableAt ℝ
+      (fun v : Vec (c₁ * h₁ * w₁) => Tensor3.flatten (f (Tensor3.unflatten v)))
+      (Tensor3.flatten x))
+    (hg_diff : DifferentiableAt ℝ
+      (fun v : Vec (c₁ * h₁ * w₁) => Tensor3.flatten (g (Tensor3.unflatten v)))
+      (Tensor3.flatten x))
+    (ci : Fin c₁) (hi : Fin h₁) (wi : Fin w₁)
+    (co : Fin c₂) (ho : Fin h₂) (wo : Fin w₂) :
+    pdivFD3 (fun y c h w => f y c h w + g y c h w) x ci hi wi co ho wo
+    = pdivFD3 f x ci hi wi co ho wo + pdivFD3 g x ci hi wi co ho wo := by
+  unfold pdivFD3
+  have h_flat : (fun v : Vec (c₁ * h₁ * w₁) =>
+                  Tensor3.flatten ((fun y c h w => f y c h w + g y c h w)
+                    (Tensor3.unflatten v))) =
+                (fun v k => (fun w => Tensor3.flatten (f (Tensor3.unflatten w))) v k +
+                            (fun w => Tensor3.flatten (g (Tensor3.unflatten w))) v k) := by
+    funext v k
+    unfold Tensor3.flatten
+    rfl
+  rw [h_flat, pdivFD_add_of_diff _ _ _ hf_diff hg_diff]
+
 @[reducible] noncomputable def biPath3 {c₁ h₁ w₁ c₂ h₂ w₂ : Nat}
     (f g : Tensor3 c₁ h₁ w₁ → Tensor3 c₂ h₂ w₂) :
     Tensor3 c₁ h₁ w₁ → Tensor3 c₂ h₂ w₂ :=
