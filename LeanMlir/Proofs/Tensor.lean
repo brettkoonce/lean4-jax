@@ -815,10 +815,102 @@ theorem pdivMat_matmul_right_const {m p q : Nat} (A : Mat m p) (D : Mat p q)
       fun s => ⟨fun h => hik h.2, False.elim⟩]
     simp
 
-axiom pdivMat_rowIndep {m n p : Nat} (g : Vec n → Vec p)
+/-- **Row-wise Jacobian decomposition** — proved (VJP.md follow-up D).
+
+    For a row-independent function `M ↦ (r ↦ g (M r))`, the (i,j,k,l)
+    Jacobian entry is `pdiv g (A i) j l` when `i = k` and `0` otherwise.
+
+    Requires `Differentiable ℝ g`: without it, the flattened Pi-valued
+    function may be non-differentiable at `Mat.flatten A` (per
+    `differentiable_pi`'s coordinate-wise condition), making `fderiv = 0`
+    junk and breaking the per-row decomposition. -/
+theorem pdivMat_rowIndep {m n p : Nat} (g : Vec n → Vec p)
+    (h_g_diff : Differentiable ℝ g)
     (A : Mat m n) (i : Fin m) (j : Fin n) (k : Fin m) (l : Fin p) :
     pdivMat (fun M : Mat m n => fun r => g (M r)) A i j k l =
-    if i = k then pdiv g (A i) j l else 0
+    if i = k then pdiv g (A i) j l else 0 := by
+  unfold pdivMat pdiv
+  set F : Vec (m * n) → Vec (m * p) :=
+    fun v => Mat.flatten ((fun M : Mat m n => fun r => g (M r)) (Mat.unflatten v))
+    with hF
+  set rowProj : Fin m → (Vec (m * n) →L[ℝ] Vec n) := fun k' =>
+    reindexCLM (fun j' : Fin n => finProdFinEquiv (k', j'))
+  -- Coord decomposition: F's (k', l') coord equals (g · l') ∘ rowProj k'.
+  have h_coord : ∀ (k' : Fin m) (l' : Fin p),
+      (fun v : Vec (m * n) => F v (finProdFinEquiv (k', l'))) =
+      (fun w : Vec n => g w l') ∘ (rowProj k') := by
+    intro k' l'
+    funext v
+    show Mat.flatten ((fun M : Mat m n => fun r => g (M r)) (Mat.unflatten v))
+        (finProdFinEquiv (k', l')) = g ((rowProj k') v) l'
+    unfold Mat.flatten
+    simp only [Equiv.symm_apply_apply]
+    show g (Mat.unflatten v k') l' = g ((rowProj k') v) l'
+    rfl
+  have h_g_l : ∀ (l' : Fin p) (w : Vec n),
+      DifferentiableAt ℝ (fun w => g w l') w :=
+    fun l' w => differentiableAt_pi.mp (h_g_diff w) l'
+  have h_coord_diff : ∀ (k' : Fin m) (l' : Fin p) (v : Vec (m * n)),
+      DifferentiableAt ℝ (fun v' : Vec (m * n) => F v' (finProdFinEquiv (k', l'))) v := by
+    intro k' l' v
+    rw [h_coord k' l']
+    exact (h_g_l l' _).comp v (rowProj k').differentiableAt
+  have h_F_diff : DifferentiableAt ℝ F (Mat.flatten A) := by
+    rw [(differentiableAt_pi : DifferentiableAt ℝ F (Mat.flatten A) ↔ _)]
+    intro idx
+    have h_idx : finProdFinEquiv (finProdFinEquiv.symm idx) = idx :=
+      Equiv.apply_symm_apply _ _
+    have h_idx' : idx = finProdFinEquiv
+        ((finProdFinEquiv.symm idx).1, (finProdFinEquiv.symm idx).2) := by
+      conv_lhs => rw [← h_idx]
+    rw [h_idx']
+    exact h_coord_diff _ _ (Mat.flatten A)
+  -- Convert coord (fPF (k,l)) of fderiv F to fderiv of the (k,l)-coord function.
+  have h_swap :
+      fderiv ℝ F (Mat.flatten A) (basisVec (finProdFinEquiv (i, j))) (finProdFinEquiv (k, l)) =
+      fderiv ℝ (fun v : Vec (m * n) => F v (finProdFinEquiv (k, l))) (Mat.flatten A)
+        (basisVec (finProdFinEquiv (i, j))) := by
+    rw [fderiv_apply h_F_diff (finProdFinEquiv (k, l))]
+    rfl
+  rw [h_swap]
+  rw [h_coord k l]
+  rw [fderiv_comp _ (h_g_l l _) (rowProj k).differentiableAt]
+  rw [(rowProj k).fderiv]
+  have h_row_A : (rowProj k) (Mat.flatten A) = A k := by
+    funext j'
+    show Mat.flatten A (finProdFinEquiv (k, j')) = A k j'
+    show A (finProdFinEquiv.symm (finProdFinEquiv (k, j'))).1
+            (finProdFinEquiv.symm (finProdFinEquiv (k, j'))).2 = A k j'
+    simp
+  rw [h_row_A]
+  rw [fderiv_apply (h_g_diff _) l]
+  -- Evaluate the comp chain so the inner rowProj is exposed.
+  simp only [ContinuousLinearMap.comp_apply, ContinuousLinearMap.proj_apply]
+  by_cases hik : i = k
+  · subst hik
+    rw [if_pos rfl]
+    have h_basis : (rowProj i) (basisVec (finProdFinEquiv (i, j))) = basisVec j := by
+      funext j'
+      show basisVec (finProdFinEquiv (i, j)) (finProdFinEquiv (i, j')) = basisVec j j'
+      simp only [basisVec_apply]
+      by_cases hjj : j' = j
+      · subst hjj; simp
+      · rw [if_neg hjj, if_neg ?_]
+        intro heq
+        apply hjj
+        exact (Prod.mk.inj (finProdFinEquiv.injective heq.symm)).2.symm
+    rw [h_basis]
+  · rw [if_neg hik]
+    have h_basis : (rowProj k) (basisVec (finProdFinEquiv (i, j))) = (0 : Vec n) := by
+      funext j'
+      show basisVec (finProdFinEquiv (i, j)) (finProdFinEquiv (k, j')) = (0 : ℝ)
+      simp only [basisVec_apply]
+      rw [if_neg]
+      intro heq
+      apply hik
+      exact (Prod.mk.inj (finProdFinEquiv.injective heq)).1.symm
+    rw [h_basis]
+    simp
 
 /-- **Row-wise lifting of a `HasVJP`** (Phase 8, Tensor-level).
 
@@ -829,13 +921,13 @@ axiom pdivMat_rowIndep {m n p : Nat} (g : Vec n → Vec p)
     operation (LayerNorm, GELU, dense, activation) lifts to a per-sequence
     matrix operation via this one helper. -/
 noncomputable def rowwise_has_vjp_mat {m n p : Nat} {g : Vec n → Vec p}
-    (hg : HasVJP g) :
+    (hg : HasVJP g) (hg_diff : Differentiable ℝ g) :
     HasVJPMat (fun A : Mat m n => fun r => g (A r)) where
   backward := fun A dY => fun r c => hg.backward (A r) (dY r) c
   correct := by
     intro A dY i j
     -- Replace pdivMat of the row-independent fn with its row/vector form.
-    simp_rw [pdivMat_rowIndep]
+    simp_rw [pdivMat_rowIndep g hg_diff]
     -- Push the *dY through the if-else, then pull the if-else out of the inner sum.
     have h : ∀ k : Fin m,
         (∑ l : Fin p, (if i = k then pdiv g (A i) j l else 0) * dY k l) =

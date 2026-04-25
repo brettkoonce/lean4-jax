@@ -119,16 +119,99 @@ theorem gelu_per_token_flat_diff (N D : Nat) :
                    (Mat.unflatten v))) := by
   unfold Mat.unflatten Mat.flatten gelu geluScalar; fun_prop
 
+/-- Differentiability of `dense W b` as a function of the input. -/
+lemma dense_diff {m n : Nat} (W : Mat m n) (b : Vec n) :
+    Differentiable ℝ (dense W b) := by
+  unfold dense; fun_prop
+
+/-- Differentiability of `gelu D` as a function on `Vec D`.
+    Now provable via `fun_prop` since `Real.differentiable_tanh` is
+    tagged. -/
+lemma gelu_diff (D : Nat) : Differentiable ℝ (gelu D) := by
+  unfold gelu geluScalar; fun_prop
+
+/-- Differentiability of `softmax c` — same recipe as `rowSoftmax_flat_diff`,
+    but on the unflattened vector. -/
+lemma softmax_diff (c : Nat) : Differentiable ℝ (softmax c) := by
+  match c with
+  | 0 =>
+    -- Codomain Vec 0 — trivially differentiable.
+    rw [show (softmax 0 : Vec 0 → Vec 0) = (fun _ : Vec 0 => fun (k : Fin 0) => (0 : ℝ)) by
+      funext _ k; exact k.elim0]
+    intro v
+    exact (differentiable_const _).differentiableAt
+  | c + 1 =>
+    rw [differentiable_pi]
+    intro k
+    -- The k-th coord is `exp(z k) * (Σ j, exp(z j))⁻¹`.
+    have h_fn : (fun z : Vec (c + 1) => softmax (c + 1) z k) =
+                (fun z : Vec (c + 1) =>
+                  Real.exp (z k) * (∑ j : Fin (c + 1), Real.exp (z j))⁻¹) := by
+      funext z
+      show (let e := fun j => Real.exp (z j); let total := ∑ k', e k'; e k / total) = _
+      rw [div_eq_mul_inv]
+    rw [h_fn]
+    have h_num : Differentiable ℝ (fun z : Vec (c + 1) => Real.exp (z k)) := by fun_prop
+    have h_denom : Differentiable ℝ
+        (fun z : Vec (c + 1) => ∑ j : Fin (c + 1), Real.exp (z j)) := by fun_prop
+    have h_ne : ∀ z : Vec (c + 1),
+        (∑ j : Fin (c + 1), Real.exp (z j)) ≠ 0 := fun z =>
+      (Finset.sum_pos (fun j _ => Real.exp_pos _) Finset.univ_nonempty).ne'
+    have h_inv : Differentiable ℝ
+        (fun z : Vec (c + 1) => (∑ j : Fin (c + 1), Real.exp (z j))⁻¹) :=
+      fun z => (h_denom z).inv (h_ne z)
+    exact h_num.mul h_inv
+
+/-- Differentiability of `layerNormForward D ε γ β`.
+    `layerNormForward = bnForward = bnAffine ∘ bnNormalize` (definitionally),
+    where the chain is differentiable when `ε > 0`. -/
+lemma layerNorm_diff (D : Nat) (ε γ β : ℝ) (hε : 0 < ε) :
+    Differentiable ℝ (layerNormForward D ε γ β) := by
+  show Differentiable ℝ (bnForward D ε γ β)
+  rw [bnForward_eq_compose]
+  -- bnForward = bnAffine ∘ bnNormalize
+  apply Differentiable.comp
+  · -- bnAffine is differentiable
+    unfold bnAffine; fun_prop
+  · -- bnNormalize is differentiable (centered * istdBroadcast, both diff)
+    rw [show bnNormalize D ε =
+          (fun y : Vec D => fun k : Fin D =>
+            bnCentered D y k * bnIstdBroadcast D ε y k) from by
+      funext y; exact bnXhat_eq_product D ε y]
+    have h_centered : Differentiable ℝ (bnCentered D) := by
+      unfold bnCentered bnMean; fun_prop
+    exact h_centered.mul (bnIstdBroadcast_diff D ε hε)
+
 /-- Differentiability of the flattened per-token LayerNorm map.
-    `layerNormForward = bnForward`, which is `bnAffine ∘ bnNormalize`
-    where `bnNormalize` involves `1/√(bnVar+ε)`. Smoothness depends
-    on the `bnIstdBroadcast_diff` axiom (Stage 2d) plus the analogous
-    composition; per-token-flat lift is **axiomatized** for the same
-    reason as `bnIstdBroadcast_diff` itself. Takes `(hε : 0 < ε)`. -/
-axiom layerNorm_per_token_flat_diff (N D : Nat) (ε γ β : ℝ) (hε : 0 < ε) :
+    Now a theorem (was an axiom): each output coord projects through a
+    row-projection CLM into `layerNorm_diff` at that row. -/
+theorem layerNorm_per_token_flat_diff (N D : Nat) (ε γ β : ℝ) (hε : 0 < ε) :
     Differentiable ℝ (fun v : Vec (N * D) =>
       Mat.flatten ((fun X : Mat N D => fun n => layerNormForward D ε γ β (X n))
-                   (Mat.unflatten v)))
+                   (Mat.unflatten v))) := by
+  rw [differentiable_pi]
+  intro idx
+  set p := finProdFinEquiv.symm idx
+  -- The idx-coord equals layerNormForward applied to the p.1-th row, then
+  -- coord p.2: layerNormForward (row_proj_p.1 v) p.2.
+  have h_eq : (fun v : Vec (N * D) =>
+        Mat.flatten ((fun X : Mat N D => fun n => layerNormForward D ε γ β (X n))
+                     (Mat.unflatten v)) idx) =
+      (fun w : Vec D => layerNormForward D ε γ β w p.2) ∘
+      (fun v : Vec (N * D) => fun j' : Fin D => v (finProdFinEquiv (p.1, j'))) := by
+    funext v
+    show Mat.flatten _ idx = _
+    show layerNormForward D ε γ β (Mat.unflatten v p.1) p.2 = _
+    rfl
+  rw [h_eq]
+  -- (layerNormForward _ _ _ _ · p.2) is the p.2-coord projection of layerNormForward;
+  -- diff via layerNorm_diff + differentiableAt_pi.mp.
+  have h_outer : Differentiable ℝ (fun w : Vec D => layerNormForward D ε γ β w p.2) :=
+    fun w => differentiableAt_pi.mp ((layerNorm_diff D ε γ β hε) w) p.2
+  have h_proj : Differentiable ℝ
+      (fun v : Vec (N * D) => fun j' : Fin D => v (finProdFinEquiv (p.1, j'))) :=
+    (reindexCLM (fun j' : Fin D => finProdFinEquiv (p.1, j'))).differentiable
+  exact h_outer.comp h_proj
 
 /-- Differentiability of the flattened identity matrix map.
     `Mat.flatten ∘ id ∘ Mat.unflatten = id` on `Vec (a*b)`. -/
@@ -323,7 +406,7 @@ noncomputable def rowSoftmax_has_vjp_mat {m n : Nat} :
   correct := by
     intro A dY i j
     -- Replace pdivMat of the row-independent fn with its row/vector form.
-    simp_rw [pdivMat_rowIndep]
+    simp_rw [pdivMat_rowIndep _ (softmax_diff n)]
     -- Goal: (softmax_has_vjp n).backward (A i) (dY i) j =
     --       Σ k, Σ l, (if i = k then pdiv (softmax n) (A i) j l else 0) * dY k l
     -- Push the *dY through the if-else, then pull the if-else out of the inner sum.
@@ -820,20 +903,20 @@ Every per-token operation in a transformer (LN, dense, GELU) lifts from
 noncomputable def layerNorm_per_token_has_vjp_mat (N D : Nat) (ε γ β : ℝ)
     (hε : 0 < ε) :
     HasVJPMat (fun X : Mat N D => fun n => layerNormForward D ε γ β (X n)) :=
-  rowwise_has_vjp_mat (layerNorm_has_vjp D ε γ β hε)
+  rowwise_has_vjp_mat (layerNorm_has_vjp D ε γ β hε) (layerNorm_diff D ε γ β hε)
 
 /-- Per-token dense projection across a sequence.
     `Q = X · W + b`, row-by-row dense with shared weights. -/
 noncomputable def dense_per_token_has_vjp_mat (N inD outD : Nat)
     (W : Mat inD outD) (b : Vec outD) :
     HasVJPMat (fun X : Mat N inD => fun n => dense W b (X n)) :=
-  rowwise_has_vjp_mat (dense_has_vjp W b)
+  rowwise_has_vjp_mat (dense_has_vjp W b) (dense_diff W b)
 
 /-- Per-token GELU across a sequence. Elementwise activation,
     so diagonal Jacobian both across rows and within a row. -/
 noncomputable def gelu_per_token_has_vjp_mat (N D : Nat) :
     HasVJPMat (fun X : Mat N D => fun n => gelu D (X n)) :=
-  rowwise_has_vjp_mat (gelu_has_vjp D)
+  rowwise_has_vjp_mat (gelu_has_vjp D) (gelu_diff D)
 
 /-! ## A transformer encoder block
 
