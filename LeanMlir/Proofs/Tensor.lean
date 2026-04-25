@@ -565,6 +565,54 @@ theorem pdivFDMat_transpose {m n : Nat} (A : Mat m n)
       exact ⟨(Prod.mk.inj this).2, (Prod.mk.inj this).1⟩
     rw [if_neg hne, if_neg h]
 
+/-- **Chain rule for `pdivFDMat`** — proved from `pdivFD_comp_of_diff`
+    via the flatten bijection. Requires `F` (flattened) to be
+    differentiable at `flatten A`, and `G` (flattened) to be
+    differentiable at `flatten (F A)`. Mirrors `pdivMat_comp`. -/
+theorem pdivFDMat_comp_of_diff {a b c d e f : Nat}
+    (F : Mat a b → Mat c d) (G : Mat c d → Mat e f)
+    (A : Mat a b)
+    (hF_diff : DifferentiableAt ℝ
+      (fun v : Vec (a * b) => Mat.flatten (F (Mat.unflatten v))) (Mat.flatten A))
+    (hG_diff : DifferentiableAt ℝ
+      (fun u : Vec (c * d) => Mat.flatten (G (Mat.unflatten u))) (Mat.flatten (F A)))
+    (i : Fin a) (j : Fin b) (k : Fin e) (l : Fin f) :
+    pdivFDMat (G ∘ F) A i j k l =
+    ∑ p : Fin c, ∑ q : Fin d,
+      pdivFDMat F A i j p q * pdivFDMat G (F A) p q k l := by
+  unfold pdivFDMat
+  have h_compose :
+      (fun v : Vec (a * b) => Mat.flatten ((G ∘ F) (Mat.unflatten v))) =
+      (fun u : Vec (c * d) => Mat.flatten (G (Mat.unflatten u))) ∘
+      (fun v : Vec (a * b) => Mat.flatten (F (Mat.unflatten v))) := by
+    funext v
+    simp [Function.comp, Mat.unflatten_flatten]
+  have h_mid :
+      (fun v : Vec (a * b) => Mat.flatten (F (Mat.unflatten v))) (Mat.flatten A)
+      = Mat.flatten (F A) := by
+    simp [Mat.unflatten_flatten]
+  have hG_diff' : DifferentiableAt ℝ
+      (fun u : Vec (c * d) => Mat.flatten (G (Mat.unflatten u)))
+      ((fun v : Vec (a * b) => Mat.flatten (F (Mat.unflatten v))) (Mat.flatten A)) := by
+    rw [h_mid]; exact hG_diff
+  rw [h_compose, pdivFD_comp_of_diff _ _ _ _ _ hF_diff hG_diff']
+  simp_rw [h_mid]
+  rw [Fintype.sum_equiv finProdFinEquiv.symm
+      (fun r =>
+        pdivFD (fun v => Mat.flatten (F (Mat.unflatten v))) (Mat.flatten A)
+          (finProdFinEquiv (i, j)) r *
+        pdivFD (fun u => Mat.flatten (G (Mat.unflatten u))) (Mat.flatten (F A))
+          r (finProdFinEquiv (k, l)))
+      (fun pq =>
+        pdivFD (fun v => Mat.flatten (F (Mat.unflatten v))) (Mat.flatten A)
+          (finProdFinEquiv (i, j)) (finProdFinEquiv pq) *
+        pdivFD (fun u => Mat.flatten (G (Mat.unflatten u))) (Mat.flatten (F A))
+          (finProdFinEquiv pq) (finProdFinEquiv (k, l)))
+      (fun r => by
+        show _ = _ * _
+        rw [Equiv.apply_symm_apply])]
+  rw [Fintype.sum_prod_type]
+
 /-- **Sum rule for `pdivFDMat`** — proved from `pdivFD_add_of_diff` via
     the flatten bijection. Requires both `F` and `G` (in their flattened
     forms) to be differentiable at `flatten A`. Mirrors `pdivMat_add`. -/
