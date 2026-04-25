@@ -254,11 +254,38 @@ theorem bnForward_eq_compose (n : Nat) (ε γ β : ℝ) :
     bnForward n ε γ β = bnAffine n γ β ∘ bnNormalize n ε := by
   funext x i; rfl
 
-/-- The affine Jacobian is diagonal: `∂(γ·vᵢ + β)/∂vⱼ = γ · δᵢⱼ`. -/
-axiom pdiv_bnAffine (n : Nat) (γ β : ℝ)
+/-- The affine Jacobian is diagonal: `∂(γ·vᵢ + β)/∂vⱼ = γ · δᵢⱼ`.
+
+    Proved from foundation rules: `bnAffine` decomposes as
+    `(γ · v) + (constant β)`, where the linear term factors further
+    as `(constant γ) * (identity)` for `pdiv_mul`. The pieces collapse
+    via `pdiv_add` + `pdiv_mul` + `pdiv_const` + `pdiv_id`. -/
+theorem pdiv_bnAffine (n : Nat) (γ β : ℝ)
     (v : Vec n) (i j : Fin n) :
     pdiv (bnAffine n γ β) v i j =
-      if i = j then γ else 0
+      if i = j then γ else 0 := by
+  unfold bnAffine
+  -- Decompose `γ * v i + β` as `(γ · v) + (const β)`.
+  rw [show (fun v : Vec n => fun i : Fin n => γ * v i + β) =
+        (fun v i =>
+          (fun (y : Vec n) (k : Fin n) => γ * y k) v i +
+          (fun (_ : Vec n) (_ : Fin n) => β) v i) from rfl]
+  rw [pdiv_add]
+  -- Constant term: pdiv = 0.
+  rw [show pdiv (fun (_ : Vec n) (_ : Fin n) => β) v i j = 0
+      from pdiv_const (fun _ : Fin n => β) v i j]
+  -- Linear term: factor as (constant γ) * identity, apply pdiv_mul.
+  rw [show (fun y : Vec n => fun k : Fin n => γ * y k) =
+        (fun y k =>
+          (fun (_ : Vec n) (_ : Fin n) => γ) y k *
+          (fun (y' : Vec n) => y') y k) from rfl]
+  rw [pdiv_mul]
+  rw [show pdiv (fun (_ : Vec n) (_ : Fin n) => γ) v i j = 0
+      from pdiv_const (fun _ : Fin n => γ) v i j]
+  rw [pdiv_id]
+  by_cases h : i = j
+  · rw [if_pos h, if_pos h]; ring
+  · rw [if_neg h, if_neg h]; ring
 
 -- ════════════════════════════════════════════════════════════════
 -- § The hard Jacobian: `pdiv_bnNormalize` — now derived
