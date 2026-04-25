@@ -1207,6 +1207,39 @@ noncomputable def colSlabwise_has_vjp_mat {n heads d_in d_out : Nat}
                      (fun r' j_out => dY r' (finProdFinEquiv (p_jj.1, j_out)))
                      i p_jj.2
 
+-- ════════════════════════════════════════════════════════════════
+-- § Ternary VJP for matrix functions (HasVJPMat3)
+-- ════════════════════════════════════════════════════════════════
+
+/-! ## Ternary matrix VJP
+
+For ternary-input functions like SDPA `(Q, K, V) ↦ out`, package the
+three per-input VJPs as a single structure analogous to `HasVJPMat`.
+The backward returns the triple of per-input gradients; correctness
+holds independently for each input (with the others fixed). -/
+
+/-- VJP structure for `Mat × Mat × Mat → Mat` functions where all
+    three inputs share the same shape `Mat n d_in` and the output is
+    `Mat n d_out`. Backward returns the triple of per-input gradients;
+    `correct_{1,2,3}` ensure each gradient matches the partial derivative
+    treating the other two inputs as constants. -/
+structure HasVJPMat3 {n d_in d_out : Nat}
+    (F : Mat n d_in → Mat n d_in → Mat n d_in → Mat n d_out) where
+  backward : Mat n d_in → Mat n d_in → Mat n d_in → Mat n d_out →
+             (Mat n d_in × Mat n d_in × Mat n d_in)
+  correct_1 : ∀ A B C dY i j,
+    (backward A B C dY).1 i j =
+    ∑ k : Fin n, ∑ l : Fin d_out,
+      pdivMat (fun A' => F A' B C) A i j k l * dY k l
+  correct_2 : ∀ A B C dY i j,
+    (backward A B C dY).2.1 i j =
+    ∑ k : Fin n, ∑ l : Fin d_out,
+      pdivMat (fun B' => F A B' C) B i j k l * dY k l
+  correct_3 : ∀ A B C dY i j,
+    (backward A B C dY).2.2 i j =
+    ∑ k : Fin n, ∑ l : Fin d_out,
+      pdivMat (fun C' => F A B C') C i j k l * dY k l
+
 /-- **Scalar-scale Jacobian** — theorem, derived from `pdiv_mul` +
     `pdiv_const` + `pdiv_id` via the flatten bijection.
     `∂(s · A')_{kl} / ∂A'_{ij} = s · δ_{ik,jl}`. -/

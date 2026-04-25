@@ -913,6 +913,21 @@ theorem sdpa_back_V_correct (n d : Nat) (Q K V dOut : Mat n d)
   unfold sdpa_back_V Mat.mul Mat.transpose
   rfl
 
+/-- **Bundled SDPA ternary VJP.** Packages `sdpa_back_{Q, K, V}_correct`
+    into a single `HasVJPMat3` instance. The backward triple
+    `(sdpa_back_Q, sdpa_back_K, sdpa_back_V)` gives per-input
+    gradients; correctness is the three existing per-input theorems
+    in one structure. -/
+noncomputable def sdpa_has_vjp_mat3 (n d : Nat) :
+    HasVJPMat3 (sdpa n d) where
+  backward := fun Q K V dY =>
+    (sdpa_back_Q n d Q K V dY,
+     sdpa_back_K n d Q K V dY,
+     sdpa_back_V n d Q K V dY)
+  correct_1 := sdpa_back_Q_correct n d
+  correct_2 := sdpa_back_K_correct n d
+  correct_3 := sdpa_back_V_correct n d
+
 -- ════════════════════════════════════════════════════════════════
 -- § 3. Multi-Head wrapping (Phase 8 — was hand-waved, now axiomatized)
 -- ════════════════════════════════════════════════════════════════
