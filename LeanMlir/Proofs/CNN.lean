@@ -312,7 +312,25 @@ noncomputable def conv2d_weight_grad_has_vjp {ic oc h w kH kW : Nat}
         funext v' k
         unfold Tensor3.flatten conv2d
         rfl]
-      rw [pdiv_add]
+      have h_b_diff : DifferentiableAt ℝ
+          (fun (_ : Vec (oc * ic * kH * kW)) (k' : Fin (oc * h * w)) =>
+            b ((finProdFinEquiv.symm (finProdFinEquiv.symm k').1).1)) v :=
+        differentiableAt_const _
+      have h_lin_diff : DifferentiableAt ℝ
+          (fun (v'' : Vec (oc * ic * kH * kW)) (k' : Fin (oc * h * w)) =>
+            ∑ c : Fin ic, ∑ kh : Fin kH, ∑ kw : Fin kW,
+              (Kernel4.unflatten v'')
+                ((finProdFinEquiv.symm (finProdFinEquiv.symm k').1).1) c kh kw *
+              (let pH := (kH - 1) / 2
+               let pW := (kW - 1) / 2
+               let hh := kh.val +
+                 (finProdFinEquiv.symm (finProdFinEquiv.symm k').1).2.val
+               let ww := kw.val + (finProdFinEquiv.symm k').2.val
+               if hpad : pH ≤ hh ∧ hh - pH < h ∧ pW ≤ ww ∧ ww - pW < w then
+                 x c ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
+               else 0)) v := by
+        unfold Kernel4.unflatten; fun_prop
+      rw [pdiv_add _ _ _ h_b_diff h_lin_diff]
       rw [show pdiv (fun (_ : Vec (oc * ic * kH * kW)) (k' : Fin (oc * h * w)) =>
                   b ((finProdFinEquiv.symm (finProdFinEquiv.symm k').1).1))
                 v idx_in idx_out = 0
@@ -345,7 +363,22 @@ noncomputable def conv2d_weight_grad_has_vjp {ic oc h w kH kW : Nat}
                      if hpad : pH ≤ hh ∧ hh - pH < h ∧ pW ≤ ww ∧ ww - pW < w then
                        x cc ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
                      else 0)) c v'' k') from rfl]
-      rw [pdiv_finset_sum]
+      have h_c_summand_diff : ∀ cc ∈ (Finset.univ : Finset (Fin ic)),
+          DifferentiableAt ℝ
+            (fun (v''' : Vec (oc * ic * kH * kW)) (k'' : Fin (oc * h * w)) =>
+              ∑ kh : Fin kH, ∑ kw : Fin kW,
+                (Kernel4.unflatten v''')
+                  ((finProdFinEquiv.symm (finProdFinEquiv.symm k'').1).1) cc kh kw *
+                (let pH := (kH - 1) / 2
+                 let pW := (kW - 1) / 2
+                 let hh := kh.val +
+                   (finProdFinEquiv.symm (finProdFinEquiv.symm k'').1).2.val
+                 let ww := kw.val + (finProdFinEquiv.symm k'').2.val
+                 if hpad : pH ≤ hh ∧ hh - pH < h ∧ pW ≤ ww ∧ ww - pW < w then
+                   x cc ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
+                 else 0)) v := by
+        intro cc _; unfold Kernel4.unflatten; fun_prop
+      rw [pdiv_finset_sum _ _ _ h_c_summand_diff]
       have h_inner_c : ∀ cc : Fin ic,
           pdiv (fun (v''' : Vec (oc * ic * kH * kW))
                     (k'' : Fin (oc * h * w)) =>
@@ -401,7 +434,23 @@ noncomputable def conv2d_weight_grad_has_vjp {ic oc h w kH kW : Nat}
                        if hpad : pH ≤ hh ∧ hh - pH < h ∧ pW ≤ ww ∧ ww - pW < w then
                          x cc ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
                        else 0)) kh v''' k'') from rfl]
-        rw [pdiv_finset_sum]
+        have h_kh_summand_diff : ∀ khh ∈ (Finset.univ : Finset (Fin kH)),
+            DifferentiableAt ℝ
+              (fun (v'''' : Vec (oc * ic * kH * kW)) (k''' : Fin (oc * h * w)) =>
+                ∑ kw : Fin kW,
+                  (Kernel4.unflatten v'''')
+                    ((finProdFinEquiv.symm (finProdFinEquiv.symm k''').1).1)
+                    cc khh kw *
+                  (let pH := (kH - 1) / 2
+                   let pW := (kW - 1) / 2
+                   let hh := khh.val +
+                     (finProdFinEquiv.symm (finProdFinEquiv.symm k''').1).2.val
+                   let ww := kw.val + (finProdFinEquiv.symm k''').2.val
+                   if hpad : pH ≤ hh ∧ hh - pH < h ∧ pW ≤ ww ∧ ww - pW < w then
+                     x cc ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
+                   else 0)) v := by
+          intro khh _; unfold Kernel4.unflatten; fun_prop
+        rw [pdiv_finset_sum _ _ _ h_kh_summand_diff]
         congr 1; ext khh
         rw [show (fun (v'''' : Vec (oc * ic * kH * kW))
                       (k''' : Fin (oc * h * w)) =>
@@ -431,7 +480,22 @@ noncomputable def conv2d_weight_grad_has_vjp {ic oc h w kH kW : Nat}
                      if hpad : pH ≤ hh ∧ hh - pH < h ∧ pW ≤ ww ∧ ww - pW < w then
                        x cc ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
                      else 0)) kw v'''' k''') from rfl]
-        rw [pdiv_finset_sum]
+        have h_kw_summand_diff : ∀ kww ∈ (Finset.univ : Finset (Fin kW)),
+            DifferentiableAt ℝ
+              (fun (v''''' : Vec (oc * ic * kH * kW)) (k'''' : Fin (oc * h * w)) =>
+                (Kernel4.unflatten v''''')
+                  ((finProdFinEquiv.symm (finProdFinEquiv.symm k'''').1).1)
+                  cc khh kww *
+                (let pH := (kH - 1) / 2
+                 let pW := (kW - 1) / 2
+                 let hh := khh.val +
+                   (finProdFinEquiv.symm (finProdFinEquiv.symm k'''').1).2.val
+                 let ww := kww.val + (finProdFinEquiv.symm k'''').2.val
+                 if hpad : pH ≤ hh ∧ hh - pH < h ∧ pW ≤ ww ∧ ww - pW < w then
+                   x cc ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
+                 else 0)) v := by
+          intro kww _; unfold Kernel4.unflatten; fun_prop
+        rw [pdiv_finset_sum _ _ _ h_kw_summand_diff]
         congr 1; ext kww
         -- Per-summand: factor as (reindex v) * (constant in v).
         rw [show (fun (v''''' : Vec (oc * ic * kH * kW))
@@ -466,7 +530,29 @@ noncomputable def conv2d_weight_grad_has_vjp {ic oc h w kH kW : Nat}
           funext v''''' k''''
           unfold Kernel4.unflatten
           rfl]
-        rw [pdiv_mul]
+        have h_reindex_diff : DifferentiableAt ℝ
+            (fun (v'''''' : Vec (oc * ic * kH * kW))
+                 (k''''' : Fin (oc * h * w)) =>
+              v'''''' (finProdFinEquiv (finProdFinEquiv (finProdFinEquiv
+                ((finProdFinEquiv.symm (finProdFinEquiv.symm k''''').1).1, cc),
+                  khh), kww))) v :=
+          (reindexCLM (fun k''''' : Fin (oc * h * w) =>
+            finProdFinEquiv (finProdFinEquiv (finProdFinEquiv
+              ((finProdFinEquiv.symm (finProdFinEquiv.symm k''''').1).1, cc),
+                khh), kww))).differentiableAt
+        have h_xpad_const_diff : DifferentiableAt ℝ
+            (fun (_ : Vec (oc * ic * kH * kW))
+                 (k''''' : Fin (oc * h * w)) =>
+              (let pH := (kH - 1) / 2
+               let pW := (kW - 1) / 2
+               let hh := khh.val +
+                 (finProdFinEquiv.symm (finProdFinEquiv.symm k''''').1).2.val
+               let ww := kww.val + (finProdFinEquiv.symm k''''').2.val
+               if hpad : pH ≤ hh ∧ hh - pH < h ∧ pW ≤ ww ∧ ww - pW < w then
+                 x cc ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
+               else 0)) v :=
+          differentiableAt_const _
+        rw [pdiv_mul _ _ _ h_reindex_diff h_xpad_const_diff]
         rw [show (fun (v'''''' : Vec (oc * ic * kH * kW))
                       (k''''' : Fin (oc * h * w)) =>
                   v'''''' (finProdFinEquiv (finProdFinEquiv (finProdFinEquiv
@@ -675,7 +761,24 @@ noncomputable def conv2d_bias_grad_has_vjp {ic oc h w kH kW : Nat}
         funext b' k
         unfold Tensor3.flatten conv2d
         rfl]
-      rw [pdiv_add]
+      have h_reindex_diff : DifferentiableAt ℝ
+          (fun y : Vec oc => fun k' : Fin (oc * h * w) =>
+            y ((finProdFinEquiv.symm (finProdFinEquiv.symm k').1).1)) b :=
+        (reindexCLM (fun k' : Fin (oc * h * w) =>
+          (finProdFinEquiv.symm (finProdFinEquiv.symm k').1).1)).differentiableAt
+      have h_const_diff : DifferentiableAt ℝ
+          (fun (_ : Vec oc) (k' : Fin (oc * h * w)) =>
+            ∑ c : Fin ic, ∑ kh : Fin kH, ∑ kw : Fin kW,
+              W ((finProdFinEquiv.symm (finProdFinEquiv.symm k').1).1) c kh kw *
+                (let pH := (kH - 1) / 2
+                 let pW := (kW - 1) / 2
+                 let hh := kh.val + (finProdFinEquiv.symm (finProdFinEquiv.symm k').1).2.val
+                 let ww := kw.val + (finProdFinEquiv.symm k').2.val
+                 if hpad : pH ≤ hh ∧ hh - pH < h ∧ pW ≤ ww ∧ ww - pW < w then
+                   x c ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
+                 else 0)) b :=
+        differentiableAt_const _
+      rw [pdiv_add _ _ _ h_reindex_diff h_const_diff]
       rw [show (fun y : Vec oc => fun k' : Fin (oc * h * w) =>
                   y ((finProdFinEquiv.symm (finProdFinEquiv.symm k').1).1)) =
             (fun y => fun k' => y ((fun k'' : Fin (oc * h * w) =>
