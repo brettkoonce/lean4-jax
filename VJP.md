@@ -1,334 +1,315 @@
-# VJP.md — Attempt #3: Foundation Flip with Guarded ReLU
+# VJP.md — Foundation Flip Landed; What's Left
 
-**Branch:** `axiom-elimination` (head: `c5ec77a`, 19 axioms)
-**Goal:** make the foundation **sound**, not lower the axiom count.
+**Branch:** merged into `main` (commit `10c0aaf`). Blueprint sync at
+`bde9313`. **23 project axioms.**
 
-> The count reduction is a side effect of doing the work right. Optimizing
-> count directly is what gave us attempts #1 and #2 (both reverted), plus
-> the trivial-form cosmetic commits 9c03889/f94bc03 (also reverted).
-
----
-
-## Why this is attempt #3
-
-The 7 foundation axioms in `Proofs/Tensor.lean` (`pdiv` + 6 rules) claim more
-than they can deliver. Two prior attempts to swap `axiom pdiv` for an
-`fderiv`-grounded `def pdiv` derived `False` because:
-
-1. **`pdiv_relu` is incompatible with `fderiv`-based pdiv at non-smooth
-   multi-D points.** `relu 2` at `x = (1, 0)` is not `Differentiable`
-   (the second coordinate has a kink at 0), so `fderiv ℝ (relu 2) (1, 0) = 0`
-   (Mathlib junk default), giving `pdiv (relu 2) (1, 0) 0 0 = 0`. But the
-   axiom says `1`. **Contradiction.**
-
-2. **Unconditional `pdiv_add` / `pdiv_mul` / `pdiv_comp` are incompatible
-   with `fderiv`-based pdiv when summands aren't differentiable.** The
-   axioms claim the chain/sum/product rule holds for all `f, g`. fderiv
-   only obeys these rules at points where `f` and `g` are
-   `DifferentiableAt`. At non-smooth points the axioms force `0 = 1`.
-
-The prior plans (and this file as it existed before today) tried to flip
-the foundation without resolving these issues, then ran into them
-mid-flip and reverted.
+> **Strategy summary.** Attempt #3 used "guarded ReLU" — the soundness
+> analysis from attempts #1 and #2 (still preserved below) showed why
+> the unconditional bilinear rules were inconsistent with `fderiv` and
+> why `pdiv_relu` was inconsistent at non-smooth multi-D points. The
+> fix that worked: guard `pdiv_relu` with `(∀ k, x k ≠ 0)`,
+> axiomatize `relu_has_vjp` (subgradient routing is now an honest
+> convention), and axiomatize `mlp_has_vjp` (composes through ReLU).
+> Foundation flipped cleanly; chapter migrations followed.
 
 ---
 
-## Strategy: (a) guarded `pdiv_relu`
+## What landed
 
-Three soundness fixes were identified. Picking **(a)** because it has the
-smallest blast radius:
+### Stage 1 — Foundation (Tensor.lean, commit `8290155`)
 
-- **(a) Guard `pdiv_relu` with `(∀ k, x k ≠ 0)`.** Axiom only constrains
-  `pdiv (relu n) x` at points where `relu n` is differentiable. No
-  contradiction with `fderiv`. ✅
-- **(b) Redefine ReLU as a smooth approximation.** Disconnects from real
-  ML semantics; codegen would no longer match the implementation.
-- **(c) Weaken `HasVJP.correct` to "smooth subset only".** Project-wide
-  framework rewrite. Touches every consumer of `HasVJP`.
+- `axiom pdiv` → `noncomputable def pdiv f x i j := fderiv ℝ f x (basisVec i) j`.
+- `axiom pdiv_id` / `_const` / `_reindex` → unconditional theorems.
+- `axiom pdiv_add` / `_mul` / `_comp` → theorems with `DifferentiableAt` hypotheses.
+- `pdiv_finset_sum` now requires `∀ s ∈ S, DifferentiableAt ℝ (f s) x`.
+- Internal Tensor.lean cascade threaded: `vjp_comp`, `biPath_has_vjp`,
+  `elemwiseProduct_has_vjp`, `pdivMat_comp`, `pdivMat_add`, `vjpMat_comp`,
+  `biPathMat_has_vjp`, `pdivMat_matmul_left/right_const`,
+  `pdivMat_scalarScale`, `pdiv3_comp`, `pdiv3_add`, `vjp3_comp`,
+  `biPath3_has_vjp` all take new `Differentiable` arguments.
+- Parallel-track `pdivFD*`, `pdivFDMat*`, `pdivFD3*` blocks deleted
+  (consolidated with the now-flipped main blocks).
+- `pdivFDMat_rowIndep` and `pdivMat_rowIndep` consolidated into one
+  `pdivMat_rowIndep` axiom (the rowIndep proof via `fderiv_pi` is itself
+  a deferred follow-up).
 
-(a) is the right choice for now. (c) is the principled long-term fix but
-its scope justifies its own dedicated effort once the foundation is
-proven sound.
+**Verification:** `#print axioms Proofs.pdiv_id` / `pdiv_add` / `pdivMat_comp`
+shows only `propext` / `Classical.choice` / `Quot.sound`. No project axioms.
 
-### Cost of (a): `relu_has_vjp` becomes axiomatic
+### Stage 2 — Per-chapter migrations
 
-Currently `relu_has_vjp` is a `def` whose `correct` proof uses
-`pdiv_relu` (`MLP.lean:222-226`). With guarded `pdiv_relu`, the proof
-no longer goes through for arbitrary `x` — at non-smooth points there's
-no fact about `pdiv (relu n) x` to substitute. So the def becomes an
-axiom. Net axiom count for ReLU: the same axiom, plus one.
-
-This is a feature, not a bug. The axiom now honestly admits that ReLU's
-backward at the kink is a *convention* (the subgradient `1` at `x = 0`),
-not a theorem. That's how every ML framework already treats it.
-
-`maxPool2` has the same issue but it already lives behind an axiomatic
-`maxPool2_has_vjp3`, so no new axiom needed.
-
----
-
-## Pre-flight
-
-- [ ] `git status` clean, on `axiom-elimination`.
-- [ ] `lake build` green at start.
-- [ ] Skim the parallel-track `pdivFD_*` proofs in `LeanMlir/Proofs/Tensor.lean`
-      — these are the smooth-case pdiv theorems already proven against
-      Mathlib's `fderiv`. They're the bodies of the new theorems.
-
----
-
-## Stage 1 — Foundation flip in `Proofs/Tensor.lean`
-
-**One commit, no chapter files touched.** External chapters will be
-broken at the end of this commit; that's expected.
-
-### A. Replace axiom block (lines 67-114)
-
-| Was | Becomes | Body source |
+| Chapter | Commit | Notable change |
 |---|---|---|
-| `axiom pdiv f x i j : ℝ` | `noncomputable def pdiv f x i j := fderiv ℝ f x (basisVec i) j` | new def |
-| `axiom pdiv_id` | `theorem pdiv_id` (unconditional) | `pdivFD_id` |
-| `axiom pdiv_const` | `theorem pdiv_const` (unconditional) | `pdivFD_const` |
-| `axiom pdiv_reindex` | `theorem pdiv_reindex` (unconditional) | `pdivFD_reindex` |
-| `axiom pdiv_add` | `theorem pdiv_add` w/ `DifferentiableAt` hyps | `pdivFD_add_of_diff` |
-| `axiom pdiv_mul` | `theorem pdiv_mul` w/ `DifferentiableAt` hyps | `pdivFD_mul_of_diff` |
-| `axiom pdiv_comp` | `theorem pdiv_comp` w/ `DifferentiableAt` hyps | `pdivFD_comp_of_diff` |
+| MLP | `d02fcd9` | Diff threaded through `pdiv_dense*`. **`pdiv_relu` guarded** with `(∀ k, x k ≠ 0)`. **`relu_has_vjp` and `mlp_has_vjp` axiomatized** (subgradient routing). |
+| CNN | `5f3519f` | Diff threaded through `conv2d_weight_grad_has_vjp` and `conv2d_bias_grad_has_vjp` via `unfold + fun_prop`. `conv2d_has_vjp3` and `maxPool2_has_vjp3` stay axiom (non-smooth ops). |
+| Depthwise | `8c8bc0b` | Same recipe as CNN. `depthwise_weight_grad_has_vjp3` and `depthwise_bias_grad_has_vjp` now in pure Mathlib closure. |
+| BatchNorm | `972681c` | `pdiv_bnAffine` and `pdiv_bnCentered` from foundation. `pdiv_bnNormalize`, `bnNormalize_has_vjp`, `bn_has_vjp`, `bn_input_grad_correct` now take `(hε : 0 < ε)`. **New axiom `bnIstdBroadcast_diff`** for sqrt/recip smoothness. |
+| Residual + SE + LayerNorm | `aa6807f` | Added `Differentiable` arguments to `residual_has_vjp`, `residualProj_has_vjp`, `seBlock_has_vjp`. `layerNorm_has_vjp` takes `(hε : 0 < ε)`. |
+| Attention | `7112ce3` | Diff helpers (`matmul_left_const_flat_diff`, `matmul_right_const_flat_diff`, `scalarScale_flat_diff`, `transpose_flat_diff`) via `fun_prop`. **New axiom `rowSoftmax_flat_diff`** for the smooth softmax. `sdpa_Q_chain_has_vjp` and `sdpa_K_chain_has_vjp` threaded properly. **7 high-level chains axiomatized** as a deferral (see "Mechanical follow-ups" below). |
 
-`basisVec` and `reindexCLM` move from the parallel-track section into
-the foundation block.
+### Stage 3 — Blueprint sync
 
-### B. Surgery on duplicates and downstream framework
+- `content.tex` updated: every declaration now matches its actual
+  Lean state (axiom / theorem / definition). 30 axioms → 20 in the
+  blueprint.
+- Macro definitions added to `macros/common.tex` for the new
+  notation (`\fderiv`, `\Differentiable`, `\bnIstdBroadcast`, etc.).
+  Without these the PDF build stops early; xelatex chokes on
+  undefined commands while plasTeX (web build) was permissive.
 
-The parallel `pdivFD_*` proofs become redundant after (A). Specifically:
+---
 
-1. `pdiv_finset_sum` (currently a theorem using unconditional `pdiv_add`):
-   restate with `Differentiable` hypothesis on each summand. Body
-   reuses `pdivFD_finset_sum`.
-2. Delete `pdivFD`, `pdivFD_id`, `pdivFD_const`, `pdivFD_reindex`,
-   `pdivFD_add_of_diff`, `pdivFD_mul_of_diff`, `pdivFD_comp_of_diff`,
-   `pdivFD_finset_sum` — now identical to the post-flip foundation.
-3. Same for the `pdivFDMat` block — consolidate with `pdivMat`.
-4. Same for the `pdivFD3` block — consolidate with `pdiv3`.
-5. `vjp_comp`, `biPath_has_vjp`, `elemwiseProduct_has_vjp` (and their
-   Mat / 3-tensor analogs) take new `Differentiable ℝ f` and
-   `Differentiable ℝ g` arguments — thread through their existing proof
-   bodies which now call the conditional `pdiv_comp` etc.
-6. Consolidate `axiom pdivFDMat_rowIndep` and `axiom pdivMat_rowIndep`
-   into one `axiom pdivMat_rowIndep` (rowIndep proof from `fderiv_pi`
-   is itself a multi-day project; defer).
+## Project axiom inventory (23)
 
-### C. Build check + commit
+**Foundation (1):**
+- `pdivMat_rowIndep` — provable via `fderiv_pi`, deferred.
 
-```bash
-lake build LeanMlir.Proofs.Tensor   # must be green
+**MLP (4):**
+- `pdiv_relu` — guarded subgradient axiom (subgradient convention).
+- `relu_has_vjp` — existence of HasVJP at non-smooth points.
+- `softmaxCE_grad` — gradient of cross-entropy loss.
+- `mlp_has_vjp` — composes through ReLU.
+
+**CNN (2):**
+- `conv2d_has_vjp3` — input-path VJP through non-smooth boundary handling.
+- `maxPool2_has_vjp3` — argmax routing convention.
+
+**Depthwise (1):**
+- `depthwise_has_vjp3` — input-path VJP, parallel to conv2d.
+
+**BatchNorm (2):**
+- `pdiv_bnIstdBroadcast` — derivative of `1/√(σ²+ε)`.
+- `bnIstdBroadcast_diff` — smoothness of same function (added by Stage 2d).
+
+**LayerNorm (1):**
+- `pdiv_gelu` — diagonal Jacobian of GELU.
+
+**Attention (12):**
+- `pdiv_softmax` — Jacobian of softmax.
+- `mhsa_has_vjp_mat` — multi-head SDPA.
+- `patchEmbed_flat_has_vjp` — opaque-codegen patch embedding.
+- `rowSoftmax_flat_diff` — smoothness via Real.exp.
+- `transformerMlp_has_vjp_mat` — deferred composition.
+- `transformerAttnSublayer_has_vjp_mat` — deferred composition.
+- `transformerMlpSublayer_has_vjp_mat` — deferred composition.
+- `transformerBlock_has_vjp_mat` — deferred composition.
+- `transformerTower_has_vjp_mat` — deferred (was an induction).
+- `vit_body_has_vjp_mat` — deferred composition.
+- `classifier_flat_has_vjp` — deferred (linear, easy to thread).
+- `vit_full_has_vjp` — deferred composition.
+
+---
+
+## Mechanical follow-ups (the realistic next session)
+
+These get the count back to ~13 with no architectural decisions left.
+
+### A. Thread Diff through the 7 deferred Attention chains
+
+Pattern is established by `sdpa_Q_chain_has_vjp` and
+`sdpa_K_chain_has_vjp`. Each `vjpMat_comp` / `biPathMat_has_vjp` /
+`vjp_comp` call needs `Differentiable` evidence for both factors,
+discharged by:
+- The four `*_flat_diff` helpers at the top of `Attention.lean`
+  (already in place: matmul-left/right, scalar-scale, transpose).
+- `rowSoftmax_flat_diff` (axiom — that one stays).
+- For composed chains: `Differentiable.comp` after a `simp [Mat.unflatten_flatten]`
+  rewrite that pushes the flatten/unflatten through `∘`.
+
+Order to thread (innermost to outermost — each compose builds on the previous):
+1. `transformerMlp_has_vjp_mat` (3 levels of `vjpMat_comp`).
+2. `transformerAttnSublayer_has_vjp_mat` (`biPathMat` of identity and
+   `mhsa ∘ LN1`).
+3. `transformerMlpSublayer_has_vjp_mat` (parallel to attn sublayer).
+4. `transformerBlock_has_vjp_mat` (one `vjpMat_comp`).
+5. `transformerTower_has_vjp_mat` (induction on k via `vjpMat_comp`).
+6. `vit_body_has_vjp_mat` (one `vjpMat_comp`).
+7. `classifier_flat_has_vjp` (`vjp_comp` of two linear functions; trivial).
+8. `vit_full_has_vjp` (three-level `vjp_comp` over patchEmbed, body, classifier).
+
+Each `Differentiable` proof wants `(hε : 0 < ε)` plumbed through —
+the per-token wrappers (`layerNorm_per_token_has_vjp_mat`) already
+take it. **Net axiom delta: −7.**
+
+Estimate: 4-6 hours, mechanical. Each axiom unrolls into roughly the
+proof body that was already there before, plus the Diff hypotheses.
+
+### B. Prove `rowSoftmax_flat_diff` from Mathlib calculus
+
+`Real.exp` is C^∞ everywhere; the denominator `∑ⱼ exp(M r j)` is
+positive everywhere; division by a positive function is smooth.
+Mathlib has `Real.differentiable_exp`, `Differentiable.fun_sum`, and
+`DifferentiableAt.div` with positivity hypotheses. The proof is:
+```lean
+unfold rowSoftmax softmax
+intro v
+-- Each entry: exp(M r c) / Σⱼ exp(M r j). Differentiable.div with
+-- denom positivity (from Real.exp_pos) + Differentiable.exp.
+fun_prop (disch := positivity)
 ```
+**Net axiom delta: −1.** Estimate: 1-2 hours.
 
-Chapter files will be red — that's Stage 2.
+### C. Prove `bnIstdBroadcast_diff` from Mathlib calculus
 
-Commit message:
-```
-Proofs/Tensor: foundation flip — pdiv as fderiv-grounded def, bilinear
-rules now require Differentiable hypotheses
-```
+`1/√(bnVar n x + ε)` with `ε > 0`:
+- `bnVar n x + ε ≥ ε > 0` by sum-of-squares + positive ε.
+- `Real.sqrt` differentiable at positive argument.
+- `Inv.inv` (or `1/x`) differentiable at non-zero argument.
+- Compose. Mathlib lemmas: `Real.sqrt`'s `hasDerivAt` family +
+  `DifferentiableAt.inv`.
 
----
+**Net axiom delta: −1.** Estimate: 1-2 hours.
 
-## Stage 2 — Per-chapter migration
+### D. Prove `pdivMat_rowIndep` via `fderiv_pi`
 
-**One commit per chapter file. Tree-green at each commit.** This is
-the discipline that attempts #1 and #2 lacked.
+VJP.md flagged this earlier as "provable via `fderiv_pi` but
+non-trivial — defer." The argument: `fderiv_pi` says the fderiv of a
+Pi-valued function decomposes coordinate-wise. For row-independent
+functions (each row's output depends only on the corresponding input
+row), the decomposition gives the block-diagonal Jacobian directly.
 
-For each chapter, the work is the same shape:
-- Every `rw [pdiv_add]` / `rw [pdiv_mul]` / `rw [pdiv_comp]` /
-  `rw [pdiv_finset_sum]` now needs `Differentiable` hypotheses.
-- The functions in question are linear (sums, projections, scalar
-  multiplications) so the hypotheses are easy via
-  `(reindexCLM σ).differentiableAt`,
-  `Differentiable.const`, `Differentiable.sub`, etc.
-- Threaded `Differentiable` arguments to `vjp_comp` /
-  `biPath_has_vjp` calls.
+**Net axiom delta: −1.** Estimate: half a day.
 
-Migration order (smallest → largest):
+### E. (Optional) Prove `pdiv_gelu` and `softmaxCE_grad`
 
-1. **`MLP.lean`** (also: guard `pdiv_relu`, axiomatize `relu_has_vjp`)
-2. **`CNN.lean`** (12 existing-proof theorems get `Differentiable` threading)
-3. **`Depthwise.lean`** (parallel to CNN)
-4. **`BatchNorm.lean`** (heavier — `bnIstdBroadcast` Diff requires `ε > 0`)
-5. **`Residual.lean`**
-6. **`SE.lean`**
-7. **`LayerNorm.lean`**
-8. **`Attention.lean`**
+`pdiv_gelu`: gelu is C^∞ (uses `Real.erf` or smooth tanh approximation
+depending on the def). `fderiv_pi` decomposes to per-coordinate
+scalars; per-coord derivative is `geluScalarDeriv`.
 
-### MLP.lean migration — special handling for ReLU
+`softmaxCE_grad`: standard log-sum-exp identity unwinding. Uses
+`Real.log_div` and `Real.exp` calculus.
 
-Two changes specific to this file:
+**Net axiom delta: −2.** Estimate: 2-3 hours each.
 
-1. Guard `pdiv_relu`:
-   ```lean
-   axiom pdiv_relu (n : Nat) (x : Vec n)
-       (h_smooth : ∀ k, x k ≠ 0)
-       (i j : Fin n) :
-       pdiv (relu n) x i j =
-         if i = j then (if x i > 0 then 1 else 0) else 0
-   ```
-2. Convert `relu_has_vjp` from `def` to `axiom`:
-   ```lean
-   axiom relu_has_vjp (n : Nat) : HasVJP (relu n)
-   ```
-   (We lose the proof; the existence of the VJP at non-smooth points is
-   asserted, matching the ML-conventional subgradient routing.)
-
-Other MLP theorems (`pdiv_dense`, `pdiv_dense_W`, `pdiv_dense_b`,
-`dense_has_vjp`) need `Differentiable` threaded through their existing
-proofs.
+**After A+B+C+D**: 23 → 13 axioms.
+**After A+B+C+D+E**: 23 → 11 axioms.
 
 ---
 
-## Stage 3 — Bonus axiom removals (optional, follows naturally)
+## Hard residuals (likely staying axiomatic)
 
-After stages 1+2, the foundation is `fderiv`-grounded and the bilinear
-rules properly hypothesized. Three additional axioms become provable
-because we can now compose foundation theorems with Mathlib's calculus:
+These 8-10 axioms will likely stay regardless of follow-up effort:
 
-### 3a. `pdiv_gelu` (LayerNorm.lean)
+- `pdiv_relu` — DL community subgradient convention. Not a theorem of standard analysis.
+- `relu_has_vjp` — same reason. Could be derived if `HasVJP.correct` is weakened to "smooth subset only" (project-wide rewrite, not in scope).
+- `mhsa_has_vjp_mat` — multi-head attention is structurally a vmap over the head axis; needs a vmap-VJP framework lemma not in scope.
+- `patchEmbed_flat_has_vjp` — opaque-codegen interface. The actual computation lives in MLIR; axiomatized that the forward+backward pair is consistent.
+- `conv2d_has_vjp3`, `maxPool2_has_vjp3`, `depthwise_has_vjp3` — input-path VJPs through padding boundary / argmax non-smoothness. Like ReLU, these are subgradient conventions.
 
-`gelu n x = fun i => geluScalar (x i)` is C^∞. `fderiv_pi` decomposes
-to per-coordinate, and `geluScalar`'s derivative is `geluScalarDeriv`
-by `fderiv_pi` again. ~30-50 lines.
-
-### 3b. `softmaxCE_grad` (MLP.lean)
-
-`crossEntropy c z label = log(∑ k, exp(z k)) - z label`. Standard
-`Real.log_div`, `Real.exp` calculus. ~80 lines.
-
-### 3c. `pdiv_bnIstdBroadcast` (BatchNorm.lean)
-
-`1/√(σ²+ε)` is C^∞ when `ε > 0`. `Real.hasDerivAt_sqrt` + `HasDerivAt.inv`
-+ chain rule. May need a small `BNSmooth.lean` helper file. ~100 lines.
+Below the floor (~10 axioms) the remaining are all of the form "the ML
+framework treats this op's gradient by convention X" and aren't
+provable from standard analysis without weakening `HasVJP.correct`.
 
 ---
 
-## Net axiom count
+## Soundness analysis (carry-forward, still load-bearing)
 
-| Stage | Removed | Added | Cumulative |
-|---|---|---|---|
-| Start | — | — | 19 |
-| Stage 1 (flip) | -7 (`pdiv` + 6 rules) | — | 12 |
-| Stage 2 (MLP) | — | +1 (`relu_has_vjp` axiom) | 13 |
-| Stage 3a (`pdiv_gelu`) | -1 | — | 12 |
-| Stage 3b (`softmaxCE_grad`) | -1 | — | 11 |
-| Stage 3c (`pdiv_bnIstdBroadcast`) | -1 | — | 10 |
+Two soundness wells from prior attempts. Both are now resolved by the
+guarded-ReLU strategy + conditional bilinear rules, but anyone who
+considers a future restructure should re-read these.
 
-**Floor: 10 axioms** if all of stage 3 lands.
-
-What's left (the irreducible residual):
-- `pdiv_relu`, `relu_has_vjp` — ReLU subgradient convention.
-- `maxPool2_has_vjp3` — max-pool subgradient routing.
-- `pdiv_softmax`, `mhsa_has_vjp_mat`, `patchEmbed_flat_has_vjp` — softmax /
-  attention; need `Real.exp` calculus + smooth dispatch (could be future work).
-- `pdivMat_rowIndep` — provable via `fderiv_pi` but deferred.
-
----
-
-## Discipline (the actual lessons from attempts #1 + #2)
-
-1. **Tree-green at every commit.** The flip + per-chapter migration is
-   atomic *for soundness*; that does **not** mean it has to be one
-   commit. One commit per **stage** (foundation, then per-chapter).
-   Both prior attempts violated this and got tangled.
-
-2. **`#print axioms` after each stage.** Check the dependency closure
-   of a key theorem (e.g., `dense_weight_grad_correct`) is the expected
-   set. Catches accidental additional axiom dependencies early.
-
-3. **Don't optimize for axiom count alone.** The trivial-form trick
-   (replacing `axiom foo_has_vjp` with `def foo_has_vjp { backward :=
-   Σ pdiv · dy; correct := rfl }`) reduces the count without adding any
-   proof content. We tried it; it was reverted. The count is a
-   downstream signal, not the objective.
-
-4. **Don't try to combine stage 3 with stage 2.** Stage 3's bonus
-   removals depend on the foundation flip being done *cleanly*. Land
-   stages 1 and 2 first, verify tree-green, then attempt 3.
-
----
-
-## Soundness analysis (carry-forward from prior attempts)
-
-### 1. `pdiv_relu` (unguarded) contradicts fderiv-based `pdiv` in multi-D
+### 1. `pdiv_relu` (unguarded) is incompatible with `fderiv`-based pdiv
 
 For `n ≥ 2`, take `x = (1, 0) : Vec 2`. The function `relu 2` is **not**
-`Differentiable` at this point — coordinate `y_1 ↦ if y_1 > 0 then y_1 else 0`
-is not differentiable at `y_1 = 0`, and Mathlib's `fderiv_pi` says a
-Pi-valued function is differentiable iff each coordinate is. So
-`fderiv ℝ (relu 2) (1, 0) = 0` (junk default), making
+`Differentiable` at `x` — coordinate `y₁ ↦ if y₁ > 0 then y₁ else 0` is
+not differentiable at `y₁ = 0`, and `fderiv_pi` says a Pi-valued
+function is differentiable iff each coordinate is. So
+`fderiv ℝ (relu 2) (1, 0) = 0` (Mathlib junk default), making
 `pdiv (relu 2) (1, 0) 0 0 = 0`. The unguarded axiom asserts `1`. **0 ≠ 1.**
 
-The guarded form (`∀ k, x k ≠ 0`) excludes this counterexample. ✓
+The guarded form (`∀ k, x k ≠ 0`) excludes this counterexample. ✅
 
-### 2. Unconditional `pdiv_add` / `_mul` / `_comp` contradict fderiv
+### 2. Unconditional `pdiv_add` / `_mul` / `_comp` are incompatible with `fderiv`
 
 Counterexample for `pdiv_add`: take `f y = fun _ => abs (y 0)` (not
-DiffAt 0) and `g y = fun _ => y 0` (= identity). At `x_0 = 0`:
+`DifferentiableAt 0`) and `g y = fun _ => y 0` (= identity). At `x_0 = 0`:
 
 - `f + g` has a kink at 0; `fderiv (f+g)` is junk = 0; LHS = `pdiv (f+g) x 0 0 = 0`.
 - `pdiv f x 0 0` is junk = 0; `pdiv g x 0 0 = 1`. RHS = `0 + 1 = 1`.
 - Unconditional axiom claims LHS = RHS, i.e., `0 = 1`. ✗
 
 The conditional form (with `DifferentiableAt f x` ∧ `DifferentiableAt g x`)
-excludes this counterexample. ✓
+excludes this counterexample. ✅
 
 ---
 
-## Risk areas / known pitfalls
+## Pitfalls (encountered during the migration)
 
 1. **Lambda-form vs CLM-coercion in `rw`.** Passing
    `(reindexCLM σ).differentiableAt` directly to a `pdiv_*` theorem
    inside a rewrite generates a pattern with the `⇑(reindexCLM σ)`
    coercion that doesn't unify with goals containing the lambda form.
-   **Fix:** name the diff hypothesis with an explicit lambda type
-   before the rewrite:
+   **Fix:** name the diff hypothesis with an explicit lambda type:
    ```lean
    have h_reindex_diff : DifferentiableAt ℝ (fun w idx => w (σ idx)) x :=
      (reindexCLM σ).differentiableAt
    rw [pdiv_mul _ _ _ h_const_diff h_reindex_diff]
    ```
 
-2. **`finProdFinEquiv` round-trip inside sum binders.** Needs
-   `simp_rw [Equiv.apply_symm_apply]`, not `rw` (which won't reach
-   inside the binder).
+2. **`fun_prop` on division by `Nat`-coerced denominators.** `fun_prop`
+   doesn't currently know `HDiv.hDiv` is `Differentiable` in general
+   (would need a non-zero denominator hypothesis). Workaround: rewrite
+   `x / (↑n : ℝ)` as `x * (↑n)⁻¹` before `fun_prop`. (Hit in `bnCentered`'s
+   Diff proof during BN migration.)
 
-3. **`(if c then 1 else 0) * y → if c then y else 0`.** Needs
-   `simp_rw [ite_mul, one_mul, zero_mul]` before `Finset.sum_ite_eq`.
-   (Lesson from `conv2d_bias_grad_has_vjp`.)
+3. **`fun_prop` on `Real.sqrt` / `Real.exp` chains.** Doesn't auto-handle
+   the positivity-conditional smoothness of `1/√(...)` or
+   `exp(...) / Σ exp(...)`. Use manual `DifferentiableAt.inv` +
+   `Real.sqrt` lemmas with positivity, or axiomatize the Diff lemma
+   for now.
 
-4. **BN's `Differentiable bnIstdBroadcast`.** Smoothness of `1/√(σ²+ε)`
-   requires `ε > 0`. Check whether BN's framework already carries this
-   as an invariant or whether the migration adds it.
+4. **Big surgery via `sed` on Lean files is risky.** When deleting
+   parallel-track blocks, find the correct opening and closing line
+   boundaries (look at section headers, not line counts) — `sed` doesn't
+   know about Lean's nesting. (Hit when deleting `pdivFDMat` block.)
 
-5. **Soundness gotcha (already hit twice):** never have `pdiv` as a
-   `def` AND keep the bilinear rules unconditional — that combination
-   is provably unsound. The flip is atomic *for soundness*; the
-   bilinear rules MUST become conditional in the same commit.
-
----
-
-## Time estimate
-
-- Stage 1: 1-2 hours (mostly mechanical surgery; bodies already exist
-  as `pdivFD_*`).
-- Stage 2: 2-4 hours total (each chapter ~30-60 min, BN heaviest).
-- Stage 3: 2-3 hours (optional bonus).
-
-**Total: 5-9 hours.** Worth a dedicated weekend session.
+5. **Doc-comment + axiom interaction.** `axiom foo` after `/-- ... -/`
+   is fine, but back-to-back `/-- ... -//-- ... -/` (e.g. after
+   converting a theorem with its own doc-comment to an axiom and
+   adding a new doc-comment) gives "unexpected token '/--'" — Lean
+   wants exactly one doc-comment per declaration.
 
 ---
 
-## After this session
+## Discipline notes (what the staged plan got right)
 
-Branch is in shape for review or merge to `main`. Foundation is
-`fderiv`-grounded, bilinear rules properly hypothesized, axiom count
-down to the irreducible residual (~10-13 axioms). Future sessions
-tackle the remaining axioms one at a time: `pdivMat_rowIndep` via
-`fderiv_pi`, `pdiv_softmax` via `Real.exp` calculus, the attention
-trio.
+- **Tree-green at every commit.** Stages 1, 2a-2e all landed with
+  `lake build` passing. The two earlier flip attempts violated this
+  and got tangled; staged commits are the way.
+- **`#print axioms` after each stage.** Confirmed pure-Mathlib
+  closure on key theorems at every chapter migration. This is the
+  real success metric, not the raw `^axiom` count.
+- **Don't optimize for axiom count alone.** Two cosmetic
+  trivial-form commits (`9c03889`, `f94bc03`) were tried and
+  reverted as noise — they removed the literal `axiom` declaration
+  but added no proof content. The recipe is in
+  `feedback_axiom_count_metric.md` (memory).
+
+---
+
+## Time estimate for follow-up
+
+- **A (Attention threading):** 4-6 hours. Mechanical, pattern established.
+- **B (rowSoftmax Diff):** 1-2 hours.
+- **C (bnIstdBroadcast Diff):** 1-2 hours.
+- **D (pdivMat_rowIndep):** half a day.
+- **E (pdiv_gelu, softmaxCE_grad):** 2-3 hours each (optional).
+
+**Total to reach the floor:** one focused session of ~8-12 hours.
+
+---
+
+## After the floor
+
+13 axioms (or 11 with stage E). Of those:
+- 1 is foundation-related (`pdivMat_rowIndep` if D is skipped, or 0 if landed).
+- ~3-4 are subgradient conventions (`pdiv_relu`, `relu_has_vjp`, possibly `mlp_has_vjp` and the analogous CNN/Depthwise/MaxPool).
+- ~3 are opaque-codegen interfaces (`patchEmbed_flat_has_vjp`, possibly `mhsa_has_vjp_mat`).
+- ~3 are derivative formulas that could be Mathlib-derived with effort (`pdiv_gelu`, `pdiv_softmax`, `softmaxCE_grad`).
+
+Below 11 starts requiring framework-level changes: weakening
+`HasVJP.correct` to a "smooth subset" formulation so the subgradient
+axioms can be deduced from `pdiv_relu`-like base axioms, and adding a
+vmap-VJP framework lemma to derive `mhsa_has_vjp_mat` from the
+single-head SDPA proof. Those are project-wide rewrites — separate
+multi-week efforts, not this one's continuation.
