@@ -216,71 +216,6 @@ in this book --- dense, convolution, batch norm, residual, attention,
 all of them --- builds with zero \texttt{sorry}s. The compiler is the
 referee.
 
-\section*{How to read this book}
-
-Every chapter after this one follows the same pattern:
-
-\begin{enumerate}
-  \item A new architecture (the ``what'')
-  \item A new structural primitive (the ``why'')
-  \item Derivation of the backward pass (by hand, with indices)
-  \item Lean proof (the formal statement)
-  \item MLIR snippet (the GPU code)
-  \item Training results (proof it works)
-\end{enumerate}
-
-You can read straight through, or you can skip to any chapter whose
-architecture interests you --- each one is mostly self-contained, with
-back-references to earlier chapters for the primitives it builds on.
-
-The Lean code and MLIR snippets are available in the lean4-mlir
-repository on GitHub. Every architecture in the book can be trained
-on your hardware. Appendix A walks you through the toolchain setup;
-if you're impatient, there's a Docker image that gets you from zero
-to training MNIST in one command.
-
-\section*{How this book is organized}
-
-\textbf{Part 1: The framework (Chapters 2--10).} One new primitive per
-chapter, proved correct as we go. The first half pins down the
-composition rules --- chain, additive fan-in, product --- on dense
-layers, convolution, and normalization. The second half climbs the
-ladder to ViT.
-
-\begin{itemize}
-  \item \textbf{Chapter 2: You Are Here} --- Chain rule, sum rule, product
-    rule for partial derivatives. Every backward function in the book is
-    a VJP (vector-Jacobian product) built by composing these.
-  \item \textbf{Chapter 3: MNIST 1D MLP} --- Dense layers, ReLU, softmax CE,
-    the chain rule. The most important chapter: everything after is
-    adding more layers.
-  \item \textbf{Chapter 4: MNIST 2D CNN} --- Convolution, max pooling. The
-    backward pass of conv is another conv with a reversed kernel.
-  \item \textbf{Chapter 5: CIFAR with BatchNorm} --- The first dense Jacobian
-    with a clean closed form. Three terms, one cancellation, and you
-    never have to derive it again.
-  \item \textbf{Chapter 6: ResNet-34} --- Residual connections. Gradients from
-    two paths add at the input.
-  \item \textbf{Chapter 7: MobileNetV2} --- Depthwise convolution. Same as
-    regular conv, but diagonal in the channel dimension.
-  \item \textbf{Chapter 8: EfficientNet} --- Squeeze-and-excitation. The
-    product rule: main path times gate, gradients from both paths add.
-  \item \textbf{Chapter 9: LayerNorm and GELU} --- Batchnorm in disguise.
-    Activation functions.
-  \item \textbf{Chapter 10: Vision Transformer} --- Self-attention. Softmax
-    in the middle of the network, three-way fan-in at the input. The
-    capstone.
-\end{itemize}
-
-\textbf{Part 2: The bestiary (Chapter 11).} A catalog of $\sim$37
-additional architectures, from U-Net to Mamba to diffusion models,
-each decomposed into the framework's primitives. Organized by the
-question you're asking: ``how do I do detection?'', ``how do I do
-generation?'', etc.
-
-\textbf{Appendices.} Toolchain setup (A) and the complete proof framework
-as a reference (B).
-
 \section*{Let's go}
 
 In 2018, I was on a small team that won Stanford's DAWNBench
@@ -538,22 +473,94 @@ backward function with its correctness claim.
   \uses{ax:pdiv_add}
 \end{theorem}
 
-\subsection*{Why axioms, not Mathlib?}
+\section*{How to read this book}
 
-You could build this whole chapter from Mathlib's \texttt{HasFDerivAt}
-and its composition lemmas. Every axiom above --- chain rule,
-linearity, product rule, identity, reindex --- has a near-direct
-Mathlib counterpart. The book axiomatizes instead for pragmatic
-reasons: it keeps the proof tree small and self-contained, it makes
-the axiom surface visible at a glance (count them in
-Appendix~\ref{app:verification}), and it lets the formal content build on a
-fixed foundation without Mathlib version churn.
+Every chapter after this one follows the same pattern:
 
-The tradeoff: you're trusting these eight calculus facts on the face
-of them. Bridging to Mathlib (replacing each axiom with the
-corresponding proved lemma) is open work; if you cared, it's an
-afternoon's effort. The output --- every VJP theorem downstream ---
-doesn't change.
+\begin{enumerate}
+  \item A new architecture (the ``what'')
+  \item A new structural primitive (the ``why'')
+  \item Derivation of the backward pass (by hand, with indices)
+  \item Lean proof (the formal statement)
+  \item MLIR snippet (the GPU code)
+  \item Training results (proof it works)
+\end{enumerate}
+
+You can read straight through, or you can skip to any chapter whose
+architecture interests you --- each one is mostly self-contained, with
+back-references to earlier chapters for the primitives it builds on.
+
+The Lean code and MLIR snippets are available in the lean4-mlir
+repository on GitHub. Every architecture in the book can be trained
+on your hardware. Appendix A walks you through the toolchain setup;
+if you're impatient, there's a Docker image that gets you from zero
+to training MNIST in one command.
+
+\section*{How this book is organized}
+
+\textbf{Part 1: The framework (Chapters 2--10).} One new primitive per
+chapter, proved correct as we go. The first half pins down the
+composition rules --- chain, additive fan-in, product --- on dense
+layers, convolution, and normalization. The second half climbs the
+ladder to ViT.
+
+\begin{itemize}
+  \item \textbf{Chapter 2: You Are Here} --- Chain rule, sum rule, product
+    rule for partial derivatives. Every backward function in the book is
+    a VJP (vector-Jacobian product) built by composing these.
+  \item \textbf{Chapter 3: MNIST 1D MLP} --- Dense layers, ReLU, softmax CE,
+    the chain rule. The most important chapter: everything after is
+    adding more layers.
+  \item \textbf{Chapter 4: MNIST 2D CNN} --- Convolution, max pooling. The
+    backward pass of conv is another conv with a reversed kernel.
+  \item \textbf{Chapter 5: CIFAR with BatchNorm} --- The first dense Jacobian
+    with a clean closed form. Three terms, one cancellation, and you
+    never have to derive it again.
+  \item \textbf{Chapter 6: ResNet-34} --- Residual connections. Gradients from
+    two paths add at the input.
+  \item \textbf{Chapter 7: MobileNetV2} --- Depthwise convolution. Same as
+    regular conv, but diagonal in the channel dimension.
+  \item \textbf{Chapter 8: EfficientNet} --- Squeeze-and-excitation. The
+    product rule: main path times gate, gradients from both paths add.
+  \item \textbf{Chapter 9: LayerNorm and GELU} --- Batchnorm in disguise.
+    Activation functions.
+  \item \textbf{Chapter 10: Vision Transformer} --- Self-attention. Softmax
+    in the middle of the network, three-way fan-in at the input. The
+    capstone.
+\end{itemize}
+
+\textbf{Part 2: The bestiary (Chapter 11).} A catalog of $\sim$37
+additional architectures, from U-Net to Mamba to diffusion models,
+each decomposed into the framework's primitives. Organized by the
+question you're asking: ``how do I do detection?'', ``how do I do
+generation?'', etc.
+
+\textbf{Appendices.} Toolchain setup (A) and the complete proof framework
+as a reference (B).
+
+\subsection*{Foundation: Mathlib's \texttt{fderiv}}
+
+Earlier drafts of this book axiomatized the entire calculus
+foundation --- chain rule, sum rule, product rule --- as eight
+opaque facts. The current foundation \emph{flips} that: \(\pdiv\)
+is \emph{defined} in terms of Mathlib's Fréchet derivative
+\(\fderiv\), and the structural rules above are theorems proved
+from Mathlib's API. Each carries a \(\Differentiable\) hypothesis,
+threaded through every downstream chapter.
+
+Many later-chapter axioms have been pruned the same way. Where
+earlier drafts axiomatized \(\texttt{conv2d}\) as an opaque
+function with a stated Jacobian, the current version defines it
+concretely and proves the weight/bias-gradient lemmas from the
+foundation. Twenty axioms survive book-wide --- mostly
+composition-level shortcuts and hard-to-derive primitives
+(multi-head SDPA, the three-term BN cancellation) where the
+verification effort exceeded the value.
+
+The cost is mild: \(\Differentiable\) hypotheses propagate. The
+benefit is that every claim is either a definition Lean unfolds,
+a theorem typechecked against Mathlib, or one of the small
+remaining axioms (audited in Appendix~\ref{app:verification}).
 
 \subsection*{Worked example: the dense layer}
 
@@ -561,8 +568,9 @@ The axioms above look abstract on their own. Here's how they compose
 into a concrete VJP, using just the tools of this chapter.
 
 The dense layer forward is $f(x) = W \cdot x + b$, mapping $\Vect{n}$
-to $\Vect{m}$. Its Jacobian at any $x$ is precisely $W$ --- axiom
-\ref{ax:pdiv_dense} states this directly:
+to $\Vect{m}$. Its Jacobian at any $x$ is precisely $W$ ---
+Theorem~\ref{ax:pdiv_dense} (\(\texttt{pdiv\_dense}\), proved
+from the foundation rules) states this directly:
 \[
   \pdiv\, f\, x\, i\, j = W_{i,j}.
 \]
@@ -604,88 +612,102 @@ One pattern, scaled up.
 
 \subsection*{Axiom and theorem budget per chapter}
 
-If you're planning how much of the book to read, here's the per-chapter
-cost in both directions: new axioms (unproved starting facts we take
-as given) and new theorems (proven compositions Lean's typechecker
-verified). The totals across the book are 30 axioms and 45 theorems,
-with zero \texttt{sorry}s.
+If you're planning how much of the book to read, here's the
+per-chapter cost in both directions: new axioms (unproved
+starting facts we take as given) and new theorems (proven
+compositions Lean's typechecker verified). The totals across
+Chapters 2--10 are \textbf{20 axioms and 52 theorems}, with zero
+\texttt{sorry}s. (Earlier drafts shipped 30 axioms; the
+foundation flip described above shed 10 of them by promoting the
+calculus rules from axioms to theorems and replacing several
+opaque forwards with concrete definitions.)
 
-\textbf{This chapter (Ch 2)} does the structural heavy
-lifting: 8 axioms --- the chain rule, additive and multiplicative
-fan-in, identity, reindexing, and three structural supports --- and
-20 theorems that compose them into the VJPs every later chapter will
-reuse.
+\textbf{This chapter (Ch 2)} does the structural heavy lifting:
+1 axiom (\(\pdivMat\) row independence --- the matrix-level
+analogue that doesn't fall out of the scalar foundation) and 26
+theorems that compose Mathlib's \(\fderiv\) into the VJP toolkit
+every later chapter will reuse: the chain rule, additive and
+multiplicative fan-in, identity, reindexing, and the matrix-/
+3-tensor-level lifts. Plus \(\pdiv\) itself as a definition over
+\(\fderiv\).
 
-\textbf{Chapter 3 (MLP)} adds 4 axioms (dense Jacobian in both
-arguments, ReLU diagonal, softmax cross-entropy gradient) and 4
-theorems stitching them together via the chain rule.
+\textbf{Chapter 3 (MLP)} adds 4 axioms (the guarded ReLU
+subgradient, softmax cross-entropy gradient, plus two
+composition shortcuts --- \(\texttt{relu\_has\_vjp}\) and
+\(\texttt{mlp\_has\_vjp}\) --- that bundle Stage 2 work whose
+symbolic proof is mechanical but deferred) and 5 theorems
+stitching them together. Dense Jacobians in both arguments are
+now proved from the foundation rather than axiomatized.
 
-\textbf{Chapter 4 (CNN)} adds 6 axioms for the \texttt{conv2d} bundle
-(weight, bias, and input Jacobians in their 2D and 3D forms) and 0
-new theorems --- the gradient flow for conv is composition-only, so
-nothing new needs stating.
+\textbf{Chapter 4 (CNN)} adds 2 axioms (\(\texttt{conv2d}\) and
+\(\texttt{maxPool2}\) input VJPs) and 2 theorems plus 2
+definitions. \(\texttt{conv2d}\) and \(\texttt{maxPool2}\) are
+now concrete defs; their weight- and bias-gradient lemmas are
+proved from the foundation; only the input-side VJP remains
+opaque.
 
-\textbf{Chapter 5 (BN)} adds 3 axioms for the spatial-reduction trio
-(mean Jacobian, variance Jacobian, BN affine) and 3 theorems that
-stack them into the composed \(\mathtt{bn\_has\_vjp}\) that phase-3's
-codegen emits.
+\textbf{Chapter 5 (BN)} adds 2 axioms (BN inverse-stddev
+broadcast Jacobian and its smoothness lemma under
+\(\varepsilon > 0\)) and 5 theorems. BN affine and centering
+Jacobians are now proved.
 
-\textbf{Chapter 6 (Residual)} adds zero new axioms and just 1 theorem
-(the \(\mathtt{biPath}\) additive-fan-in VJP, built entirely from
-chapter 2's kit). That's the scaling claim in miniature --- new
+\textbf{Chapter 6 (Residual)} adds zero new axioms and just 1
+theorem (the residual additive-fan-in VJP, built entirely from
+Chapter~2's kit). That's the scaling claim in miniature --- new
 architecture, no new calculus.
 
-\textbf{Chapter 7 (Depthwise)} adds 4 axioms (depthwise conv2d in its
-2D and 3D forms, weight and bias Jacobians each) and zero new
-theorems. The stacking is standard convolutional composition; the
-bespoke content is the depthwise primitive itself.
+\textbf{Chapter 7 (Depthwise)} adds 1 axiom (depthwise input
+VJP) and 2 theorems plus 1 definition. Same pattern as Ch~4:
+the forward is a concrete def, weight/bias gradients are proved
+from foundation, only the input-side VJP is left opaque.
 
 \textbf{Chapter 8 (SE)} adds zero axioms and 1 theorem
-(\(\mathtt{elemwiseProduct\_has\_vjp}\)). Squeeze-and-excitation is
+(\(\texttt{seBlock\_has\_vjp}\)). Squeeze-and-excitation is
 global-avg-pool plus two 1\(\times\)1 convs plus the elementwise
-product; every piece except the product was already proved elsewhere.
+product; every piece was already proved elsewhere.
 
-\textbf{Chapter 9 (LN + GELU)} adds 3 axioms (GELU Jacobian and the
-two LayerNorm pieces) and 2 theorems packaging them up as
-\(\mathtt{gelu\_has\_vjp}\) and \(\mathtt{layerNorm\_has\_vjp}\).
+\textbf{Chapter 9 (LN + GELU)} adds 1 axiom (GELU Jacobian) and
+2 theorems plus 2 definitions. \(\texttt{geluScalar}\) and its
+derivative are now concrete defs; LayerNorm reuses the BN proof
+template.
 
-\textbf{Chapter 10 (Attention)} adds 2 axioms (softmax rank-1 Jacobian
-plus the bundled multi-head-self-attention existence claim) and 14
-theorems. The theorem count spikes here because the whole
-2D-tensor-composition kit --- matrix chain rule, matrix fan-in,
-transpose, rowwise softmax, left/right-constant matmul, scalar
-scaling --- finally gets called, and the transformer block factors
-through every one of them.
+\textbf{Chapter 10 (Attention)} adds 9 axioms and 8 theorems.
+Two of the axioms are bottom-level (softmax Jacobian, multi-head
+SDPA VJP); the other seven are composition shortcuts where the
+full symbolic proof is queued behind the foundation flip. The
+theorems still call the matrix-composition kit (chain rule,
+fan-in, transpose, rowwise softmax, left/right-constant matmul,
+scalar scaling) that Chapter~2 set up; the transformer block
+factors through every one of them.
 
 \begin{center}
 \begin{tabular}{l c c l}
 \hline
 Chapter & New (ax + th) & Cumulative (ax + th) & Architectures unlocked \\
 \hline
-2 (You Are Here)       & 8 + 20 &  8 + 20 & foundation \\
-3 (MLP)                & 4 + 4  & 12 + 24 & MLP \\
-4 (CNN)                & 6 + 0  & 18 + 24 & $+$ CNN \\
-5 (BN)                 & 3 + 3  & 21 + 27 & $+$ BN-nets \\
-6 (Residual)           & 0 + 1  & 21 + 28 & $+$ ResNet-34 \\
-7 (Depthwise)          & 4 + 0  & 25 + 28 & $+$ MobileNet V2 \\
-8 (SE)                 & 0 + 1  & 25 + 29 & $+$ EfficientNet \\
-9 (LN + GELU)          & 3 + 2  & 28 + 31 & $+$ transformer infra \\
-10 (Attention)         & 2 + 14 & 30 + 45 & $+$ ViT \\
+2 (You Are Here)       & 1 + 26 &  1 + 26 & foundation \\
+3 (MLP)                & 4 + 5  &  5 + 31 & MLP \\
+4 (CNN)                & 2 + 2  &  7 + 33 & $+$ CNN \\
+5 (BN)                 & 2 + 5  &  9 + 38 & $+$ BN-nets \\
+6 (Residual)           & 0 + 1  &  9 + 39 & $+$ ResNet-34 \\
+7 (Depthwise)          & 1 + 2  & 10 + 41 & $+$ MobileNet V2 \\
+8 (SE)                 & 0 + 1  & 10 + 42 & $+$ EfficientNet \\
+9 (LN + GELU)          & 1 + 2  & 11 + 44 & $+$ transformer infra \\
+10 (Attention)         & 9 + 8  & 20 + 52 & $+$ ViT \\
 \hline
 \end{tabular}
 \end{center}
 
-Two observations worth pulling out. First, \textbf{chapters 6 and 8
-add zero axioms}: residual connections and squeeze-and-excitation
-are pure composition over primitives that already exist. That's the
-scaling claim the book is making --- new architectures, no new
-calculus --- in its cleanest form. Second, \textbf{chapter 10 owes
-most of its 14 theorems to chapter 2's matrix-composition kit.} The
-theorems weren't proven on demand when attention needed them; they
-were waiting in \texttt{Tensor.lean} from the start. That's the
-sequencing the book recommends: invest in the general machinery
-early, and the per-architecture cost stays bounded at 2--4 axioms
-plus a small bespoke theorem count for every subsequent chapter.
+Two observations worth pulling out. First, \textbf{Chapters 6
+and 8 add zero axioms}: residual connections and
+squeeze-and-excitation are pure composition over primitives
+that already exist. That's the scaling claim the book is making
+--- new architectures, no new calculus --- in its cleanest form.
+Second, \textbf{Chapter 10's spike comes from composition
+shortcuts}: seven of the nine new axioms are transformer-level
+chains where the symbolic proof is mechanical but not yet
+completed (an active axiom-elimination target). The structural
+calculus itself never changes from Chapter~2 onward.
 
 \subsection*{Roadmap: skip to your target architecture}
 
@@ -4419,44 +4441,68 @@ through all three.
 
 \section{Axioms}
 
-The Verified VJP Proofs suite contains 30 axioms and 45 theorems
-across 9 Lean files. The axioms fall into three buckets:
+The Verified VJP Proofs suite contains \textbf{20 axioms, 52
+theorems, and 28 definitions} across 9 Lean files. This is a
+meaningful shrink from earlier drafts (30 axioms, 45 theorems,
+22 definitions): the foundation flip elevated the calculus
+axioms (chain rule, sum rule, product rule, identity, reindex)
+to theorems proved from Mathlib's \(\fderiv\), and several
+chapter-specific opaque forwards (\(\texttt{conv2d}\),
+\(\texttt{maxPool2}\), \(\texttt{depthwiseConv2d}\),
+\(\texttt{geluScalar}\)) became concrete definitions whose
+Jacobians are derived rather than asserted. The 20 surviving
+axioms fall into four buckets:
 
 \begin{itemize}
-  \item \textbf{Calculus primitives} (8): chain rule, linearity, product
-    rule, identity, reindex --- elementary facts about the
-    partial-derivative function \(\pdiv\). Correspond directly to
-    Mathlib \texttt{HasDerivAt} / \texttt{HasFDerivAt} lemmas.
-  \item \textbf{Elementary Jacobian facts} (about 11): the Jacobian
-    of a specific operation (ReLU diagonal, softmax rank-1,
-    layer-norm 3-term, etc.), stated in \(\pdiv\)-land rather than
-    bridging to Mathlib.
-  \item \textbf{Bundled layer VJPs} (about 11): each opaque forward
-    (\texttt{conv2d}, \texttt{depthwiseConv2d}, \texttt{mhsa\_layer})
-    paired with a bundled \(\HasVJP\) existence claim.
+  \item \textbf{Structural residual} (1): \(\pdivMat\) row
+    independence --- the matrix-level analogue of \(\pdiv\)'s
+    structure that doesn't fall directly out of the scalar
+    foundation.
+  \item \textbf{Elementary Jacobians} (6): the closed-form
+    Jacobian of an operation where the foundation proof is
+    deferred --- ReLU's guarded subgradient, softmax
+    cross-entropy, BN inverse-stddev broadcast (plus its
+    smoothness lemma under \(\varepsilon > 0\)), GELU, and
+    softmax. Each has a finite-difference test in
+    \texttt{check\_axioms.py}.
+  \item \textbf{Bundled input VJPs} (3): \(\texttt{conv2d}\),
+    \(\texttt{maxPool2}\), and \(\texttt{depthwiseConv2d}\)
+    each contribute one axiom asserting the input-side backward
+    function. Their forward operators and their weight/bias
+    gradients are now proved from the foundation, so these are
+    the only opaque pieces left in their respective layers.
+  \item \textbf{Composition shortcuts} (10): higher-level
+    chains where the symbolic proof is mechanical but not yet
+    completed --- the ReLU and MLP composition shortcuts at the
+    Ch~3 boundary, multi-head SDPA, and seven transformer-level
+    chains (sublayers with and without residuals, the block,
+    the tower, the ViT body). These are valid targets for
+    future axiom-elimination work.
 \end{itemize}
 
-Everything else --- 45 theorems --- is composition over these axioms,
-glued by the three structural rules (chain, additive fan-in,
-multiplicative fan-in) and five closed-form Jacobian tricks
-(diagonal, sparse Toeplitz, binary selection, rank-1 correction,
-outer product). The book's central claim --- ``new architectures,
-no new calculus'' --- is exactly this: each chapter after
-Chapter~\ref{chap:tensor} adds at most two or three bundled axioms
-for its new primitive and a small number of composition theorems to
-stitch them in. The structural calculus itself never changes.
+Everything else --- 52 theorems, 28 definitions --- is
+composition over the foundation and these axioms, glued by the
+structural rules (chain, additive fan-in, multiplicative fan-in,
+three-tensor extension) and the closed-form Jacobian tricks each
+chapter introduces. The book's central claim --- ``new
+architectures, no new calculus'' --- still holds: each chapter
+after Chapter~\ref{chap:tensor} adds at most a handful of
+bundled axioms for its new primitive and a small number of
+composition theorems to stitch them in. The structural calculus
+itself never changes.
 
 \section{Finite-difference gradient checks}
 
-The bundled-primitive axioms in the third bucket above are the only
-ones not proved symbolically in Lean --- they're validated by
-finite-difference gradient checks in
-\texttt{LeanMlir/Proofs/check\_axioms.py}. For each opaque forward,
-the script perturbs the input by \(\varepsilon\), compares the
-claimed VJP against the centered difference
-\((f(x + \varepsilon) - f(x - \varepsilon)) / 2\varepsilon\), and
-asserts agreement within tolerance. Between Lean's composition
-proofs and Python's numerical checks, nothing is taken on faith.
+The Elementary-Jacobian and Bundled-input-VJP axioms above are
+the ones not proved symbolically in Lean --- they're validated
+by finite-difference gradient checks in
+\texttt{LeanMlir/Proofs/check\_axioms.py}. For each opaque
+forward, the script perturbs the input by \(\varepsilon\),
+compares the claimed VJP against the centered difference
+\((f(x + \varepsilon) - f(x - \varepsilon)) / 2\varepsilon\),
+and asserts agreement within tolerance. Between Lean's
+composition proofs and Python's numerical checks, nothing is
+taken on faith.
 
 FD is cheap, easy to reason about, and tight enough for spot-checking
 formulas (\(\sim 10^{-5}\) at \(\varepsilon = 10^{-3}\), bounded
