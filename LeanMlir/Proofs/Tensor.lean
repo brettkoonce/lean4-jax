@@ -942,6 +942,271 @@ noncomputable def rowwise_has_vjp_mat {m n p : Nat} {g : Vec n → Vec p}
     simp only [Finset.mem_univ, if_true]
     exact hg.correct (A i) (dY i) j
 
+-- ════════════════════════════════════════════════════════════════
+-- § Column-slab independence (vmap over a column-axis partition)
+-- ════════════════════════════════════════════════════════════════
+
+/-! ## Per-head / per-slab column independence
+
+Multi-head attention applies the same per-head function to each of `heads`
+column slabs of width `d_in` from a `Mat n (heads * d_in)` input. The
+column-slab analog of `rowwise_has_vjp_mat` factors that vmap-over-heads
+structure: each head's output depends only on its own slab of the input,
+so the matrix Jacobian is block-diagonal across the head axis. -/
+
+/-- Apply `g : Mat n d_in → Mat n d_out` to each of the `heads` column
+    slabs of width `d_in` in a `Mat n (heads * d_in)` input, producing
+    a `Mat n (heads * d_out)` output. Output column `(h, j_out)` is
+    column `j_out` of `g (slab h M)`, where `slab h M` extracts the
+    `d_in`-wide column block at head index `h`. -/
+noncomputable def colSlabApply {n heads d_in d_out : Nat}
+    (g : Mat n d_in → Mat n d_out) : Mat n (heads * d_in) → Mat n (heads * d_out) :=
+  fun M => fun r hj =>
+    g (fun r' j_in => M r' (finProdFinEquiv ((finProdFinEquiv.symm hj).1, j_in)))
+      r (finProdFinEquiv.symm hj).2
+
+/-- **Column-slab independence Jacobian** — column-axis analog of
+    `pdivMat_rowIndep`. For a slab-applied function `colSlabApply g`,
+    the Jacobian is block-diagonal across the `heads` axis: zero unless
+    the input slab `h_j` matches the output slab `h_l`, otherwise equal
+    to `pdivMat g` on that slab.
+
+    Requires `Differentiable ℝ (flat g)` for the same reason as
+    `pdivMat_rowIndep`: the Pi-valued flat form must be differentiable
+    everywhere so `fderiv` doesn't fall back to junk-default 0. -/
+theorem pdivMat_colIndep {n heads d_in d_out : Nat} (g : Mat n d_in → Mat n d_out)
+    (h_g_diff : Differentiable ℝ
+                  (fun v : Vec (n * d_in) => Mat.flatten (g (Mat.unflatten v))))
+    (A : Mat n (heads * d_in))
+    (i : Fin n) (h_j : Fin heads) (j' : Fin d_in)
+    (k : Fin n) (h_l : Fin heads) (j'' : Fin d_out) :
+    pdivMat (colSlabApply g) A
+            i (finProdFinEquiv (h_j, j'))
+            k (finProdFinEquiv (h_l, j'')) =
+    (if h_j = h_l then
+      pdivMat g (fun r' j_in => A r' (finProdFinEquiv (h_l, j_in))) i j' k j''
+     else 0) := by
+  unfold pdivMat pdiv
+  -- Slab-projection CLM: extracts head h's d_in columns as a flattened Vec.
+  set slabProj : Fin heads → (Vec (n * (heads * d_in)) →L[ℝ] Vec (n * d_in)) := fun h' =>
+    reindexCLM (fun idx : Fin (n * d_in) =>
+      finProdFinEquiv ((finProdFinEquiv.symm idx).1,
+                       finProdFinEquiv (h', (finProdFinEquiv.symm idx).2)))
+    with hSlabProj_def
+  -- Coord `(k', encode(h_l', j_out))` of the flat function factors as
+  -- `(g-coord-fn) ∘ slabProj h_l'`.
+  have h_coord : ∀ (k' : Fin n) (h_l' : Fin heads) (j_out : Fin d_out),
+      (fun v : Vec (n * (heads * d_in)) =>
+         Mat.flatten (colSlabApply g (Mat.unflatten v))
+           (finProdFinEquiv (k', finProdFinEquiv (h_l', j_out)))) =
+      (fun w : Vec (n * d_in) =>
+         Mat.flatten (g (Mat.unflatten w)) (finProdFinEquiv (k', j_out))) ∘ (slabProj h_l') := by
+    intro k' h_l' j_out
+    funext v
+    show Mat.flatten (colSlabApply g (Mat.unflatten v))
+            (finProdFinEquiv (k', finProdFinEquiv (h_l', j_out))) =
+         Mat.flatten (g (Mat.unflatten ((slabProj h_l') v))) (finProdFinEquiv (k', j_out))
+    unfold Mat.flatten colSlabApply
+    simp only [Equiv.symm_apply_apply]
+    show g (fun r' j_in => Mat.unflatten v r' (finProdFinEquiv (h_l', j_in))) k' j_out =
+         g (Mat.unflatten ((slabProj h_l') v)) k' j_out
+    congr 1
+    funext r' j_in
+    show Mat.unflatten v r' (finProdFinEquiv (h_l', j_in)) =
+         Mat.unflatten ((slabProj h_l') v) r' j_in
+    unfold Mat.unflatten
+    show v (finProdFinEquiv (r', finProdFinEquiv (h_l', j_in))) =
+         (slabProj h_l') v (finProdFinEquiv (r', j_in))
+    show _ = v (finProdFinEquiv
+              ((finProdFinEquiv.symm (finProdFinEquiv (r', j_in))).1,
+               finProdFinEquiv (h_l', (finProdFinEquiv.symm (finProdFinEquiv (r', j_in))).2)))
+    rw [Equiv.symm_apply_apply]
+  -- Differentiability of each scalar coord function.
+  have h_g_coord_diff : ∀ (k' : Fin n) (j_out : Fin d_out) (w : Vec (n * d_in)),
+      DifferentiableAt ℝ
+        (fun w : Vec (n * d_in) =>
+          Mat.flatten (g (Mat.unflatten w)) (finProdFinEquiv (k', j_out))) w :=
+    fun k' j_out w => differentiableAt_pi.mp (h_g_diff w) _
+  have h_F_coord_diff : ∀ (k' : Fin n) (h_l' : Fin heads) (j_out : Fin d_out)
+      (v : Vec (n * (heads * d_in))),
+      DifferentiableAt ℝ
+        (fun v' : Vec (n * (heads * d_in)) =>
+          Mat.flatten (colSlabApply g (Mat.unflatten v'))
+            (finProdFinEquiv (k', finProdFinEquiv (h_l', j_out)))) v := by
+    intro k' h_l' j_out v
+    rw [h_coord k' h_l' j_out]
+    exact (h_g_coord_diff k' j_out _).comp v (slabProj h_l').differentiableAt
+  -- Full flat function is differentiable: every Pi-coord is.
+  have h_F_diff : DifferentiableAt ℝ
+      (fun v : Vec (n * (heads * d_in)) =>
+        Mat.flatten (colSlabApply g (Mat.unflatten v))) (Mat.flatten A) := by
+    rw [(differentiableAt_pi : DifferentiableAt ℝ _ _ ↔ _)]
+    intro idx
+    have h_eq1 : idx = finProdFinEquiv (finProdFinEquiv.symm idx) :=
+      (Equiv.apply_symm_apply _ _).symm
+    set p := finProdFinEquiv.symm idx with hp
+    have h_eq2 : p.2 = finProdFinEquiv (finProdFinEquiv.symm p.2) :=
+      (Equiv.apply_symm_apply _ _).symm
+    rw [h_eq1]
+    show DifferentiableAt ℝ
+      (fun v' => Mat.flatten (colSlabApply g (Mat.unflatten v'))
+        (finProdFinEquiv (p.1, p.2))) (Mat.flatten A)
+    rw [h_eq2]
+    exact h_F_coord_diff _ _ _ _
+  -- fderiv of the (k, encode(h_l, j'')) coord = fderiv of g-coord ∘ slabProj h_l.
+  rw [show fderiv ℝ (fun v : Vec (n * (heads * d_in)) =>
+              Mat.flatten (colSlabApply g (Mat.unflatten v))) (Mat.flatten A)
+            (basisVec (finProdFinEquiv (i, finProdFinEquiv (h_j, j'))))
+            (finProdFinEquiv (k, finProdFinEquiv (h_l, j''))) =
+          fderiv ℝ (fun v : Vec (n * (heads * d_in)) =>
+              Mat.flatten (colSlabApply g (Mat.unflatten v))
+                (finProdFinEquiv (k, finProdFinEquiv (h_l, j'')))) (Mat.flatten A)
+            (basisVec (finProdFinEquiv (i, finProdFinEquiv (h_j, j')))) from by
+    rw [fderiv_apply h_F_diff (finProdFinEquiv (k, finProdFinEquiv (h_l, j'')))]
+    rfl]
+  rw [h_coord k h_l j'']
+  rw [fderiv_comp _ (h_g_coord_diff k j'' _) (slabProj h_l).differentiableAt]
+  rw [(slabProj h_l).fderiv]
+  -- slabProj h_l (Mat.flatten A) = Mat.flatten (slab-fn at h_l of A).
+  have h_slab_A : (slabProj h_l) (Mat.flatten A) =
+      Mat.flatten (fun r' j_in => A r' (finProdFinEquiv (h_l, j_in))) := by
+    funext idx
+    show Mat.flatten A
+          (finProdFinEquiv ((finProdFinEquiv.symm idx).1,
+                           finProdFinEquiv (h_l, (finProdFinEquiv.symm idx).2))) = _
+    unfold Mat.flatten
+    simp only [Equiv.symm_apply_apply]
+  rw [h_slab_A]
+  rw [fderiv_apply (h_g_diff _) (finProdFinEquiv (k, j''))]
+  simp only [ContinuousLinearMap.comp_apply, ContinuousLinearMap.proj_apply]
+  -- Compute (slabProj h_l) (basisVec (encode(i, encode(h_j, j')))) — one of two cases.
+  by_cases hhh : h_j = h_l
+  · subst hhh
+    rw [if_pos rfl]
+    have h_basis : (slabProj h_j) (basisVec (finProdFinEquiv (i, finProdFinEquiv (h_j, j')))) =
+                   (basisVec (finProdFinEquiv (i, j')) : Vec (n * d_in)) := by
+      funext idx
+      show basisVec (finProdFinEquiv (i, finProdFinEquiv (h_j, j')))
+            (finProdFinEquiv ((finProdFinEquiv.symm idx).1,
+                             finProdFinEquiv (h_j, (finProdFinEquiv.symm idx).2))) =
+           basisVec (finProdFinEquiv (i, j')) idx
+      simp only [basisVec_apply]
+      by_cases hii : idx = finProdFinEquiv (i, j')
+      · subst hii
+        simp [Equiv.symm_apply_apply]
+      · rw [if_neg hii, if_neg]
+        intro heq
+        apply hii
+        have step1 := finProdFinEquiv.injective heq
+        have h_inner := finProdFinEquiv.injective (Prod.mk.inj step1).2
+        rw [show idx = finProdFinEquiv (finProdFinEquiv.symm idx) from
+              (Equiv.apply_symm_apply _ _).symm]
+        exact congrArg finProdFinEquiv (Prod.ext (Prod.mk.inj step1).1 (Prod.mk.inj h_inner).2)
+    rw [h_basis]
+  · rw [if_neg hhh]
+    have h_basis : (slabProj h_l) (basisVec (finProdFinEquiv (i, finProdFinEquiv (h_j, j')))) =
+                   (0 : Vec (n * d_in)) := by
+      funext idx
+      show basisVec (finProdFinEquiv (i, finProdFinEquiv (h_j, j')))
+            (finProdFinEquiv ((finProdFinEquiv.symm idx).1,
+                             finProdFinEquiv (h_l, (finProdFinEquiv.symm idx).2))) =
+           (0 : ℝ)
+      simp only [basisVec_apply]
+      rw [if_neg]
+      intro heq
+      apply hhh
+      have step1 := finProdFinEquiv.injective heq
+      have h_inner := finProdFinEquiv.injective (Prod.mk.inj step1).2
+      exact ((Prod.mk.inj h_inner).1).symm
+    rw [h_basis]
+    simp
+
+/-- **Lift `HasVJPMat g` to column-slab vmap** — column-axis analog of
+    `rowwise_has_vjp_mat`. Given `g : Mat n d_in → Mat n d_out` with a
+    matrix VJP, applying `g` independently to each of `heads`-many column
+    slabs gives a `HasVJPMat` for `colSlabApply g`. The backward applies
+    `g.backward` per slab. -/
+noncomputable def colSlabwise_has_vjp_mat {n heads d_in d_out : Nat}
+    {g : Mat n d_in → Mat n d_out}
+    (hg : HasVJPMat g)
+    (hg_diff : Differentiable ℝ
+                 (fun v : Vec (n * d_in) => Mat.flatten (g (Mat.unflatten v)))) :
+    HasVJPMat (colSlabApply g (heads := heads)) where
+  backward := fun M dY r hj =>
+    hg.backward (fun r' j_in => M r' (finProdFinEquiv ((finProdFinEquiv.symm hj).1, j_in)))
+                (fun r' j_out => dY r' (finProdFinEquiv ((finProdFinEquiv.symm hj).1, j_out)))
+                r (finProdFinEquiv.symm hj).2
+  correct := by
+    intro M dY i jj
+    -- jj : Fin (heads * d_in). Decompose into (h_j, j').
+    set p_jj := finProdFinEquiv.symm jj with hp_jj_def
+    have hjj_eq : jj = finProdFinEquiv (p_jj.1, p_jj.2) := (Equiv.apply_symm_apply _ _).symm
+    -- Reshape the LHS structure field via direct computation: p_jj.1, p_jj.2.
+    show hg.backward
+            (fun r' j_in => M r' (finProdFinEquiv (p_jj.1, j_in)))
+            (fun r' j_out => dY r' (finProdFinEquiv (p_jj.1, j_out)))
+            i p_jj.2 =
+         ∑ k : Fin n, ∑ l : Fin (heads * d_out),
+            pdivMat (colSlabApply g) M i jj k l * dY k l
+    -- Replace jj on the RHS with finProdFinEquiv (p_jj.1, p_jj.2).
+    rw [hjj_eq]
+    -- Reindex the sum over l = encode(h_l, j'') via Fintype.sum_equiv + sum_prod_type.
+    have h_reindex : ∀ k : Fin n,
+        (∑ l : Fin (heads * d_out),
+            pdivMat (colSlabApply g) M i (finProdFinEquiv (p_jj.1, p_jj.2)) k l * dY k l) =
+        ∑ h_l : Fin heads, ∑ j'' : Fin d_out,
+            pdivMat (colSlabApply g) M i (finProdFinEquiv (p_jj.1, p_jj.2))
+              k (finProdFinEquiv (h_l, j'')) *
+            dY k (finProdFinEquiv (h_l, j'')) := by
+      intro k
+      rw [Fintype.sum_equiv finProdFinEquiv.symm
+            (fun l : Fin (heads * d_out) =>
+              pdivMat (colSlabApply g) M i (finProdFinEquiv (p_jj.1, p_jj.2)) k l * dY k l)
+            (fun p : Fin heads × Fin d_out =>
+              pdivMat (colSlabApply g) M i (finProdFinEquiv (p_jj.1, p_jj.2))
+                k (finProdFinEquiv p) *
+              dY k (finProdFinEquiv p))
+            (fun l => by simp only [Equiv.apply_symm_apply])]
+      rw [Fintype.sum_prod_type]
+    simp_rw [h_reindex]
+    -- Apply pdivMat_colIndep per term: contributes 0 unless h_l = p_jj.1.
+    simp_rw [pdivMat_colIndep g hg_diff]
+    -- Collapse the outer sum over h_l using the Kronecker if.
+    have h_collapse : ∀ k : Fin n,
+        (∑ h_l : Fin heads, ∑ j'' : Fin d_out,
+          (if p_jj.1 = h_l then
+            pdivMat g (fun r' j_in => M r' (finProdFinEquiv (h_l, j_in))) i p_jj.2 k j''
+           else 0) * dY k (finProdFinEquiv (h_l, j''))) =
+        ∑ j'' : Fin d_out,
+          pdivMat g (fun r' j_in => M r' (finProdFinEquiv (p_jj.1, j_in))) i p_jj.2 k j'' *
+          dY k (finProdFinEquiv (p_jj.1, j'')) := by
+      intro k
+      have h_inner : ∀ h_l : Fin heads,
+          (∑ j'' : Fin d_out,
+            (if p_jj.1 = h_l then
+              pdivMat g (fun r' j_in => M r' (finProdFinEquiv (h_l, j_in))) i p_jj.2 k j''
+             else 0) * dY k (finProdFinEquiv (h_l, j''))) =
+          (if p_jj.1 = h_l then
+            ∑ j'' : Fin d_out,
+              pdivMat g (fun r' j_in => M r' (finProdFinEquiv (h_l, j_in))) i p_jj.2 k j'' *
+              dY k (finProdFinEquiv (h_l, j''))
+           else 0) := by
+        intro h_l
+        by_cases hh : p_jj.1 = h_l
+        · simp [hh]
+        · simp [hh]
+      simp_rw [h_inner]
+      rw [Finset.sum_ite_eq Finset.univ p_jj.1
+          (fun h_l => ∑ j'' : Fin d_out,
+            pdivMat g (fun r' j_in => M r' (finProdFinEquiv (h_l, j_in))) i p_jj.2 k j'' *
+            dY k (finProdFinEquiv (h_l, j'')))]
+      simp only [Finset.mem_univ, if_true]
+    simp_rw [h_collapse]
+    -- Now the goal is exactly hg.correct on the slab.
+    exact hg.correct (fun r' j_in => M r' (finProdFinEquiv (p_jj.1, j_in)))
+                     (fun r' j_out => dY r' (finProdFinEquiv (p_jj.1, j_out)))
+                     i p_jj.2
+
 /-- **Scalar-scale Jacobian** — theorem, derived from `pdiv_mul` +
     `pdiv_const` + `pdiv_id` via the flatten bijection.
     `∂(s · A')_{kl} / ∂A'_{ij} = s · δ_{ik,jl}`. -/
