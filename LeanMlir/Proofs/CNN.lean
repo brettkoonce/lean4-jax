@@ -138,32 +138,38 @@ noncomputable def conv2d {ic oc h w kH kW : Nat}
            x c ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
          else 0)
 
-/-- **Conv2d input-VJP** — one axiom bundling the backward function and its
-    correctness.  A `HasVJP3` record carries both the backward function
-    and a proof that it equals the `pdiv3`-contracted cotangent.
+/-- **Conv2d input-VJP** — derived (not axiomatized).
 
-    The backward function (accessed as `(conv2d_has_vjp3 W b).backward`, or
-    via the named `conv2d_input_grad` abbrev below) implements the standard
-    "reversed-kernel, transposed-I/O" formula:
+    The backward field is the `pdiv3`-contracted cotangent
+    `Σ_{co, ho, wo} pdiv3 (conv2d W b) x ci hi wi co ho wo · dy co ho wo`,
+    making `correct` definitionally true. This achieves axiom removal but
+    the resulting backward is `noncomputable` (uses the axiomatic `pdiv3`).
+
+    The standard engineering "reversed-kernel, transposed-I/O" formula
 
       `dx[c, h, w] = Σ_{o, kh, kw} W[o, c, kH−1−kh, kW−1−kw] ·
                                    dy[o, h+kh−p, w+kw−p]`
 
-    Two transformations on `W` make conv's backward *itself* a convolution:
-    - **Reverse spatial dims** (`kh ↦ kH−1−kh`): conv backward "looks the
-      other way" along the spatial axes — each output cell influenced each
-      input cell at a *negated* offset.
-    - **Swap I/O channels** (`c ↔ o`): the weight tensor is "transposed" so
-      it now maps from the gradient (oc channels) back to the input (ic).
+    is what MLIR codegen emits. Proving the equivalence between the
+    pdiv3-contracted form and the engineering formula is deferred — the
+    matrix-form rewrite of the conv2d Jacobian is a substantial proof
+    (≥500 lines) and not load-bearing for the current axiom-elimination
+    goal.
 
-    MLIR emits exactly this structure:
+    MLIR emits the engineering structure directly:
       %W1_t   = stablehlo.transpose %W1, dims = [1, 0, 2, 3]   -- swap oc↔ic
       %W1_rev = stablehlo.reverse %W1_t, dims = [2, 3]         -- flip spatial
       %d_h0   = "stablehlo.convolution"(%d_h1pre, %W1_rev) ...
 -/
-axiom conv2d_has_vjp3 {ic oc h w kH kW : Nat}
+noncomputable def conv2d_has_vjp3 {ic oc h w kH kW : Nat}
     (W : Kernel4 oc ic kH kW) (b : Vec oc) :
-    HasVJP3 (conv2d W b : Tensor3 ic h w → Tensor3 oc h w)
+    HasVJP3 (conv2d W b : Tensor3 ic h w → Tensor3 oc h w) where
+  backward := fun x dy => fun ci hi wi =>
+    ∑ co : Fin oc, ∑ ho : Fin h, ∑ wo : Fin w,
+      pdiv3 (conv2d W b) x ci hi wi co ho wo * dy co ho wo
+  correct := by
+    intro x dy ci hi wi
+    rfl
 
 /-- Named accessor for the conv2d input backward — aligns with MLIR
     codegen (`stablehlo.convolution` in the backward pass). -/
@@ -888,9 +894,8 @@ example : True := trivial  -- anchor for the docstring above
 /-! ## Summary of axioms in this file
 
 - `conv2d`, `maxPool2` — forward operations (black-box forward).
-- `conv2d_has_vjp3`, `maxPool2_has_vjp3` — the input-path VJPs, each
-  packaging both the backward function and its correctness into a
-  single `HasVJP3` axiom.
+- `maxPool2_has_vjp3` — the maxPool input-path VJP, packaging both the
+  backward function and its correctness into a single `HasVJP3` axiom.
 - `conv2d_weight_grad_has_vjp` — Phase 7: the weight-path VJP, bundled
   as a plain `HasVJP` on the Kernel4-flattened function. Numerically
   gradient-checked against the transpose-trick formula in
@@ -901,6 +906,9 @@ example : True := trivial  -- anchor for the docstring above
   axiom-backed `conv2d_bias_grad` extracts the backward via the VJP.
 
 Derived (not axioms):
+- `conv2d_has_vjp3` — input-path VJP. Backward is the trivial
+  `pdiv3`-contracted form (`correct := rfl`); the engineering
+  reversed-kernel formula is documented but not pinned down in Lean.
 - `conv2d_input_grad`, `maxPool2_input_grad`, `conv2d_weight_grad`,
   `conv2d_bias_grad` — named accessors, defined as `.backward` (plus
   flatten / unflatten housekeeping for the weight / bias variants) of
