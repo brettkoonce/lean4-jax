@@ -233,17 +233,112 @@ noncomputable def conv2d_weight_grad {ic oc h w kH kW : Nat}
     ((conv2d_weight_grad_has_vjp b x).backward
       (Kernel4.flatten W) (Tensor3.flatten dy))
 
-/-- **Conv2d bias-VJP** — bundled axiom on the `b`-flattened function (Phase 9).
-
-    Viewing `conv2d W b x` as a function of `b` (with `W`, `x` closed over),
-    flatten the Tensor3 output so we get `Vec oc → Vec (oc*h*w)` with a plain
-    `HasVJP`. The bundled axiom asserts existence of a correct backward; the
-    expected closed-form is "sum output cotangent over spatial dims per
-    channel," documented as `conv2d_bias_grad_formula` below and numerically
-    gradient-checked. Mirrors the Phase 7 `conv2d_weight_grad_has_vjp` pattern. -/
-axiom conv2d_bias_grad_has_vjp {ic oc h w kH kW : Nat}
+/-- **Conv2d bias-VJP** — proved from foundation rules. Now that `conv2d`
+    is a real def, the function `b ↦ flatten (conv2d W b x)` decomposes
+    as `(channel-reindex from b) + (W,x-only term constant in b)`. Apply
+    `pdiv_add` + `pdiv_reindex` + `pdiv_const`, then collapse the
+    Kronecker over the `(c, hi, wi)` decomposition of `Fin (oc*h*w)`.
+    The backward is `db[o] = Σ_{hi, wi} dy[o, hi, wi]` (matches
+    `conv2d_bias_grad_formula` below). -/
+noncomputable def conv2d_bias_grad_has_vjp {ic oc h w kH kW : Nat}
     (W : Kernel4 oc ic kH kW) (x : Tensor3 ic h w) :
-    HasVJP (fun b : Vec oc => Tensor3.flatten (conv2d W b x))
+    HasVJP (fun b : Vec oc => Tensor3.flatten (conv2d W b x)) where
+  backward := fun _b dy => fun o =>
+    ∑ hi : Fin h, ∑ wi : Fin w,
+      dy (finProdFinEquiv (finProdFinEquiv (o, hi), wi))
+  correct := by
+    intro b dy o
+    -- Step 1: pdiv decomposition. f decomposes as `b ↦ b(chan idx)` + `(W,x term)`.
+    have h_pdiv : ∀ idx : Fin (oc * h * w),
+        pdiv (fun b' : Vec oc => Tensor3.flatten (conv2d W b' x)) b o idx =
+        (if o = (finProdFinEquiv.symm (finProdFinEquiv.symm idx).1).1
+          then (1:ℝ) else 0) := by
+      intro idx
+      rw [show (fun b' : Vec oc => Tensor3.flatten (conv2d W b' x)) =
+            (fun b' k =>
+              (fun y : Vec oc => fun k' : Fin (oc * h * w) =>
+                y ((finProdFinEquiv.symm (finProdFinEquiv.symm k').1).1)) b' k +
+              (fun (_ : Vec oc) (k' : Fin (oc * h * w)) =>
+                ∑ c : Fin ic, ∑ kh : Fin kH, ∑ kw : Fin kW,
+                  W ((finProdFinEquiv.symm (finProdFinEquiv.symm k').1).1) c kh kw *
+                    (let pH := (kH - 1) / 2
+                     let pW := (kW - 1) / 2
+                     let hh := kh.val + (finProdFinEquiv.symm (finProdFinEquiv.symm k').1).2.val
+                     let ww := kw.val + (finProdFinEquiv.symm k').2.val
+                     if hpad : pH ≤ hh ∧ hh - pH < h ∧ pW ≤ ww ∧ ww - pW < w then
+                       x c ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
+                     else 0)) b' k) from by
+        funext b' k
+        unfold Tensor3.flatten conv2d
+        rfl]
+      rw [pdiv_add]
+      rw [show (fun y : Vec oc => fun k' : Fin (oc * h * w) =>
+                  y ((finProdFinEquiv.symm (finProdFinEquiv.symm k').1).1)) =
+            (fun y => fun k' => y ((fun k'' : Fin (oc * h * w) =>
+                (finProdFinEquiv.symm (finProdFinEquiv.symm k'').1).1) k')) from rfl]
+      rw [pdiv_reindex (fun k'' : Fin (oc * h * w) =>
+            (finProdFinEquiv.symm (finProdFinEquiv.symm k'').1).1)]
+      rw [show pdiv (fun (_ : Vec oc) (k' : Fin (oc * h * w)) =>
+                  ∑ c : Fin ic, ∑ kh : Fin kH, ∑ kw : Fin kW,
+                    W ((finProdFinEquiv.symm (finProdFinEquiv.symm k').1).1) c kh kw *
+                      (let pH := (kH - 1) / 2
+                       let pW := (kW - 1) / 2
+                       let hh := kh.val + (finProdFinEquiv.symm (finProdFinEquiv.symm k').1).2.val
+                       let ww := kw.val + (finProdFinEquiv.symm k').2.val
+                       if hpad : pH ≤ hh ∧ hh - pH < h ∧ pW ≤ ww ∧ ww - pW < w then
+                         x c ⟨hh - pH, hpad.2.1⟩ ⟨ww - pW, hpad.2.2.2⟩
+                       else 0))
+                  b o idx = 0
+          from pdiv_const _ _ _ _]
+      ring
+    -- Step 2: substitute and collapse the Kronecker via two stages of finProdFinEquiv.
+    simp_rw [h_pdiv]
+    -- Σ idx, [if o = chan(idx) then 1 else 0] * dy idx
+    -- Convert idx ∈ Fin (oc*h*w) to ((c, hi), wi) via finProdFinEquiv.symm twice.
+    rw [Fintype.sum_equiv finProdFinEquiv.symm
+        (fun idx : Fin (oc * h * w) =>
+          (if o = (finProdFinEquiv.symm (finProdFinEquiv.symm idx).1).1 then (1:ℝ) else 0)
+          * dy idx)
+        (fun pair : Fin (oc * h) × Fin w =>
+          (if o = (finProdFinEquiv.symm pair.1).1 then (1:ℝ) else 0)
+          * dy (finProdFinEquiv pair))
+        (fun idx => by
+          show _ * _ = _ * _
+          rw [Equiv.apply_symm_apply])]
+    rw [Fintype.sum_prod_type]
+    rw [Fintype.sum_equiv finProdFinEquiv.symm
+        (fun pair_h : Fin (oc * h) =>
+          ∑ wi : Fin w,
+            (if o = (finProdFinEquiv.symm pair_h).1 then (1:ℝ) else 0)
+            * dy (finProdFinEquiv (pair_h, wi)))
+        (fun ch_pair : Fin oc × Fin h =>
+          ∑ wi : Fin w,
+            (if o = ch_pair.1 then (1:ℝ) else 0)
+            * dy (finProdFinEquiv (finProdFinEquiv ch_pair, wi)))
+        (fun pair_h => by
+          have h_inv : finProdFinEquiv (finProdFinEquiv.symm pair_h
+                : Fin oc × Fin h) = pair_h :=
+            Equiv.apply_symm_apply _ _
+          simp_rw [h_inv])]
+    rw [Fintype.sum_prod_type]
+    -- Goal is now ∑ c, ∑ hi, ∑ wi, (if o = c then 1 else 0) * dy (flat (c, hi, wi))
+    have h_pull : ∀ c : Fin oc,
+        (∑ hi : Fin h, ∑ wi : Fin w,
+          (if o = c then (1:ℝ) else 0)
+          * dy (finProdFinEquiv (finProdFinEquiv (c, hi), wi))) =
+        (if o = c then (1:ℝ) else 0) *
+          ∑ hi : Fin h, ∑ wi : Fin w,
+            dy (finProdFinEquiv (finProdFinEquiv (c, hi), wi)) := by
+      intro c
+      rw [Finset.mul_sum]
+      apply Finset.sum_congr rfl
+      intro hi _
+      rw [Finset.mul_sum]
+    simp_rw [h_pull, ite_mul, one_mul, zero_mul]
+    rw [Finset.sum_ite_eq Finset.univ o (fun c =>
+        ∑ hi : Fin h, ∑ wi : Fin w,
+          dy (finProdFinEquiv (finProdFinEquiv (c, hi), wi)))]
+    simp
 
 /-- Named accessor for the conv2d bias backward via the VJP framework. -/
 noncomputable def conv2d_bias_grad {ic oc h w kH kW : Nat}
