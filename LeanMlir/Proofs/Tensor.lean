@@ -820,6 +820,55 @@ theorem pdivFDMat_matmul_right_const {m p q : Nat} (A : Mat m p) (D : Mat p q)
       fun s => ⟨fun h => hik h.2, False.elim⟩]
     simp
 
+/-- **Scalar-scale Jacobian for `pdivFDMat`** — `∂(s·M)_{kl}/∂M_{ij} =
+    s·δ_{ik,jl}`. Proved from `pdivFD_mul_of_diff` (const × id factors)
+    + `pdivFD_const` + `pdivFD_id`. Mirrors `pdivMat_scalarScale`. -/
+theorem pdivFDMat_scalarScale {m n : Nat} (s : ℝ) (A : Mat m n)
+    (i : Fin m) (j : Fin n) (k : Fin m) (l : Fin n) :
+    pdivFDMat (fun M : Mat m n => fun r c => s * M r c) A i j k l =
+    if i = k ∧ j = l then s else 0 := by
+  unfold pdivFDMat
+  have h_reduces :
+      (fun v : Vec (m * n) =>
+        Mat.flatten ((fun M : Mat m n => fun r c => s * M r c) (Mat.unflatten v))) =
+      (fun v : Vec (m * n) => fun k' : Fin (m * n) => s * v k') := by
+    funext v k'
+    show s * Mat.unflatten v (finProdFinEquiv.symm k').1 (finProdFinEquiv.symm k').2 = s * v k'
+    unfold Mat.unflatten
+    rw [show ((finProdFinEquiv.symm k').1, (finProdFinEquiv.symm k').2) = finProdFinEquiv.symm k'
+        from rfl]
+    rw [Equiv.apply_symm_apply]
+  rw [h_reduces]
+  have h_product :
+      (fun v : Vec (m * n) => fun k' : Fin (m * n) => s * v k') =
+      (fun v k' =>
+        (fun (_ : Vec (m * n)) (_ : Fin (m * n)) => s) v k' *
+        (fun (w : Vec (m * n)) => w) v k') := rfl
+  rw [h_product]
+  -- Diff hypotheses for the const and id factors.
+  have h_const_diff : DifferentiableAt ℝ
+      (fun (_ : Vec (m * n)) (_ : Fin (m * n)) => s) (Mat.flatten A) :=
+    differentiableAt_const _
+  have h_id_diff : DifferentiableAt ℝ
+      (fun (w : Vec (m * n)) => w) (Mat.flatten A) :=
+    differentiableAt_id
+  rw [pdivFD_mul_of_diff (fun _ _ => s) (fun w => w) (Mat.flatten A) h_const_diff h_id_diff]
+  have h_const :
+      pdivFD (fun _ : Vec (m * n) => fun _ : Fin (m * n) => s) (Mat.flatten A)
+        (finProdFinEquiv (i, j)) (finProdFinEquiv (k, l)) = 0 :=
+    pdivFD_const (fun _ : Fin (m * n) => s) (Mat.flatten A)
+      (finProdFinEquiv (i, j)) (finProdFinEquiv (k, l))
+  rw [h_const, pdivFD_id]
+  simp only [zero_mul, zero_add, mul_ite, mul_one, mul_zero]
+  by_cases hij : i = k ∧ j = l
+  · obtain ⟨hi, hj⟩ := hij; subst hi; subst hj; simp
+  · have hne : finProdFinEquiv (i, j) ≠ finProdFinEquiv (k, l) := by
+      intro heq
+      apply hij
+      have := finProdFinEquiv.injective heq
+      exact ⟨(Prod.mk.inj this).1, (Prod.mk.inj this).2⟩
+    rw [if_neg hij, if_neg hne]
+
 /-- **Sum rule for `pdivFDMat`** — proved from `pdivFD_add_of_diff` via
     the flatten bijection. Requires both `F` and `G` (in their flattened
     forms) to be differentiable at `flatten A`. Mirrors `pdivMat_add`. -/
