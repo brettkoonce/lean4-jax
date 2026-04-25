@@ -314,8 +314,6 @@ jobs:
             echo "--- find blueprint *.log ---"
             find blueprint -name "*.log" -maxdepth 3 2>/dev/null || true
           } > public/build-logs/filesystem.txt
-          # Keep the standalone graphviz DAG as an alt artifact
-          cp LeanMlir/Proofs/blueprint.svg public/deps.svg 2>/dev/null || true
           ls -la public/ public/build-logs/
 
       - name: Upload Pages artifact
