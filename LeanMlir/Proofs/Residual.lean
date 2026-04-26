@@ -16,7 +16,7 @@ than one downstream op.
 This file builds on the proved foundations in `Tensor.lean`:
 - `biPath f g` and `biPath_has_vjp` (additive fan-in, proved)
 - `identity_has_vjp` (identity VJP, proved)
-- `pdiv_add` and `pdiv_id` (axiomatized calculus facts)
+- `pdiv_add` and `pdiv_id` (calculus facts, proved from Mathlib's `fderiv`)
 
 With those in hand, the residual definitions are one-liners — no sorry's.
 

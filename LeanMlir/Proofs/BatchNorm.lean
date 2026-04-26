@@ -309,15 +309,15 @@ Now it's a theorem: we factor `bnXhat` as the elementwise product of
 the centered input and the broadcast `istd`, apply `pdiv_mul`, and
 collapse via `ring` using the `x̂ᵢ = (xᵢ - μ) · istd` identity.
 
-Only **two** elementary calculus facts remain axiomatized:
+Both elementary calculus facts are now proved from the foundation:
 
 1. `pdiv_bnCentered` — ∂(xⱼ - μ(x))/∂xᵢ = δᵢⱼ - 1/n.
-   Equivalent to Mathlib's `HasDerivAt.sub` applied to `id` and `(const_mul) ∘ (Finset.sum)`.
+   Proved via Mathlib's `HasDerivAt.sub` applied to `id` and `(const_mul) ∘ (Finset.sum)`.
 
 2. `pdiv_bnIstdBroadcast` — ∂istd(x,ε)/∂xᵢ = -istd³ · (xᵢ - μ) / n.
-   Equivalent to `Real.hasDerivAt_sqrt` + `HasDerivAt.inv` + chain rule
-   against `bnVar`, whose derivative is `(2/n)·(xᵢ - μ)` by the same
-   product-rule trick as `pdiv_bnCentered`.
+   Proved via the centering CLM + `HasFDerivAt.sqrt` (under `bnVar + ε > 0`)
+   + `(hasDerivAt_inv).comp_hasFDerivAt`. The centered sum collapses by
+   `Σ_k (x_k − μ) = 0`. Carries `(hε : 0 < ε)` hypothesis throughout.
 
 The three-term formula falls out by ring manipulation alone. -/
 
@@ -643,7 +643,7 @@ theorem pdiv_bnNormalize (n : Nat) (ε : ℝ) (hε : 0 < ε)
   rw [show bnNormalize n ε = bnNormalize n ε from rfl, hfactor]
   -- Step 2: apply pdiv_mul. Both factors are Differentiable: bnCentered is
   -- linear (proved via fun_prop), bnIstdBroadcast is smooth when ε > 0
-  -- (axiomatized as bnIstdBroadcast_diff).
+  -- (proved as bnIstdBroadcast_diff).
   have h_centered_diff : DifferentiableAt ℝ (bnCentered n) x := by
     unfold bnCentered bnMean; fun_prop
   have h_istd_diff : DifferentiableAt ℝ (bnIstdBroadcast n ε) x :=

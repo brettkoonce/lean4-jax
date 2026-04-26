@@ -277,32 +277,108 @@ def dense_bias_grad {n : Nat} (dy : Vec n) : Vec n := dy
 noncomputable def relu (n : Nat) (x : Vec n) : Vec n :=
   fun i => if x i > 0 then x i else 0
 
-/-- **ReLU partial derivative — guarded subgradient axiom.**
+/-- **ReLU partial derivative — proved via local-diagonal-CLM transport.**
 
-    Only constrains `pdiv (relu n) x` at points where `relu n` is
-    `Differentiable`, i.e., where every coordinate is non-zero. This
-    is the form consistent with the foundation flip: at non-smooth
-    points, `fderiv` returns Mathlib's junk default and the axiom
-    intentionally says nothing.
-
-    The subgradient convention `1` for `x i = 0` (used by every ML
-    framework's ReLU implementation) lives in `relu_has_vjp` directly. -/
-axiom pdiv_relu (n : Nat) (x : Vec n)
+    At a smooth point (`∀ k, x k ≠ 0`), `relu n` agrees with a fixed
+    diagonal indicator CLM on `Metric.ball x r` for `r := min |x k|` —
+    every coordinate keeps its sign in that ball. `EventuallyEq`
+    transports `fderiv` from the CLM (which is itself, since CLMs are
+    their own `fderiv`) to ReLU, and direct evaluation at `basisVec i`
+    reads off the entry. -/
+theorem pdiv_relu (n : Nat) (x : Vec n)
     (h_smooth : ∀ k, x k ≠ 0)
     (i j : Fin n) :
     pdiv (relu n) x i j =
-      if i = j then (if x i > 0 then 1 else 0) else 0
+      if i = j then (if x i > 0 then 1 else 0) else 0 := by
+  -- Local diagonal indicator CLM at x.
+  let phi : Vec n →L[ℝ] Vec n :=
+    ContinuousLinearMap.pi fun k =>
+      if x k > 0 then ContinuousLinearMap.proj k else (0 : Vec n →L[ℝ] ℝ)
+  -- Coordinate evaluation: phi y k = if x k > 0 then y k else 0.
+  have h_phi_eval : ∀ y : Vec n, ∀ k : Fin n,
+      phi y k = if x k > 0 then y k else 0 := by
+    intro y k
+    show (ContinuousLinearMap.pi (fun k' =>
+            if x k' > 0 then ContinuousLinearMap.proj k'
+                        else (0 : Vec n →L[ℝ] ℝ))) y k = _
+    rw [ContinuousLinearMap.pi_apply]
+    by_cases hxk : x k > 0
+    · rw [if_pos hxk, if_pos hxk]; rfl
+    · rw [if_neg hxk, if_neg hxk]; rfl
+  -- n = 0: Fin 0 is empty, vacuously true.
+  rcases Nat.eq_zero_or_pos n with hn0 | hn_pos
+  · subst hn0; exact i.elim0
+  -- Pick r := min |x k|.
+  haveI : Nonempty (Fin n) := ⟨⟨0, hn_pos⟩⟩
+  let r : ℝ := Finset.univ.inf' Finset.univ_nonempty (fun k : Fin n => |x k|)
+  have hr_pos : 0 < r := by
+    refine (Finset.lt_inf'_iff _).mpr ?_
+    intro k _; exact abs_pos.mpr (h_smooth k)
+  have hr_le : ∀ k : Fin n, r ≤ |x k| := fun k =>
+    Finset.inf'_le _ (Finset.mem_univ k)
+  -- Local agreement: relu n y = phi y on Metric.ball x r.
+  have h_local : Set.EqOn (relu n) (⇑phi) (Metric.ball x r) := by
+    intro y hy
+    have hy_norm : ‖y - x‖ < r := by
+      rw [Metric.mem_ball, dist_eq_norm] at hy; exact hy
+    funext k
+    have h_close : |y k - x k| < |x k| := by
+      have h1 : |y k - x k| ≤ ‖y - x‖ := by
+        have h2 : ‖(y - x) k‖ ≤ ‖y - x‖ := norm_le_pi_norm (y - x) k
+        rw [Real.norm_eq_abs] at h2
+        exact h2
+      linarith [hr_le k]
+    show (relu n y) k = phi y k
+    rw [h_phi_eval]
+    show (if y k > 0 then y k else 0) = if x k > 0 then y k else 0
+    rcases lt_or_gt_of_ne (h_smooth k) with hxk_neg | hxk_pos
+    · -- x k < 0 ⇒ y k < 0 (within radius |x k|).
+      have hyk_neg : y k < 0 := by
+        have h_abs : |y k - x k| < -x k := by rwa [abs_of_neg hxk_neg] at h_close
+        have h_lt : y k - x k < -x k := (abs_lt.mp h_abs).2
+        linarith
+      rw [if_neg (not_lt.mpr hyk_neg.le), if_neg (not_lt.mpr hxk_neg.le)]
+    · -- x k > 0 ⇒ y k > 0.
+      have hyk_pos : 0 < y k := by
+        have h_abs : |y k - x k| < x k := by rwa [abs_of_pos hxk_pos] at h_close
+        have h_lt : -(x k) < y k - x k := (abs_lt.mp h_abs).1
+        linarith
+      rw [if_pos hyk_pos, if_pos hxk_pos]
+  -- Promote to EventuallyEq at x.
+  have h_evt : (relu n) =ᶠ[nhds x] (⇑phi : Vec n → Vec n) :=
+    h_local.eventuallyEq_of_mem (Metric.ball_mem_nhds x hr_pos)
+  -- Transport: HasFDerivAt (relu n) phi x.
+  have h_fderiv : HasFDerivAt (relu n) phi x :=
+    (phi.hasFDerivAt).congr_of_eventuallyEq h_evt
+  -- Compute pdiv directly.
+  unfold pdiv
+  rw [h_fderiv.fderiv, h_phi_eval, basisVec_apply]
+  -- Goal: (if x j > 0 then (if j = i then 1 else 0) else 0)
+  --     = if i = j then (if x i > 0 then 1 else 0) else 0
+  by_cases hij : i = j
+  · subst hij; rw [if_pos rfl, if_pos rfl]
+  · rw [if_neg (fun h : j = i => hij h.symm), if_neg hij]
+    by_cases hxj : x j > 0
+    · rw [if_pos hxj]
+    · rw [if_neg hxj]
 
-/-- **ReLU VJP — axiomatized.**
+/-- **ReLU bundled VJP — canonical (junk-at-kink) witness.**
 
-    With the foundation flipped to `fderiv`-grounded `pdiv`, ReLU's
-    `correct` field cannot be discharged for arbitrary `x` — at points
-    where some coordinate is zero, `relu n` is not `Differentiable` and
-    `pdiv (relu n) x` agrees with `fderiv`'s junk default rather than
-    the subgradient convention. The axiom asserts existence of the
-    subgradient-routing backward, matching how every ML framework
-    treats ReLU at the kink (`relu'(0) := 0`, conventionally). -/
-axiom relu_has_vjp (n : Nat) : HasVJP (relu n)
+    `HasVJP.correct` is satisfied by the canonical pdiv-derived backward:
+    at smooth points it is the diagonal indicator (per `pdiv_relu`); at
+    points where some coordinate is zero, `pdiv (relu n) x` agrees with
+    `fderiv`'s junk default of `0`, so the canonical backward is `0`
+    there too — and `correct` holds by `rfl`.
+
+    The codegen (`MlirCodegen.lean`) emits the standard subgradient
+    formula `if x > 0 then dy else 0` instead, which agrees with the
+    canonical witness at smooth points and differs at the kinks (the
+    convention `relu'(0) := 0` used by every ML framework). The
+    Lean-vs-codegen gap at the kinks is the codegen trust boundary —
+    see `LeanMlir/Proofs/README.md`. -/
+noncomputable def relu_has_vjp (n : Nat) : HasVJP (relu n) where
+  backward x dy i := ∑ j : Fin n, pdiv (relu n) x i j * dy j
+  correct _ _ _  := rfl
 
 -- ════════════════════════════════════════════════════════════════
 -- § Softmax Cross-Entropy Loss
@@ -334,19 +410,22 @@ noncomputable def mlpForward {d₀ d₁ d₂ d₃ : Nat}
     Vec d₀ → Vec d₃ :=
   dense W₂ b₂ ∘ relu d₂ ∘ dense W₁ b₁ ∘ relu d₁ ∘ dense W₀ b₀
 
-/-- **MLP composition VJP — axiomatized.**
+/-- **MLP composition VJP — canonical witness.**
 
     The MLP forward composes `dense W b` (everywhere `Differentiable`)
-    with `relu` (non-`Differentiable` at the kinks). Since `vjp_comp`
-    requires both functions in the composition to be `Differentiable`
-    everywhere (to discharge the `pdiv_comp` chain rule for all `x`),
-    we cannot mechanically build `mlp_has_vjp` via repeated
-    `vjp_comp`. Instead, axiomatize it — the subgradient routing
-    through `relu_has_vjp` is the source of axiomaticness anyway. -/
-axiom mlp_has_vjp {d₀ d₁ d₂ d₃ : Nat}
+    with `relu` (non-`Differentiable` at the kinks). `vjp_comp` would
+    require `Differentiable ℝ (relu n)`, which doesn't hold globally,
+    so the chain-rule route is blocked. The canonical pdiv-derived
+    backward inhabits `HasVJP.correct` directly via `rfl` — the
+    codegen substitutes the subgradient formula at the kinks (see
+    `LeanMlir/Proofs/README.md` for the trust-boundary discussion). -/
+noncomputable def mlp_has_vjp {d₀ d₁ d₂ d₃ : Nat}
     (W₀ : Mat d₀ d₁) (b₀ : Vec d₁)
     (W₁ : Mat d₁ d₂) (b₁ : Vec d₂)
     (W₂ : Mat d₂ d₃) (b₂ : Vec d₃) :
-    HasVJP (mlpForward W₀ b₀ W₁ b₁ W₂ b₂)
+    HasVJP (mlpForward W₀ b₀ W₁ b₁ W₂ b₂) where
+  backward x dy i :=
+    ∑ j : Fin d₃, pdiv (mlpForward W₀ b₀ W₁ b₁ W₂ b₂) x i j * dy j
+  correct _ _ _  := rfl
 
 end Proofs

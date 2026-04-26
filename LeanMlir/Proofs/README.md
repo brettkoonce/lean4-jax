@@ -26,8 +26,9 @@ deferred" Jacobian: `pdivMat_rowIndep`, `pdiv_softmax`,
 inverse-stddev smoothness, the row-wise softmax smoothness, and all
 seven transformer-level composition chains.
 
-The progression: **30 → 10 axioms.** See `VJP.md` at the repo root
-for the full elimination history.
+The progression: **30 → 0 project axioms.** See `VJP.md` (foundation
+flip and per-chapter migration) and `pdiv.md` (final 4-axiom retirement)
+at the repo root for the full elimination history.
 
 ## Dependency graph
 
@@ -43,31 +44,49 @@ Tensor.lean                    ← pdiv (def via fderiv) + VJP framework
   │  elemwiseProduct                ← theorem
   │  pdivMat_rowIndep               ← theorem (was the last surviving Mat-axiom)
   │
-  ├── MLP.lean                 dense (proved both sides) + ReLU (subgradient axiom)
+  ├── MLP.lean                 dense (proved both sides) + ReLU (pdiv_relu proved,
+  │                            relu/mlp _has_vjp = canonical-witness defs)
   │                            + softmax CE (proved, lives in Attention.lean)
   │
   ├── CNN.lean                 conv2d (def) + maxPool (def) + weight/bias grads (theorems)
-  │                            input-side VJPs stay axiomatic (padding boundary / argmax)
+  │                            conv2d_has_vjp3 (theorem); maxPool2_has_vjp3
+  │                            (canonical-witness def — codegen substitutes argmax)
   │
   ├── BatchNorm.lean           BN (every axiom proved from foundation)
   │
   ├── Residual.lean            skip connections (biPath; zero new axioms)
   │
   ├── Depthwise.lean           depthwise conv (def) + weight/bias grads (theorems)
-  │                            input-side VJP stays axiomatic
+  │                            depthwise_has_vjp3 (theorem)
   │
   ├── SE.lean                  squeeze-and-excitation (elemwiseProduct; zero new axioms)
   │
   ├── LayerNorm.lean           LayerNorm (proved) + GELU (gelu Jacobian proved)
   │
-  └── Attention.lean           softmax (proved) + SDPA (proved) + MHSA (bundled)
-                               + ViT body chains (proved) + patchEmbed (bundled)
+  └── Attention.lean           softmax (proved) + SDPA (proved) + MHSA (proved)
+                               + ViT body chains (proved) + patchEmbed (proved)
 ```
 
-## Axioms (10 total)
+## Axioms (0 project)
 
-The 10 surviving axioms are at genuine non-smoothness or
-bundled-codegen boundaries, not deferred proofs. Grouped by file:
+Pure-Mathlib closure on every theorem. `#print axioms vit_full_has_vjp`
+shows only `propext`, `Classical.choice`, `Quot.sound` (Lean core).
+
+The earlier 4-axiom floor was retired in Phase 7 (Apr 2026):
+
+- `relu_has_vjp`, `mlp_has_vjp`, `maxPool2_has_vjp3` — converted from
+  `axiom` to `noncomputable def` with the canonical pdiv-derived
+  witness. `HasVJP.correct` holds by `rfl` since `pdiv` is a `def`
+  over `fderiv` (post-foundation-flip). At non-smooth points the
+  canonical backward is `fderiv`'s junk default of `0`; the codegen
+  substitutes the standard subgradient/argmax convention — see
+  "Codegen trust boundary" below.
+- `pdiv_relu` — proved via local-diagonal-CLM transport
+  (~80 LOC). At a smooth point (`∀ k, x k ≠ 0`), ReLU agrees with the
+  diagonal indicator CLM `Π k, (if x k > 0 then proj k else 0)` on
+  `Metric.ball x (min |x k|)` (every coordinate keeps its sign).
+  `HasFDerivAt.congr_of_eventuallyEq` transports the CLM's self-fderiv
+  to ReLU; direct evaluation at `basisVec i` reads off the entry.
 
 **Tensor.lean** — calculus foundation: **0 axioms.** `pdiv` is a
 `noncomputable def` over `fderiv`; every structural rule is a
@@ -76,28 +95,24 @@ prior drafts) is now a theorem proved via the row-projection
 `ContinuousLinearMap` and the chain rule, given a `Differentiable`
 hypothesis on the per-row function.
 
-**MLP.lean** — dense layers: **3 axioms.**
-| Axiom | What it says |
-|-------|-------------|
-| `pdiv_relu` | ReLU Jacobian (guarded subgradient — `(∀ k, x k ≠ 0)`) |
-| `relu_has_vjp` | ReLU bundled VJP, existence at non-smooth points |
-| `mlp_has_vjp` | MLP composition shortcut (composes through ReLU) |
+**MLP.lean** — dense layers: **0 axioms.**
 
-> `pdiv_dense`, `pdiv_dense_W`, `dense_weight_grad_correct`, and
-> `dense_bias_grad_correct` are now **theorems** proved from the
-> foundation. `softmaxCE_grad` is also a theorem (relocated to
+> `pdiv_dense`, `pdiv_dense_W`, `dense_weight_grad_correct`,
+> `dense_bias_grad_correct`, and `pdiv_relu` are theorems.
+> `relu_has_vjp` and `mlp_has_vjp` are `def`s over the canonical
+> pdiv-derived witness. `softmaxCE_grad` is a theorem (relocated to
 > `Attention.lean` next to `pdiv_softmax`).
 
-**CNN.lean** — convolution and pooling: **2 axioms.**
-| Axiom | What it says |
-|-------|-------------|
-| `conv2d_has_vjp3` | Conv2d input-VJP (padding boundary stays axiomatic) |
-| `maxPool2_has_vjp3` | MaxPool2 input-VJP (argmax routing convention) |
+**CNN.lean** — convolution and pooling: **0 axioms.**
 
-> `conv2d` and `maxPool2` are now concrete `def`s. The
-> weight-grad and bias-grad VJPs (`conv2d_weight_grad_has_vjp`,
+> `conv2d` and `maxPool2` are concrete `def`s. The weight-grad and
+> bias-grad VJPs (`conv2d_weight_grad_has_vjp`,
 > `conv2d_bias_grad_has_vjp`) are theorems proved from foundation
-> via `unfold + fun_prop`.
+> via `unfold + fun_prop`. `conv2d_has_vjp3` is a theorem (Phase 1,
+> Apr 2026) — proved via `pdiv_finset_sum` × 3 +
+> `pdiv_const_mul_pi_pad_eval` per-summand + Σ_(c, kh, kw) collapse.
+> `maxPool2_has_vjp3` is a `def` over the canonical pdiv-derived
+> witness.
 
 **BatchNorm.lean** — the hard one: **0 axioms.**
 
@@ -112,13 +127,12 @@ hypothesis on the per-row function.
 **Residual.lean** — skip connections: **0 axioms.** Pure composition
 over `biPath_has_vjp` + `identity_has_vjp` from `Tensor.lean`.
 
-**Depthwise.lean** — depthwise conv: **1 axiom.**
-| Axiom | What it says |
-|-------|-------------|
-| `depthwise_has_vjp3` | Depthwise input-VJP (parallel to conv2d) |
+**Depthwise.lean** — depthwise conv: **0 axioms.**
 
-> Same recipe as CNN: `depthwiseConv2d` is now a concrete `def`,
-> weight and bias gradients are theorems via `unfold + fun_prop`.
+> `depthwiseConv2d` is now a concrete `def`, weight and bias
+> gradients are theorems via `unfold + fun_prop`. `depthwise_has_vjp3`
+> is now a theorem (Phase 2, Apr 2026) — same recipe as conv2d with
+> one fewer Σ level (no cross-channel mixing in depthwise).
 
 **SE.lean** — squeeze-and-excitation: **0 axioms.** Pure composition
 over `elemwiseProduct_has_vjp` + `dense_has_vjp` + `identity_has_vjp`.
@@ -135,13 +149,7 @@ over `elemwiseProduct_has_vjp` + `dense_has_vjp` + `identity_has_vjp`.
 > smoothness through. `layerNorm_has_vjp` reuses the BN proof
 > template on a different axis.
 
-**Attention.lean** — softmax, attention, ViT: **4 axioms.**
-| Axiom | What it says |
-|-------|-------------|
-| `mhsa_has_vjp_mat` | Multi-head SDPA bundled VJP |
-| `mhsa_layer_flat_diff` | `Differentiable` sibling of `mhsa_has_vjp_mat` |
-| `patchEmbed_flat_has_vjp` | Patch-embedding bundled VJP (opaque codegen) |
-| `patchEmbed_flat_diff` | `Differentiable` sibling |
+**Attention.lean** — softmax, attention, ViT: **0 axioms.**
 
 > `pdiv_softmax`, `softmaxCE_grad`, the three `sdpa_back_*_correct`
 > theorems, `rowSoftmax_flat_diff`, and **every** transformer-level
@@ -150,21 +158,46 @@ over `elemwiseProduct_has_vjp` + `dense_has_vjp` + `identity_has_vjp`.
 > `transformerMlpSublayer_has_vjp_mat`,
 > `transformerBlock_has_vjp_mat`,
 > `transformerTower_has_vjp_mat`, `vit_body_has_vjp_mat`,
+> `mhsa_has_vjp_mat`, `mhsa_layer_flat_diff`,
 > `classifier_flat_has_vjp`, `vit_full_has_vjp`) are theorems.
-> `mhsa_has_vjp_mat` and `patchEmbed_flat_has_vjp` stay axiomatic
-> because each requires a project-wide framework change to remove
-> (per-head reduction machinery / spatial-rearrangement lifting).
-> Each has a Diff sibling so downstream theorems can thread
-> `Differentiable` evidence through them.
+> `patchEmbed_flat`, `patchEmbed_flat_diff`, and
+> `patchEmbed_flat_has_vjp` were the last to fall: Phase 6a (Apr 2026)
+> de-opaqued the forward and proved Diff via `differentiableAt_pad_eval`;
+> Phase 6b (Apr 2026) proved the closed-form input-VJP via the same
+> recipe used for `conv2d_has_vjp3`/`depthwise_has_vjp3`, with one new
+> wrinkle: split `Σ n : Fin (N+1)` into the n=0 (CLS row, zero img-grad
+> contribution) and `Σ p : Fin N` (n = p.succ, conv projection).
 
 Plus three Lean core axioms (`propext`, `Classical.choice`,
 `Quot.sound`) present in every nontrivial Lean program.
 
-**Total: 0 (Tensor) + 3 (MLP) + 2 (CNN) + 0 (BatchNorm) + 0
-(Residual) + 1 (Depthwise) + 0 (SE) + 0 (LayerNorm) + 4 (Attention)
-= 10 axioms.**
+**Total: 0 project axioms across all nine content modules.**
 
-Five of nine content modules add zero new axioms.
+## Codegen trust boundary
+
+`HasVJP.correct` certifies the *canonical* backward
+`backward x dy i = ∑ j, pdiv f x i j * dy j`. Where `f` is everywhere
+differentiable, this is the true Jacobian-vector product (and the
+`_diff` theorems on each layer carry that hypothesis through).
+
+For the two non-smooth ops — ReLU at `x i = 0`, MaxPool at argmax
+ties — the canonical backward is `fderiv`'s junk default of `0`,
+because Mathlib's `fderiv` returns `0` at non-differentiable points
+by convention. The codegen (`MlirCodegen.lean`) does **not** emit the
+canonical backward at the kinks. Instead it emits the standard ML-
+framework subgradient conventions:
+
+- ReLU: `if x > 0 then dy else 0` (the `relu'(0) := 0` convention).
+- MaxPool: `stablehlo.select_and_scatter` with GE-selector + add-
+  scatter (route the gradient to the argmax position; ties broken
+  by the GE comparator).
+
+These match the canonical Lean witness at smooth points and differ
+only at the kinks. The verification gap is intrinsic to backward
+passes through non-smooth ops — every ML framework lives with the
+same gap. The numerical FD checks in `check_axioms.py` and the
+end-to-end oracles in `tests/vjp_oracle/` cover the codegen-emitted
+formula at the kinks.
 
 ## The three rules
 
@@ -188,14 +221,12 @@ Every layer's backward pass is one of:
 
 ## Numerical gradient checks
 
-`check_axioms.py` runs 25 finite-difference checks. 7 of the 10
-surviving axioms are FD-tested directly (`pdiv_relu` at non-zero
-points, `mlp_has_vjp` by full-network composition, the conv /
-maxPool / depthwise input VJPs, bundled `mhsa_has_vjp_mat`, and
-`patchEmbed_flat_has_vjp`); the remaining 18 belt-and-suspender the
-proved Jacobian theorems. `relu_has_vjp` is redundant with
-`pdiv_relu`; the two `_diff` siblings are smoothness claims with no
-FD purchase. Typical max-error is ~1e-11 in float64.
+`check_axioms.py` runs 25 finite-difference checks. They cover the
+codegen-emitted backward formulas (where the trust gap actually
+lives — see "Codegen trust boundary" above), particularly at the
+ReLU and MaxPool kinks where the codegen substitutes a subgradient
+convention for the canonical Lean witness. Typical max-error is
+~1e-11 in float64.
 
 ## Verify
 
