@@ -1,12 +1,19 @@
 # pdiv.md — final 4 axioms: tautology audit and elimination plan
 
-**Status:** floor at 4 axioms after Phase 6b (`patchEmbed_flat_has_vjp`,
-commit `3d7fa52`). The four remaining are framed as "subgradient
-convention residuals" but an audit shows the framing is more nuanced:
-**three are literal tautologies in current Lean** and the fourth is
-morally a Mathlib theorem deferred for time. Below 4 honestly-counted
-axioms is reachable in ~1-2 hours of work, not a multi-week project-
-wide rewrite.
+**Status:** ALL PHASES LANDED. **0 project axioms.**
+- Phase 1: `relu_has_vjp`, `mlp_has_vjp`, `maxPool2_has_vjp3` →
+  canonical-witness `def`s (commit `ee52779`).
+- Phase 2: `pdiv_relu` proved via local-diagonal-CLM transport
+  (commit `8a15376`, ~80 LOC).
+- Phase 3: `LeanMlir/Proofs/README.md` updated with codegen trust
+  boundary section.
+
+`#print axioms vit_full_has_vjp` now shows only `propext`,
+`Classical.choice`, `Quot.sound` (Lean core). `grep ^axiom
+LeanMlir/Proofs/` returns nothing. The four-axiom floor was retired
+in ~half a day, not the multi-week effort the prior plan estimated.
+
+The original audit / plan follows for historical context.
 
 This doc lays out the audit, the trust-boundary that the `axiom`
 keyword is currently flagging, and the two-phase plan to land at 0 or
