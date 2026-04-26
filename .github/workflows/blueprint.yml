@@ -210,7 +210,16 @@ jobs:
         # doc-gen4 doesn't yet support external-refs-to-hosted-Mathlib-docs,
         # so we have to rebuild Mathlib docs locally. This is the same
         # compromise Mathlib-adjacent projects (Carleson, PNT, FLT) make.
+        #
+        # CRITICAL: nuke .lake/build/doc/LeanMlir/ before rebuilding.
+        # Otherwise doc-gen4 sees the cached HTML from the previous run
+        # (restored from actions/cache above, keyed on lake-manifest.json
+        # + lean-toolchain — both unchanged across our typical commits)
+        # and skips regenerating, leaving stale axiom/theorem labels and
+        # source-link commit hashes on the deployed site even though the
+        # workflow reports success. Mathlib doc HTML stays cached.
         run: |
+          rm -rf .lake/build/doc/LeanMlir/ .lake/build/doc/declarations/
           lake -R -Kenv=dev build LeanMlir:docs
 
       - name: Build blueprint web version
