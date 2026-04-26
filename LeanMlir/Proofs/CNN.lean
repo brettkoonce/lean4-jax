@@ -142,7 +142,7 @@ noncomputable def conv2d {ic oc h w kH kW : Nat}
     The dependent-`if` would otherwise stymie `fun_prop`. By proof
     irrelevance, the chosen branch is a CLM (eval-at-σ if `P`, the
     constant `0` otherwise) — both differentiable in `v`. -/
-private lemma differentiableAt_pad_eval {n : Nat} (P : Prop) [Decidable P]
+lemma differentiableAt_pad_eval {n : Nat} (P : Prop) [Decidable P]
     (σ : P → Fin n) (v : Vec n) :
     DifferentiableAt ℝ (fun y : Vec n => if h : P then y (σ h) else (0 : ℝ)) v := by
   by_cases hP : P
@@ -159,7 +159,7 @@ private lemma differentiableAt_pad_eval {n : Nat} (P : Prop) [Decidable P]
     `if P holds at idx_out ∧ σ matches idx_in then 1 else 0`. The proof uses
     `fderiv_apply` to extract the `idx_out`-th component, then `by_cases` on
     `P idx_out` to discharge the dependent-if. -/
-private lemma pdiv_pi_pad_eval {n m : Nat}
+lemma pdiv_pi_pad_eval {n m : Nat}
     (P : Fin m → Prop) [∀ k, Decidable (P k)]
     (σ : (k : Fin m) → P k → Fin n)
     (v : Vec n) (idx_in : Fin n) (idx_out : Fin m) :
@@ -204,7 +204,7 @@ private lemma pdiv_pi_pad_eval {n m : Nat}
 /-- **Pdiv of `c_const * pad-eval` family.** Combines `pdiv_mul`,
     `pdiv_const`, and `pdiv_pi_pad_eval` for the conv2d per-summand
     pattern: a `k'`-varying constant times the dependent if-eval-or-zero. -/
-private lemma pdiv_const_mul_pi_pad_eval {n m : Nat}
+lemma pdiv_const_mul_pi_pad_eval {n m : Nat}
     (c_const : Fin m → ℝ)
     (P : Fin m → Prop) [∀ k, Decidable (P k)]
     (σ : (k : Fin m) → P k → Fin n)

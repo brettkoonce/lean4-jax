@@ -4,13 +4,20 @@
 ~470 LOC, pure-Mathlib closure verified. See **"Phase 1 lessons"** below
 for the recipe.
 
-**Phase 2 (depthwise) status:** tackleable, est. ~300–400 LOC. The
-helpers from Phase 1 do most of the heavy lifting; depthwise is
-structurally a special case.
+**Phase 2 (depthwise) status:** LANDED on `colslab-vmap-framework`
+(Apr 2026, this session). ~470 LOC including 30 LOC of new outer-Σ-co
+collapse logic. Pure-Mathlib closure verified via `#print axioms`
+(only `propext`, `Classical.choice`, `Quot.sound`). The proof template
+mirrored conv2d directly — single-shot build, no Lean errors, in part
+because the three private helpers from Phase 1 (now public in CNN.lean)
+generalized cleanly.
 
-After Phase 2: axiom count drops **7 → 6**. The 6 remaining are pure
-"framework convention" axioms (3 ReLU subgradient + 1 maxPool subgradient
-+ 2 patchEmbed opaque-codegen).
+Axiom count: **7 → 6**. The 6 remaining are pure "framework convention"
+axioms:
+- 3 ReLU subgradient (`pdiv_relu`, `relu_has_vjp`, `mlp_has_vjp`)
+- 1 maxPool2 subgradient (`maxPool2_has_vjp3`)
+- 2 patchEmbed opaque-codegen (`patchEmbed_flat_has_vjp`,
+  `patchEmbed_flat_diff`)
 
 ---
 
