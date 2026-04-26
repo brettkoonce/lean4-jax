@@ -74,3 +74,9 @@ example (N heads d_head : Nat)
       Mat.flatten (mhsa_layer N heads d_head Wq Wk Wv Wo bq bk bv bo
                    (Mat.unflatten v))) :=
   mhsa_layer_flat_diff N heads d_head Wq Wk Wv Wo bq bk bv bo
+
+/-- Entry point so this can register as a `lean_exe` and run in CI.
+    The work is done at typecheck time — by the time `main` runs,
+    every `example` above has already been kernel-checked. -/
+def main : IO Unit :=
+  IO.println "OK: 11 dischargeability examples typechecked."

@@ -215,6 +215,14 @@ lean_exe «test-smoke-trainers» where
 lean_exe «test-codegen-ts» where
   root := `tests.TestCodegenTrainStep
 
+-- Dischargeability sanity check: 11 examples confirming every
+-- Differentiable hypothesis the proofs propagate is satisfiable for
+-- the architecture functions (dense, softmax, layerNorm, the flat
+-- transformer pieces, mhsa_layer_flat). If any goes vacuous on a
+-- refactor, this will fail at build time.
+lean_exe «test-diff-sanity» where
+  root := `tests.TestDifferentiableSanity
+
 -- ════════════════════════════════════════════════════════════════
 -- Bestiary: architecture-only NetSpec examples (print, no training)
 -- ════════════════════════════════════════════════════════════════
