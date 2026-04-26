@@ -1,0 +1,14 @@
+name = "comparator-tests"
+version = "0.1.0"
+
+[[lean_lib]]
+name = "Solution"
+
+[[lean_lib]]
+name = "Challenge"
+
+# Path-require to the parent lean4-jax project. lake picks up the
+# parent's lake-manifest.json, so Mathlib version etc. stays in sync.
+[[require]]
+name = "lean4-jax"
+path = "../.."

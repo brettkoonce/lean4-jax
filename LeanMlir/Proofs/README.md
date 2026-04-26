@@ -228,6 +228,18 @@ ReLU and MaxPool kinks where the codegen substitutes a subgradient
 convention for the canonical Lean witness. Typical max-error is
 ~1e-11 in float64.
 
+## Independent kernel re-check (comparator)
+
+`tests/comparator/` runs
+[leanprover/comparator](https://github.com/leanprover/comparator) on
+27 theorems spanning the foundation rules + every chapter's headline
+Jacobian. comparator re-runs Lean's kernel typechecker independently
+of the elaborator and verifies the transitive axiom closure of each
+proof. The configured allowlist is exactly
+`{propext, Quot.sound, Classical.choice}` (Lean core); any project
+axiom in the closure would fail the run. See
+`tests/comparator/README.md` for the prereq + run instructions.
+
 ## Verify
 
 ```bash
