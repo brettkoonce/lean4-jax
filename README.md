@@ -14,10 +14,21 @@ in Lean.
 Companion code for the upcoming book *Verified Deep Learning with Lean4*
 (follow-up to [Convolutional Neural Networks with Swift for TensorFlow](https://doi.org/10.1007/978-1-4842-6168-2), Apress).
 
-**Current version: `v0.5.4`** — first cross-backend-verified release. MNIST
-MLP *and* CNN training traces agree at the **float32 ULP floor**
-between two independent compilation pipelines (Lean→IREE→GPU vs
-Lean→JAX→XLA) on both NVIDIA and AMD hardware. See
+**Current version: `v0.5.5`** — Swish/SiLU lands as a first-class
+activation (forward + backward + proved `swish_has_vjp_correct`),
+unlocking an EfficientNet-B0 GELU-vs-ReLU activation ablation pair.
+The independent-kernel comparator re-check now covers **38 theorems**
+(up from 27), via public `*_has_vjp_correct` wrappers across MLP,
+CNN, Residual, Depthwise, SE, LayerNorm, and Attention. Plus Ch 2
+gets a "Why VJPs, not Jacobians?" bridge, a "What about non-smooth
+points?" subsection explaining the canonical pdiv-derived witness
+pattern, and a three-pillar TikZ spine diagram (R34 / EfficientNet /
+ViT).
+
+The `v0.5.4` headline still holds: MNIST MLP *and* CNN training
+traces agree at the **float32 ULP floor** between two independent
+compilation pipelines (Lean→IREE→GPU vs Lean→JAX→XLA) on both
+NVIDIA and AMD hardware. See
 [`traces/CROSS_BACKEND_RESULTS.md`](traces/CROSS_BACKEND_RESULTS.md)
 for the full four-corner verification tables.
 
@@ -384,7 +395,7 @@ ROCm 7.2.0 / gfx1100.
   author  = {Brett Koonce and Claude Code},
   title   = {Verified Deep Learning with Lean4: Formal Backpropagation from MLP to Attention, via MLIR},
   url     = {https://github.com/brettkoonce/lean4-mlir},
-  version = {0.5.4},
+  version = {0.5.5},
   year    = {2026},
 }
 ```
