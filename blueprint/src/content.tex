@@ -5244,12 +5244,14 @@ normalization, residual connections, depthwise convolution,
 squeeze-and-excitation, layer normalization, and self-attention ---
 is machine-checked by Lean's type system. If it builds, it's correct.
 
-But ``it builds'' is only one of three independent checks we rely on.
+But ``it builds'' is only one of four independent checks we rely on.
 Composition proofs catch math errors, finite-difference checks confirm
 each closed-form Jacobian formula in the proof matches the function it
-claims to differentiate, and a parallel JAX pipeline catches codegen
-and implementation errors. Each layer fails in a different way, so
-overlaying them is the defense. This appendix walks through all three.
+claims to differentiate, a parallel JAX pipeline catches codegen and
+implementation errors, and an independent kernel re-check (comparator)
+audits the transitive axiom closure of every theorem outside Lean's
+elaborator. Each layer fails in a different way, so overlaying them is
+the defense. This appendix walks through all four.
 
 \section{Trust kernel}
 
