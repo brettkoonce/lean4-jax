@@ -27,3 +27,8 @@
  {\clist_map_inline:nn{#1}{\vphantom{\ref{##1}}}%
   \ignorespaces}
 \ExplSyntaxOff
+
+% In the printed version we just render the declaration name in
+% typewriter --- the URL would clutter the page. Web version provides a
+% live link via macros/web.tex.
+\newcommand{\leandocref}[1]{\texttt{#1}}

@@ -1,5 +1,10 @@
-% In this file you should put macros to be used only by
+% In this file you should put macros to be used only by
 % the web version. Of course they should have a corresponding
 % version in macros/print.tex.
 % Typically the printed version could have more fancy decorations.
 % This will probably be a very short file.
+
+% Inline doc-gen4 cross-reference for the web build. Renders
+% \leandocref{Proofs.pdiv\_comp} as a clickable typewriter link to the
+% corresponding declaration's API doc page.
+\newcommand{\leandocref}[1]{\href{\docbase/find/\#doc/#1}{\texttt{#1}}}
