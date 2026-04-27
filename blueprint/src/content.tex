@@ -5251,16 +5251,17 @@ claims to differentiate, and a parallel JAX pipeline catches codegen
 and implementation errors. Each layer fails in a different way, so
 overlaying them is the defense. This appendix walks through all three.
 
-\section{Axioms}
+\section{Trust kernel}
 
-The Verified VJP Proofs suite contains \textbf{81 numbered
-items across the proof chapters (0 axioms + 72 theorems +
-9 definitions), plus 22 architecture definitions in the
-bestiary} (103 total) across 9 Lean files. The progression:
-30 axioms (early drafts) \(\to\) 10 (post diff-threading)
-\(\to\) \textbf{0} (post column-slab + Phase 7 cleanup, Apr 2026).
+The Verified VJP Proofs suite contains \textbf{81 numbered items
+across the proof chapters (72 theorems + 9 definitions), plus 22
+architecture definitions in the bestiary} (103 total) across 9
+Lean files, with zero project axioms. Earlier drafts shipped 30
+project axioms; the progression: 30 (early) \(\to\) 10 (post
+diff-threading) \(\to\) \textbf{0} (post column-slab + Phase 7
+cleanup, Apr 2026).
 
-What landed in the final rounds:
+What landed in the final rounds to retire the last of them:
 
 \begin{itemize}
   \item \textbf{Phase 1--2 (input-side conv VJPs).} The
@@ -5270,7 +5271,7 @@ What landed in the final rounds:
     \texttt{pdiv\_const\_mul\_pi\_pad\_eval} per summand +
     \(\sum_{c, k_h, k_w}\) collapse.
   \item \textbf{Phase 3 (multi-head SDPA).} A new
-    \(\pdivMat\_\texttt{colIndep}\) axiom-cum-theorem and
+    \(\pdivMat\_\texttt{colIndep}\) theorem and
     \(\texttt{colSlabwise\_has\_vjp\_mat}\) framework lift the
     proved single-head SDPA backward over the head axis. Both
     \(\texttt{mhsa\_has\_vjp\_mat}\) and its
@@ -5280,7 +5281,7 @@ What landed in the final rounds:
     \texttt{def} (conv-with-stride + CLS prepend + positional
     embed), then proved its input VJP via spatial-rearrangement
     bridge to \(\texttt{conv2d\_has\_vjp3}\).
-  \item \textbf{Phase 7 (the final 4).}
+  \item \textbf{Phase 7 (the final four).}
     \(\pdiv\_\texttt{relu}\) proved via local-diagonal-CLM
     transport: at a smooth point ReLU agrees with the diagonal
     indicator CLM on a neighborhood (every coordinate keeps its
@@ -5301,7 +5302,7 @@ What landed in the final rounds:
 Pure-Mathlib closure on every theorem.
 \(\texttt{\#print axioms vit\_full\_has\_vjp}\) shows only Lean
 core (\texttt{propext}, \texttt{Classical.choice},
-\texttt{Quot.sound}); the project axiom count is exactly zero.
+\texttt{Quot.sound}); nothing project-level beneath those.
 
 \section{Finite-difference gradient checks}
 
