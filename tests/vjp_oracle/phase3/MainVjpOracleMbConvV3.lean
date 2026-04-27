@@ -10,7 +10,7 @@ def mbConvV3Net : NetSpec where
   imageW := 28
   layers := [
     .convBn 1 4 3 1 .same,                -- stem
-    .mbConvV3 4 4 8 3 1 true true,         -- ic=4, oc=4, expandCh=8, k=3, stride=1, SE on, h-swish on
+    .mbConvV3 4 4 8 3 1 true .hSwish,         -- ic=4, oc=4, expandCh=8, k=3, stride=1, SE on, h-swish on
     .flatten,
     .dense 3136 10 .identity
   ]

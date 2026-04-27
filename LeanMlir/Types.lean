@@ -4,6 +4,8 @@ inductive Activation where
   | relu
   | relu6
   | identity
+  | swish
+  | hSwish
 deriving Repr, BEq
 
 inductive Padding where
@@ -22,8 +24,8 @@ inductive Layer where
   | bottleneckBlock (ic oc nBlocks firstStride : Nat)
   | separableConv (ic oc stride : Nat)
   | invertedResidual (ic oc expand stride nBlocks : Nat)
-  | mbConv (ic oc expand kSize stride nBlocks : Nat) (useSE : Bool)
-  | mbConvV3 (ic oc expandCh kSize stride : Nat) (useSE useHSwish : Bool)
+  | mbConv (ic oc expand kSize stride nBlocks : Nat) (useSE : Bool) (act : Activation := .swish)
+  | mbConvV3 (ic oc expandCh kSize stride : Nat) (useSE : Bool) (act : Activation := .relu)
   | fusedMbConv (ic oc expand kSize stride nBlocks : Nat) (useSE : Bool)
   | uib (ic oc expand stride : Nat) (preDWk postDWk : Nat)  -- Universal Inverted Bottleneck; k=0 means no DW
   | fireModule (ic squeeze expand1x1 expand3x3 : Nat)

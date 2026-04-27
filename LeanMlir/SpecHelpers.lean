@@ -56,7 +56,7 @@ def paramShapes (spec : NetSpec) : Array (Array Nat) := Id.run do
           shapes := shapes.push #[mid, blockIc, 1, 1] |>.push #[mid] |>.push #[mid]
         shapes := shapes.push #[mid, 1, 3, 3] |>.push #[mid] |>.push #[mid]
         shapes := shapes.push #[oc, mid, 1, 1] |>.push #[oc] |>.push #[oc]
-    | .mbConv ic oc expand kSize _stride n useSE =>
+    | .mbConv ic oc expand kSize _stride n useSE _act =>
       for bi in [:n] do
         let blockIc := if bi == 0 then ic else oc
         let mid := blockIc * expand
@@ -68,7 +68,7 @@ def paramShapes (spec : NetSpec) : Array (Array Nat) := Id.run do
           shapes := shapes.push #[seMid, mid, 1, 1] |>.push #[seMid]
           shapes := shapes.push #[mid, seMid, 1, 1] |>.push #[mid]
         shapes := shapes.push #[oc, mid, 1, 1] |>.push #[oc] |>.push #[oc]
-    | .mbConvV3 ic oc expandCh kSize _stride useSE _useHSwish =>
+    | .mbConvV3 ic oc expandCh kSize _stride useSE _act =>
       let mid := expandCh
       let seMid := Nat.max 1 (mid / 4)
       if expandCh != ic then
@@ -274,7 +274,7 @@ private def heInitLayer (l : Layer) (seed : USize) : IO (Array ByteArray × USiz
       parts := parts.push Wp |>.push gp |>.push bp
       s := s''
     return (parts, s)
-  | .mbConv ic oc expand kSize _stride n useSE =>
+  | .mbConv ic oc expand kSize _stride n useSE _act =>
     let mut parts : Array ByteArray := #[]
     let mut s := seed
     for bi in [:n] do
@@ -299,7 +299,7 @@ private def heInitLayer (l : Layer) (seed : USize) : IO (Array ByteArray × USiz
       parts := parts.push Wp |>.push gp |>.push bp
       s := sp
     return (parts, s)
-  | .mbConvV3 ic oc expandCh kSize _stride useSE _useHSwish =>
+  | .mbConvV3 ic oc expandCh kSize _stride useSE _act =>
     let mid := expandCh
     let seMid := Nat.max 1 (mid / 4)
     let mut parts : Array ByteArray := #[]

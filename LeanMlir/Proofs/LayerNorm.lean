@@ -259,4 +259,91 @@ theorem layerNorm_has_vjp_correct (n : Nat) (ε γ β : ℝ) (hε : 0 < ε)
     ∑ j : Fin n, pdiv (layerNormForward n ε γ β) x i j * dy j :=
   (layerNorm_has_vjp n ε γ β hε).correct x dy i
 
+/-! ## Swish (a.k.a. SiLU)
+
+`swish(x) = x * σ(x)`, where `σ(x) = 1 / (1 + exp(-x))` is the standard
+logistic sigmoid. Used as the default activation in EfficientNet's
+`MBConv` blocks. Same diagonal-Jacobian proof template as ReLU and GELU.
+-/
+
+/-- **Swish forward** — Sigmoid-Linear Unit (SiLU).
+
+    `swish(x) = x / (1 + exp(-x)) = x · σ(x)`. Smooth everywhere
+    (denominator is bounded below by 1 > 0). -/
+noncomputable def swishScalar (x : ℝ) : ℝ :=
+  x / (1 + Real.exp (-x))
+
+/-- The elementwise Swish, applied componentwise to a vector. -/
+noncomputable def swish (n : Nat) (x : Vec n) : Vec n :=
+  fun i => swishScalar (x i)
+
+/-- **Scalar derivative of `swishScalar`** — defined via Mathlib's
+    `deriv`. The closed form is `σ(x)·(1 + x·(1 - σ(x)))`; we define it
+    as `deriv swishScalar` so the link to `swishScalar` is automatic. -/
+noncomputable def swishScalarDeriv (x : ℝ) : ℝ :=
+  deriv swishScalar x
+
+/-- Differentiability of `swishScalar`. The denominator `1 + exp(-x)` is
+    always positive, so the quotient is smooth everywhere. -/
+@[fun_prop]
+lemma swishScalar_diff : Differentiable ℝ swishScalar := by
+  unfold swishScalar
+  intro x
+  have h_pos : (0 : ℝ) < 1 + Real.exp (-x) := by positivity
+  exact DifferentiableAt.div differentiableAt_id (by fun_prop) h_pos.ne'
+
+/-- Differentiability of `swish D` as a function on `Vec D`. -/
+lemma swish_diff (D : Nat) : Differentiable ℝ (swish D) := by
+  unfold swish; fun_prop
+
+/-- **Partial derivative of Swish** — diagonal Jacobian. Identical proof
+    template to `pdiv_gelu`: each output coord depends only on the
+    corresponding input coord via `swishScalar`. -/
+theorem pdiv_swish (n : Nat) (x : Vec n) (i j : Fin n) :
+    pdiv (swish n) x i j =
+    if i = j then swishScalarDeriv (x i) else 0 := by
+  unfold pdiv
+  have h_swap : fderiv ℝ (swish n) x (basisVec i) j =
+                fderiv ℝ (fun y : Vec n => swish n y j) x (basisVec i) := by
+    rw [fderiv_apply ((swish_diff n) x) j]
+    rfl
+  rw [h_swap]
+  have h_decomp : (fun y : Vec n => swish n y j) =
+                  swishScalar ∘ (ContinuousLinearMap.proj j : Vec n →L[ℝ] ℝ) := by
+    funext y; rfl
+  rw [h_decomp]
+  rw [fderiv_comp _ (swishScalar_diff _)
+        (ContinuousLinearMap.proj j : Vec n →L[ℝ] ℝ).differentiableAt]
+  rw [(ContinuousLinearMap.proj j : Vec n →L[ℝ] ℝ).fderiv]
+  simp only [ContinuousLinearMap.comp_apply, ContinuousLinearMap.proj_apply]
+  rw [fderiv_eq_smul_deriv]
+  show basisVec i j • deriv swishScalar (x j) = if i = j then swishScalarDeriv (x i) else 0
+  show basisVec i j * deriv swishScalar (x j) = _
+  by_cases hij : i = j
+  · subst hij
+    simp only [basisVec_apply, if_pos rfl, one_mul]
+    rfl
+  · have h_basis : basisVec i j = 0 := by
+      simp only [basisVec_apply]
+      rw [if_neg]; intro heq; exact hij heq.symm
+    rw [h_basis, zero_mul, if_neg hij]
+
+/-- **Swish VJP**: elementwise multiply by the scalar derivative.
+    Same template as ReLU/GELU. The codegen emits the closed-form
+    `σ(x)·(1 + x·(1 - σ(x)))` directly; this proof connects it
+    back to `swishScalar`'s `fderiv` via `swishScalarDeriv = deriv`. -/
+noncomputable def swish_has_vjp (n : Nat) : HasVJP (swish n) where
+  backward := fun x dy i => dy i * swishScalarDeriv (x i)
+  correct := by
+    intro x dy i
+    simp [pdiv_swish, mul_comm]
+
+/-- **Public correctness theorem for `swish_has_vjp`**: diagonal scaling
+    by `swishScalarDeriv` equals the `pdiv`-contracted Jacobian of
+    `swish n`. -/
+theorem swish_has_vjp_correct (n : Nat) (x : Vec n) (dy : Vec n) (i : Fin n) :
+    (swish_has_vjp n).backward x dy i =
+    ∑ j : Fin n, pdiv (swish n) x i j * dy j :=
+  (swish_has_vjp n).correct x dy i
+
 end Proofs

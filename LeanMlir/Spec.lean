@@ -35,7 +35,7 @@ def Layer.nParams : Layer → Nat
       let projR := oc * midR + 2 * oc
       let restBlock := expandR + dwR + projR
       firstBlock + (n - 1) * restBlock
-  | .mbConv ic oc expand k stride n useSE =>
+  | .mbConv ic oc expand k stride n useSE _act =>
       let mid := ic * expand
       let expandP := if expand == 1 then 0 else (mid * ic + 2 * mid)
       let dwP := mid * k * k + 2 * mid
@@ -51,7 +51,7 @@ def Layer.nParams : Layer → Nat
       let projR := oc * midR + 2 * oc
       let restBlock := expandR + dwR + seR + projR
       firstBlock + (n - 1) * restBlock
-  | .mbConvV3 ic oc expandCh k _ useSE _ =>
+  | .mbConvV3 ic oc expandCh k _ useSE _act =>
       let expandP := if expandCh == ic then 0 else (expandCh * ic + 2 * expandCh)
       let dwP := expandCh * k * k + 2 * expandCh
       let seMid := Nat.max 1 (expandCh / 4)
@@ -344,15 +344,25 @@ def NetSpec.archStr (s : NetSpec) : String :=
     | .globalAvgPool             => "GAP"
     | .flatten                   => "Flatten"
     | .dense fi fo act           =>
-      let a := match act with | .relu => ",ReLU" | .relu6 => ",ReLU6" | .identity => ""
+      let a := match act with
+        | .relu => ",ReLU" | .relu6 => ",ReLU6" | .identity => ""
+        | .swish => ",Swish" | .hSwish => ",HSwish"
       s!"{fi}→{fo}{a}"
     | .residualBlock ic oc n fs   => s!"Res{n}({ic}→{oc},s{fs})"
     | .bottleneckBlock ic oc n fs => s!"BN{n}({ic}→{oc},s{fs})"
     | .separableConv ic oc st        => s!"Sep({ic}→{oc},s{st})"
     | .invertedResidual ic oc e s n     => s!"IR{n}({ic}→{oc},e{e},s{s})"
-    | .mbConv ic oc e k s n useSE      => s!"MB{n}({ic}→{oc},e{e},k{k},s{s}" ++ (if useSE then ",SE" else "") ++ ")"
-    | .mbConvV3 ic oc exp k s useSE hs => s!"V3({ic}→{oc},{exp},k{k},s{s}" ++
-        (if useSE then ",SE" else "") ++ (if hs then ",HS" else ",RE") ++ ")"
+    | .mbConv ic oc e k s n useSE act  =>
+      let a := match act with
+        | .relu => "" | .relu6 => ",ReLU6" | .identity => ",Id"
+        | .swish => ",Swish" | .hSwish => ",HSwish"
+      s!"MB{n}({ic}→{oc},e{e},k{k},s{s}" ++ (if useSE then ",SE" else "") ++ a ++ ")"
+    | .mbConvV3 ic oc exp k s useSE act =>
+      let a := match act with
+        | .relu => ",RE" | .relu6 => ",RE6" | .identity => ",Id"
+        | .swish => ",Swish" | .hSwish => ",HS"
+      s!"V3({ic}→{oc},{exp},k{k},s{s}" ++
+        (if useSE then ",SE" else "") ++ a ++ ")"
     | .fusedMbConv ic oc e k s n useSE => s!"FMB{n}({ic}→{oc},e{e},k{k},s{s}" ++ (if useSE then ",SE" else "") ++ ")"
     | .uib ic oc e s pDW poDW => s!"UIB({ic}→{oc},e{e},s{s},dw{pDW}/{poDW})"
     | .fireModule ic sq e1 e3 => s!"Fire({ic}→{e1 + e3},sq{sq})"
@@ -395,7 +405,7 @@ def Layer.outChannels : Layer → Nat
   | .bottleneckBlock _ oc _ _       => oc
   | .separableConv _ oc _           => oc
   | .invertedResidual _ oc _ _ _    => oc
-  | .mbConv _ oc _ _ _ _ _          => oc
+  | .mbConv _ oc _ _ _ _ _ _        => oc
   | .mbConvV3 _ oc _ _ _ _ _        => oc
   | .fusedMbConv _ oc _ _ _ _ _     => oc
   | .uib _ oc _ _ _ _               => oc
@@ -435,7 +445,7 @@ def Layer.inChannels : Layer → Nat
   | .bottleneckBlock ic _ _ _       => ic
   | .separableConv ic _ _           => ic
   | .invertedResidual ic _ _ _ _    => ic
-  | .mbConv ic _ _ _ _ _ _          => ic
+  | .mbConv ic _ _ _ _ _ _ _        => ic
   | .mbConvV3 ic _ _ _ _ _ _        => ic
   | .fusedMbConv ic _ _ _ _ _ _     => ic
   | .uib ic _ _ _ _ _               => ic
