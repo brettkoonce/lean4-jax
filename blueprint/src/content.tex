@@ -863,69 +863,67 @@ with the chain, fan-in, and product rules from this chapter.
 
 One pattern, scaled up.
 
-\subsection*{Axiom and theorem budget per chapter}
+\subsection*{Theorem and definition budget per chapter}
 
 If you're planning how much of the book to read, here's the
-per-chapter cost in both directions: new axioms (unproved
-starting facts we take as given) and new theorems (proven
-compositions Lean's typechecker verified). The totals across
-Chapters 2--10 are \textbf{81 numbered items (0 axioms +
-72 theorems + 9 definitions)}, with zero \texttt{sorry}s.
-(Earlier drafts shipped 30 axioms; the foundation flip plus
-two subsequent rounds of axiom elimination retired all of them.
+per-chapter cost: new theorems (proven compositions Lean's
+typechecker verified) and new definitions (concrete operations
+the proofs unfold to). The totals across Chapters 2--10 are
+\textbf{81 numbered items (72 theorems + 9 definitions)}, with
+zero project axioms and zero \texttt{sorry}s.
+(Earlier drafts shipped 30 project axioms; the foundation flip
+plus two subsequent rounds of elimination retired all of them.
 Every project-level claim is now a theorem against Mathlib's
 \(\fderiv\) or a \texttt{noncomputable def} over the canonical
 pdiv-derived witness for non-smooth points.)
 
 \textbf{This chapter (Ch 2)} does the structural heavy lifting:
-zero axioms and 27 theorems that compose Mathlib's \(\fderiv\)
-into the VJP toolkit every later chapter will reuse --- the
-chain rule, additive and multiplicative fan-in, identity,
-reindexing, row-independence for matrices, and the matrix-/
-3-tensor-level lifts. Plus \(\pdiv\) itself as a definition over
-\(\fderiv\).
+27 theorems that compose Mathlib's \(\fderiv\) into the VJP
+toolkit every later chapter will reuse --- the chain rule,
+additive and multiplicative fan-in, identity, reindexing,
+row-independence for matrices, and the matrix-/ 3-tensor-level
+lifts. Plus \(\pdiv\) itself as a definition over \(\fderiv\).
 
-\textbf{Chapter 3 (MLP)} adds zero axioms and 7 theorems plus
-2 definitions. The guarded ReLU Jacobian \(\pdiv\_\texttt{relu}\)
-is now proved via local-diagonal-CLM transport;
-\(\texttt{relu\_has\_vjp}\) and \(\texttt{mlp\_has\_vjp}\) are
-\texttt{noncomputable def}s over the canonical pdiv-derived
-witness, with \texttt{HasVJP.correct} holding by \texttt{rfl}.
+\textbf{Chapter 3 (MLP)} adds 7 theorems plus 2 definitions.
+The guarded ReLU Jacobian \(\pdiv\_\texttt{relu}\) is now proved
+via local-diagonal-CLM transport; \(\texttt{relu\_has\_vjp}\)
+and \(\texttt{mlp\_has\_vjp}\) are \texttt{noncomputable def}s
+over the canonical pdiv-derived witness, with
+\texttt{HasVJP.correct} holding by \texttt{rfl}.
 
-\textbf{Chapter 4 (CNN)} adds zero axioms, 3 theorems, and 3
-definitions. \(\texttt{conv2d}\) and \(\texttt{maxPool2}\) are
-concrete forward defs; the weight, bias, and (Phase 1)
-input-side conv VJPs are proved from foundation.
+\textbf{Chapter 4 (CNN)} adds 3 theorems and 3 definitions.
+\(\texttt{conv2d}\) and \(\texttt{maxPool2}\) are concrete
+forward defs; the weight, bias, and (Phase 1) input-side conv
+VJPs are proved from foundation.
 \(\texttt{maxPool2\_has\_vjp3}\) is a \texttt{def} over the
 canonical pdiv-derived witness.
 
-\textbf{Chapter 5 (BN)} adds zero axioms and 7 theorems. The
-inverse-stddev broadcast Jacobian and its smoothness lemma
-under \(\varepsilon > 0\) are now proved from foundation, as are
-the BN affine and centering Jacobians.
+\textbf{Chapter 5 (BN)} adds 7 theorems. The inverse-stddev
+broadcast Jacobian and its smoothness lemma under
+\(\varepsilon > 0\) are proved from foundation, as are the
+BN affine and centering Jacobians.
 
-\textbf{Chapter 6 (Residual)} adds zero new axioms and just 1
-theorem (the residual additive-fan-in VJP, built entirely from
-Chapter~2's kit). That's the scaling claim in miniature --- new
+\textbf{Chapter 6 (Residual)} adds just 1 theorem (the
+residual additive-fan-in VJP, built entirely from Chapter~2's
+kit). That's the scaling claim in miniature --- new
 architecture, no new calculus.
 
-\textbf{Chapter 7 (Depthwise)} adds zero axioms, 3 theorems,
-and 1 definition. Phase 2 closed the depthwise input VJP using
-the same recipe as Ch~4 with one fewer summation level (no
-cross-channel mixing).
+\textbf{Chapter 7 (Depthwise)} adds 3 theorems and 1 definition.
+Phase 2 closed the depthwise input VJP using the same recipe
+as Ch~4 with one fewer summation level (no cross-channel mixing).
 
-\textbf{Chapter 8 (SE)} adds zero axioms and 1 theorem
+\textbf{Chapter 8 (SE)} adds 1 theorem
 (\(\texttt{seBlock\_has\_vjp}\)). Squeeze-and-excitation is
 global-avg-pool plus two 1\(\times\)1 convs plus the elementwise
 product; every piece was already proved elsewhere.
 
-\textbf{Chapter 9 (LN + GELU)} adds zero axioms and 3 theorems
-plus 2 definitions. The GELU Jacobian is proved via
-\(\fderiv\) and \texttt{Real.differentiable\_tanh};
-\(\texttt{geluScalar}\) and its derivative are concrete defs;
-LayerNorm reuses the BN proof template.
+\textbf{Chapter 9 (LN + GELU)} adds 3 theorems plus 2 definitions.
+The GELU Jacobian is proved via \(\fderiv\) and
+\texttt{Real.differentiable\_tanh}; \(\texttt{geluScalar}\) and
+its derivative are concrete defs; LayerNorm reuses the BN
+proof template.
 
-\textbf{Chapter 10 (Attention)} adds zero axioms and 20 theorems.
+\textbf{Chapter 10 (Attention)} adds 20 theorems.
 Phase 3 proved multi-head SDPA via column-stacking (lifting the
 single-head SDPA backward over the head axis using a new
 \(\pdivMat\_\texttt{colIndep}\) +
@@ -941,40 +939,41 @@ one of them.
 \begin{center}
 \begin{tabular}{l c c r l}
 \hline
-Chapter & New (ax + th + def) & Cumulative & Last \# & Architectures unlocked \\
+Chapter & New (th + def) & Cumulative & Last \# & Architectures unlocked \\
 \hline
-2 (You Are Here)       & 0 + 27 + 1  & 0 + 27 + 1 & 28 & foundation \\
-3 (MLP)                & 0 + 7 + 2   & 0 + 34 + 3 & 37 & MLP \\
-4 (CNN)                & 0 + 3 + 3   & 0 + 37 + 6 & 43 & $+$ CNN \\
-5 (BN)                 & 0 + 7 + 0   & 0 + 44 + 6 & 50 & $+$ BN-nets \\
-6 (Residual)           & 0 + 1 + 0   & 0 + 45 + 6 & 51 & $+$ ResNet-34 \\
-7 (Depthwise)          & 0 + 3 + 1   & 0 + 48 + 7 & 55 & $+$ MobileNet V2 \\
-8 (SE)                 & 0 + 1 + 0   & 0 + 49 + 7 & 56 & $+$ EfficientNet \\
-9 (LN + GELU)          & 0 + 3 + 2   & 0 + 52 + 9 & 61 & $+$ transformer infra \\
-10 (Attention)         & 0 + 20 + 0  & 0 + 72 + 9 & 81 & $+$ ViT \\
+2 (You Are Here)       & 27 + 1  & 27 + 1 & 28 & foundation \\
+3 (MLP)                & 7 + 2   & 34 + 3 & 37 & MLP \\
+4 (CNN)                & 3 + 3   & 37 + 6 & 43 & $+$ CNN \\
+5 (BN)                 & 7 + 0   & 44 + 6 & 50 & $+$ BN-nets \\
+6 (Residual)           & 1 + 0   & 45 + 6 & 51 & $+$ ResNet-34 \\
+7 (Depthwise)          & 3 + 1   & 48 + 7 & 55 & $+$ MobileNet V2 \\
+8 (SE)                 & 1 + 0   & 49 + 7 & 56 & $+$ EfficientNet \\
+9 (LN + GELU)          & 3 + 2   & 52 + 9 & 61 & $+$ transformer infra \\
+10 (Attention)         & 20 + 0  & 72 + 9 & 81 & $+$ ViT \\
 \hline
 \end{tabular}
 \end{center}
 
 The ``Last \#'' column is the highest LaTeX-rendered item number at
-the end of each chapter (axioms, theorems, and definitions share the
+the end of each chapter (theorems and definitions share the
 counter), so a reader who sees ``Theorem 81'' near the end of Ch~10
 can look here and confirm where the count came from.
 
-One observation worth pulling out: \textbf{every chapter adds
-zero axioms.} Every primitive in every chapter either inherits
+One observation worth pulling out: \textbf{every chapter is pure
+composition.} Every primitive in every chapter either inherits
 from Mathlib's \(\fderiv\) or composes over previously-proved
-theorems. The two non-smooth shortcuts that earlier drafts
-axiomatized (\(\texttt{relu\_has\_vjp}\) and
-\(\texttt{maxPool2\_has\_vjp3}\)) are now \texttt{noncomputable
-def}s over the canonical pdiv-derived witness; the codegen
-substitutes the standard subgradient/argmax convention at
-non-smooth points. The trust kernel for the entire backward
-pass is just Lean core, Mathlib, and the codegen contract.
+theorems --- no project-level axioms anywhere. The two non-smooth
+shortcuts that earlier drafts axiomatized
+(\(\texttt{relu\_has\_vjp}\) and \(\texttt{maxPool2\_has\_vjp3}\))
+are now \texttt{noncomputable def}s over the canonical
+pdiv-derived witness; the codegen substitutes the standard
+subgradient/argmax convention at non-smooth points. The trust
+kernel for the entire backward pass is just Lean core, Mathlib,
+and the codegen contract.
 
 \subsection*{Roadmap: skip to your target architecture}
 
-Every theorem and axiom in the book carries a
+Every theorem and definition in the book carries a
 \texttt{\textbackslash uses\{\}} annotation, so the dependency graph
 from ``which target architecture do I care about?'' back to ``which
 Ch 2 items do I actually need?'' is explicit --- we get it for free
