@@ -82,6 +82,10 @@ lean_exe «efficientnet-v2-train» where
   root := `MainEfficientNetV2Train
   moreLinkArgs := ireeLink
 
+lean_exe «convnext-tiny-train» where
+  root := `MainConvNeXtTrain
+  moreLinkArgs := ireeLink
+
 lean_exe «vit-tiny-train» where
   root := `MainVitTrain
   moreLinkArgs := ireeLink
@@ -202,6 +206,25 @@ lean_exe «bench-resnet» where
 
 lean_exe «test-resnet-fwd» where
   root := `tests.TestResnetForward
+
+lean_exe «test-convnext-fwd-emit» where
+  root := `tests.TestConvNextForwardEmit
+  moreLinkArgs := ireeLink
+
+lean_exe «test-convnext-train-emit» where
+  root := `tests.TestConvNextTrainEmit
+  moreLinkArgs := ireeLink
+
+lean_exe «test-convnext-train-step» where
+  root := `tests.TestConvNextTrainStep
+  moreLinkArgs := ireeLink
+
+lean_exe «test-convnext-ablation-smoke» where
+  root := `tests.TestConvNextAblationSmoke
+  moreLinkArgs := ireeLink
+
+lean_exe «test-convnext-tiny-emit» where
+  root := `tests.TestConvNextTinyEmit
 
 lean_exe «test-resnet-residual» where
   root := `tests.TestResnetResidual

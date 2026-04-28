@@ -493,6 +493,106 @@ def enetB0Config : TrainConfig where
   labelSmoothing := 0.1
 
 -- ═══════════════════════════════════════════════════════════════════
+-- Chapter 9: ConvNeXt-Tiny on Imagenette — LayerNorm + GELU on a
+-- pure-CNN backbone. The "can a CNN still compete in 2022" answer
+-- (Liu et al. 2022). 1D activation ablation: GELU vs ReLU, both
+-- with LN as the per-block norm.
+--
+--   convnext-tiny-gelu : paper recipe (LN + GELU + LayerScale).
+--   convnext-tiny-relu : same architecture, ReLU instead of GELU.
+--                        Measures the activation lift in isolation.
+--
+-- Plus a CIFAR-sized "convnext-mini" pair using a single ConvNeXt
+-- stage at 32×32 — small enough that the train-step vmfb compiles
+-- in seconds for fast smoke.
+-- ═══════════════════════════════════════════════════════════════════
+
+def convNextTinyGeluSpec : NetSpec where
+  name := "ConvNeXt-T-GELU"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .convBn 3 96 4 4 .same,
+    .convNextStage 96 3 .ln .gelu,
+    .convNextDownsample 96 192,
+    .convNextStage 192 3 .ln .gelu,
+    .convNextDownsample 192 384,
+    .convNextStage 384 9 .ln .gelu,
+    .convNextDownsample 384 768,
+    .convNextStage 768 3 .ln .gelu,
+    .globalAvgPool,
+    .dense 768 10 .identity
+  ]
+
+def convNextTinyReluSpec : NetSpec where
+  name := "ConvNeXt-T-ReLU"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .convBn 3 96 4 4 .same,
+    .convNextStage 96 3 .ln .relu,
+    .convNextDownsample 96 192,
+    .convNextStage 192 3 .ln .relu,
+    .convNextDownsample 192 384,
+    .convNextStage 384 9 .ln .relu,
+    .convNextDownsample 384 768,
+    .convNextStage 768 3 .ln .relu,
+    .globalAvgPool,
+    .dense 768 10 .identity
+  ]
+
+def convNextTinyConfig : TrainConfig where
+  learningRate := 0.001
+  batchSize    := 32
+  epochs       := 80
+  useAdam      := true
+  weightDecay  := 0.0001
+  cosineDecay  := true
+  warmupEpochs := 3
+  augment      := true
+  labelSmoothing := 0.1
+
+-- Mini CIFAR-sized ConvNeXt: one stage at 32 channels and one at 64.
+-- Same primitives, fast to compile, useful for the activation ablation
+-- on CIFAR-10 if Imagenette compute isn't available.
+def convNextMiniGeluSpec : NetSpec where
+  name := "ConvNeXt-Mini-GELU"
+  imageH := 32
+  imageW := 32
+  layers := [
+    .convBn 3 32 2 2 .same,
+    .convNextStage 32 2 .ln .gelu,
+    .convNextDownsample 32 64,
+    .convNextStage 64 2 .ln .gelu,
+    .globalAvgPool,
+    .dense 64 10 .identity
+  ]
+
+def convNextMiniReluSpec : NetSpec where
+  name := "ConvNeXt-Mini-ReLU"
+  imageH := 32
+  imageW := 32
+  layers := [
+    .convBn 3 32 2 2 .same,
+    .convNextStage 32 2 .ln .relu,
+    .convNextDownsample 32 64,
+    .convNextStage 64 2 .ln .relu,
+    .globalAvgPool,
+    .dense 64 10 .identity
+  ]
+
+def convNextMiniConfig : TrainConfig where
+  learningRate := 0.001
+  batchSize    := 32
+  epochs       := 30
+  useAdam      := true
+  weightDecay  := 0.0001
+  cosineDecay  := true
+  warmupEpochs := 2
+  augment      := true
+  labelSmoothing := 0.1
+
+-- ═══════════════════════════════════════════════════════════════════
 -- Ablation registry
 -- ═══════════════════════════════════════════════════════════════════
 
@@ -587,7 +687,15 @@ def ablations : List (String × AblationRun) := [
   -- ReLU. Same recipe as r34-full to factor out optimizer/schedule
   -- effects; the only knob varied is the MBConv activation function.
   ("enet-b0-swish", ⟨enetB0SwishSpec, enetB0Config, .imagenette, "data/imagenette"⟩),
-  ("enet-b0-relu",  ⟨enetB0ReluSpec,  enetB0Config, .imagenette, "data/imagenette"⟩)
+  ("enet-b0-relu",  ⟨enetB0ReluSpec,  enetB0Config, .imagenette, "data/imagenette"⟩),
+
+  -- Chapter 9: ConvNeXt-Tiny activation ablation (GELU vs ReLU, both
+  -- with LN). The full paper recipe on Imagenette (224×224); a CIFAR
+  -- "mini" pair at 32×32 doubles as a fast-compile smoke variant.
+  ("convnext-tiny-gelu", ⟨convNextTinyGeluSpec, convNextTinyConfig, .imagenette, "data/imagenette"⟩),
+  ("convnext-tiny-relu", ⟨convNextTinyReluSpec, convNextTinyConfig, .imagenette, "data/imagenette"⟩),
+  ("convnext-mini-gelu", ⟨convNextMiniGeluSpec, convNextMiniConfig, .cifar10,    "data"⟩),
+  ("convnext-mini-relu", ⟨convNextMiniReluSpec, convNextMiniConfig, .cifar10,    "data"⟩)
 ]
 
 def main (args : List String) : IO Unit := do

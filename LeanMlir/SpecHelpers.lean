@@ -382,6 +382,30 @@ private def heInitLayer (l : Layer) (seed : USize) : IO (Array ByteArray × USiz
     let cls ← F32.const dim.toUSize 0.0
     let pos ← F32.heInit (seed + 1) ((nP+1)*dim).toUSize (Float.sqrt (2.0 / (nP+1).toFloat))
     return (#[W, b, cls, pos], seed + 2)
+  | .convNextStage channels nBlocks _norm _act =>
+    -- Per block: DW (W, b) + LN (γ, β) + 1×1 expand (W, b) + 1×1 project (W, b) + LayerScale (γ).
+    -- LayerScale init: 1e-6 per the paper (small residual contribution at init).
+    let c := channels
+    let mut parts : Array ByteArray := #[]
+    let mut s := seed
+    for _ in [:nBlocks] do
+      let (Wdw, bdw, s1) ← heConvB c 1 7 s
+      parts := parts.push Wdw |>.push bdw
+      let (gLN, bLN) ← heLN c
+      parts := parts.push gLN |>.push bLN
+      let (Wex, bex, s2) ← heConvB (4*c) c 1 s1
+      parts := parts.push Wex |>.push bex
+      let (Wpj, bpj, s3) ← heConvB c (4*c) 1 s2
+      parts := parts.push Wpj |>.push bpj
+      let lsGamma ← F32.const c.toUSize 0.000001
+      parts := parts.push lsGamma
+      s := s3
+    return (parts, s)
+  | .convNextDownsample ic oc _norm =>
+    -- LN (γ, β) on `ic` channels + 2×2 stride-2 conv (W, b).
+    let (gLN, bLN) ← heLN ic
+    let (Wcv, bcv, s') ← heConvB oc ic 2 seed
+    return (#[gLN, bLN, Wcv, bcv], s')
   | .transformerEncoder dim _heads mlpDim nBlocks =>
     let mut parts : Array ByteArray := #[]
     let mut s := seed

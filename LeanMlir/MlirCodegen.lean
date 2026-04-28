@@ -353,6 +353,31 @@ private def emitDepthwiseConvBn (pidx : Nat) (curSSA : String) (curShape : List 
     return (s, s!"%cbn_out{pidx}", newShape)
   | _ => return ("    // depthwiseConvBn error\n", curSSA, curShape)
 
+/-- Emit a raw depthwise conv (no BN, no activation). Used by ConvNeXt
+    blocks where the DW output goes straight into LayerNorm.
+    Weight shape (channels, 1, kSize, kSize), bias [channels]. -/
+private def emitDepthwiseConvRaw (pidx : Nat) (curSSA : String) (curShape : List Nat)
+    (channels kSize stride : Nat) : String × String × List Nat := Id.run do
+  match curShape with
+  | [b, _, h, w] =>
+    let oH := (h + stride - 1) / stride
+    let oW := (w + stride - 1) / stride
+    let newShape := [b, channels, oH, oW]
+    let (pH0, pH1, pW0, pW1) := samePad h w kSize stride
+    let mut s := ""
+    s := s ++ s!"    %dwr_cv{pidx} = \"stablehlo.convolution\"({curSSA}, %W{pidx}) " ++ "{\n"
+    s := s ++ "        batch_group_count = 1 : i64,\n"
+    s := s ++ convDimNumbers
+    s := s ++ s!"        feature_group_count = {channels} : i64,\n"
+    s := s ++ s!"        padding = dense<[[{pH0}, {pH1}], [{pW0}, {pW1}]]> : tensor<2x2xi64>,\n"
+    s := s ++ "        rhs_dilation = array<i64: 1, 1>,\n"
+    s := s ++ s!"        window_strides = array<i64: {stride}, {stride}>\n"
+    s := s ++ s!"      " ++ "}" ++ s!" : ({tensorTy curShape}, {tensorTy [channels, 1, kSize, kSize]}) -> {tensorTy newShape}\n"
+    s := s ++ s!"    %dwr_bb{pidx} = stablehlo.broadcast_in_dim %b{pidx}, dims = [1] : ({tensorTy [channels]}) -> {tensorTy newShape}\n"
+    s := s ++ s!"    %dwr_out{pidx} = stablehlo.add %dwr_cv{pidx}, %dwr_bb{pidx} : {tensorTy newShape}\n"
+    return (s, s!"%dwr_out{pidx}", newShape)
+  | _ => return ("    // depthwiseConvRaw error\n", curSSA, curShape)
+
 /-- Emit an inverted residual block stage for inference.
     Returns (code, newSSA, newShape, newPidx). -/
 private def emitInvertedResidual (startPidx : Nat) (curSSA : String) (curShape : List Nat)
@@ -851,6 +876,42 @@ private def emitLayerNormForward (tag : String) (xSSA : String) (shape : List Na
     return (s, s!"%ln_out{tag}", s!"%ln_norm{tag}", s!"%ln_istd{tag}", s!"%ln_mean{tag}")
   | _ => return ("    // layerNorm error\n", xSSA, "", "", "")
 
+/-- LayerNorm over the channel axis of an NCHW tensor `[b, c, h, w]`. For
+    each `(b, h, w)` location, normalize across the `c` axis with γ, β
+    broadcast from `[c]`. Returns `(code, outSSA, normSSA, istdSSA, meanSSA)`
+    matching `emitLayerNormForward` so training-side reuse is symmetric. -/
+private def emitLayerNormForwardNCHW (tag : String) (xSSA : String) (shape : List Nat)
+    (gammaSSA betaSSA : String)
+    : String × String × String × String × String := Id.run do
+  match shape with
+  | [b, c, h, w] =>
+    let ty := tensorTy shape
+    let bhwTy := tensorTy [b, h, w]
+    let cTy := tensorTy [c]
+    let mut s := ""
+    s := s ++ s!"    %lnc_zf{tag} = stablehlo.constant dense<0.0> : tensor<f32>\n"
+    s := s ++ s!"    %lnc_sum{tag} = stablehlo.reduce({xSSA} init: %lnc_zf{tag}) applies stablehlo.add across dimensions = [1]\n"
+    s := s ++ s!"          : ({ty}, tensor<f32>) -> {bhwTy}\n"
+    s := s ++ s!"    %lnc_Nc{tag} = stablehlo.constant dense<{c.toFloat}> : {bhwTy}\n"
+    s := s ++ s!"    %lnc_mean{tag} = stablehlo.divide %lnc_sum{tag}, %lnc_Nc{tag} : {bhwTy}\n"
+    s := s ++ s!"    %lnc_mean_bc{tag} = stablehlo.broadcast_in_dim %lnc_mean{tag}, dims = [0, 2, 3] : ({bhwTy}) -> {ty}\n"
+    s := s ++ s!"    %lnc_diff{tag} = stablehlo.subtract {xSSA}, %lnc_mean_bc{tag} : {ty}\n"
+    s := s ++ s!"    %lnc_sq{tag} = stablehlo.multiply %lnc_diff{tag}, %lnc_diff{tag} : {ty}\n"
+    s := s ++ s!"    %lnc_vsum{tag} = stablehlo.reduce(%lnc_sq{tag} init: %lnc_zf{tag}) applies stablehlo.add across dimensions = [1]\n"
+    s := s ++ s!"          : ({ty}, tensor<f32>) -> {bhwTy}\n"
+    s := s ++ s!"    %lnc_var{tag} = stablehlo.divide %lnc_vsum{tag}, %lnc_Nc{tag} : {bhwTy}\n"
+    s := s ++ s!"    %lnc_eps{tag} = stablehlo.constant dense<1.0e-5> : {bhwTy}\n"
+    s := s ++ s!"    %lnc_ve{tag} = stablehlo.add %lnc_var{tag}, %lnc_eps{tag} : {bhwTy}\n"
+    s := s ++ s!"    %lnc_istd{tag} = stablehlo.rsqrt %lnc_ve{tag} : {bhwTy}\n"
+    s := s ++ s!"    %lnc_istd_bc{tag} = stablehlo.broadcast_in_dim %lnc_istd{tag}, dims = [0, 2, 3] : ({bhwTy}) -> {ty}\n"
+    s := s ++ s!"    %lnc_norm{tag} = stablehlo.multiply %lnc_diff{tag}, %lnc_istd_bc{tag} : {ty}\n"
+    s := s ++ s!"    %lnc_g_bc{tag} = stablehlo.broadcast_in_dim {gammaSSA}, dims = [1] : ({cTy}) -> {ty}\n"
+    s := s ++ s!"    %lnc_gn{tag} = stablehlo.multiply %lnc_norm{tag}, %lnc_g_bc{tag} : {ty}\n"
+    s := s ++ s!"    %lnc_b_bc{tag} = stablehlo.broadcast_in_dim {betaSSA}, dims = [1] : ({cTy}) -> {ty}\n"
+    s := s ++ s!"    %lnc_out{tag} = stablehlo.add %lnc_gn{tag}, %lnc_b_bc{tag} : {ty}\n"
+    return (s, s!"%lnc_out{tag}", s!"%lnc_norm{tag}", s!"%lnc_istd{tag}", s!"%lnc_mean{tag}")
+  | _ => return ("    // layerNormNCHW error\n", xSSA, "", "", "")
+
 /-- Emit GELU forward (tanh form, exact) for a tensor of given shape.
     Returns (code, outSSA, tanhSSA) where tanhSSA is saved for backward. -/
 private def emitGeluForward (tag : String) (xSSA : String) (shape : List Nat)
@@ -1110,6 +1171,85 @@ private def emitDense (pidx : Nat) (curSSA : String) (batchSize fanIn fanOut : N
     let (sa, oa) := emitActForward .gelu s!"_d{pidx}" s!"%ab{pidx}" [batchSize, fanOut]
     return (s ++ sa, oa)
 
+/-- Emit a ConvNeXt stage (forward inference): `nBlocks` repeats of
+    DW7×7-raw → LN(channel-axis) → 1×1 expand (×4) → activation → 1×1 project
+    → LayerScale → residual add. Five pidx slots per block, in the order:
+    DW (W, b), LN (γ, β), expand (W, b), project (W, b), LayerScale (γ).
+    Caller must already have emitted any preceding downsample. -/
+private def emitConvNextStage (startPidx : Nat) (curSSA : String) (curShape : List Nat)
+    (channels nBlocks : Nat) (act : Activation)
+    : String × String × List Nat × Nat := Id.run do
+  let mut code := ""
+  let mut ssa := curSSA
+  let mut shape := curShape
+  let mut p := startPidx
+  for bi in [:nBlocks] do
+    let blockIn := ssa
+    let blockShape := shape
+    let tag := s!"{startPidx}_{bi}"
+    -- 1) Depthwise 7×7 raw conv (pidx p)
+    let (dwCode, dwOut, dwShape) := emitDepthwiseConvRaw p ssa shape channels 7 1
+    code := code ++ dwCode
+    ssa := dwOut; shape := dwShape; p := p + 1
+    -- 2) LayerNorm over channels (pidx p), uses %W{p} as γ and %b{p} as β
+    let (lnCode, lnOut, _, _, _) := emitLayerNormForwardNCHW tag ssa shape s!"%W{p}" s!"%b{p}"
+    code := code ++ lnCode
+    ssa := lnOut; p := p + 1
+    -- 3) 1×1 expand conv c → 4c (pidx p)
+    let (exCode, exOut, exShape) := emitConv2d p ssa shape channels (4 * channels) 1 .identity
+    code := code ++ exCode
+    ssa := exOut; shape := exShape; p := p + 1
+    -- 4) Activation on the 4c-channel feature map
+    let (actCode, actOut) := emitActForward act s!"_cn{tag}" ssa shape
+    code := code ++ actCode
+    ssa := actOut
+    -- 5) 1×1 project conv 4c → c (pidx p)
+    let (pjCode, pjOut, pjShape) := emitConv2d p ssa shape (4 * channels) channels 1 .identity
+    code := code ++ pjCode
+    ssa := pjOut; shape := pjShape; p := p + 1
+    -- 6) LayerScale: per-channel scalar multiply by %W{p} : [c]
+    let cTy := tensorTy [channels]
+    let ty := tensorTy shape
+    code := code ++ s!"    %cn_ls_bc{tag} = stablehlo.broadcast_in_dim %W{p}, dims = [1] : ({cTy}) -> {ty}\n"
+    code := code ++ s!"    %cn_ls{tag} = stablehlo.multiply {ssa}, %cn_ls_bc{tag} : {ty}\n"
+    p := p + 1
+    -- 7) Residual add: blockIn + LayerScale output
+    code := code ++ s!"    %cn_res{tag} = stablehlo.add {blockIn}, %cn_ls{tag} : {tensorTy blockShape}\n"
+    ssa := s!"%cn_res{tag}"
+  return (code, ssa, shape, p)
+
+/-- Emit a ConvNeXt downsample (forward inference): LN(channel-axis) on
+    `ic`-channel input, then a 2×2 stride-2 valid-pad conv `ic → oc`.
+    Two pidx slots: LN (γ, β), conv (W, b). -/
+private def emitConvNextDownsample (startPidx : Nat) (curSSA : String) (curShape : List Nat)
+    (ic oc : Nat) : String × String × List Nat × Nat := Id.run do
+  match curShape with
+  | [b, _, h, w] =>
+    let mut code := ""
+    let mut p := startPidx
+    let tag := s!"{startPidx}"
+    -- 1) LayerNorm over channels (pidx p), γ = %W{p}, β = %b{p}
+    let (lnCode, lnOut, _, _, _) := emitLayerNormForwardNCHW s!"ds{tag}" curSSA curShape s!"%W{p}" s!"%b{p}"
+    code := code ++ lnCode
+    p := p + 1
+    -- 2) 2×2 stride-2 valid-pad conv ic → oc (pidx p)
+    let oH := h / 2
+    let oW := w / 2
+    let outShape := [b, oc, oH, oW]
+    code := code ++ s!"    %cnds_cv{tag} = \"stablehlo.convolution\"({lnOut}, %W{p}) " ++ "{\n"
+    code := code ++ "        batch_group_count = 1 : i64,\n"
+    code := code ++ convDimNumbers
+    code := code ++ "        feature_group_count = 1 : i64,\n"
+    code := code ++ "        padding = dense<[[0, 0], [0, 0]]> : tensor<2x2xi64>,\n"
+    code := code ++ "        rhs_dilation = array<i64: 1, 1>,\n"
+    code := code ++ "        window_strides = array<i64: 2, 2>\n"
+    code := code ++ s!"      " ++ "}" ++ s!" : ({tensorTy curShape}, {tensorTy [oc, ic, 2, 2]}) -> {tensorTy outShape}\n"
+    code := code ++ s!"    %cnds_bb{tag} = stablehlo.broadcast_in_dim %b{p}, dims = [1] : ({tensorTy [oc]}) -> {tensorTy outShape}\n"
+    code := code ++ s!"    %cnds_out{tag} = stablehlo.add %cnds_cv{tag}, %cnds_bb{tag} : {tensorTy outShape}\n"
+    p := p + 1
+    return (code, s!"%cnds_out{tag}", outShape, p)
+  | _ => return ("    // convNextDownsample error\n", curSSA, curShape, startPidx)
+
 /-- Emit the `@forward` function body walking layers in order. -/
 private def emitForwardBody (spec : NetSpec) (batchSize : Nat) (fixedBN : Bool := false) : String := Id.run do
   let mut code : String := ""
@@ -1198,6 +1338,18 @@ private def emitForwardBody (spec : NetSpec) (batchSize : Nat) (fixedBN : Bool :
       pidx := newPidx
     | .uib ic oc expand stride preDWk postDWk =>
       let (snip, newSSA, newShape, newPidx) := emitUib pidx curSSA curShape ic oc expand stride preDWk postDWk (fixedBN := fixedBN)
+      code := code ++ snip
+      curSSA := newSSA
+      curShape := newShape
+      pidx := newPidx
+    | .convNextStage channels nBlocks _norm act =>
+      let (snip, newSSA, newShape, newPidx) := emitConvNextStage pidx curSSA curShape channels nBlocks act
+      code := code ++ snip
+      curSSA := newSSA
+      curShape := newShape
+      pidx := newPidx
+    | .convNextDownsample ic oc _norm =>
+      let (snip, newSSA, newShape, newPidx) := emitConvNextDownsample pidx curSSA curShape ic oc
       code := code ++ snip
       curSSA := newSSA
       curShape := newShape
@@ -1426,6 +1578,30 @@ private def emitForwardSig (spec : NetSpec) (batchSize : Nat) : String := Id.run
         let oH := (h + stride - 1) / stride
         let oW := (w + stride - 1) / stride
         curShape := [b, oc, oH, oW]
+      | _ => pure ()
+      outShape := curShape
+    | .convNextStage channels nBlocks _norm _act =>
+      -- Per block: DW (W, b) + LN (W=γ, b=β) + 1×1 expand + 1×1 project + LayerScale (W only).
+      let c := channels
+      for _ in [:nBlocks] do
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [c, 1, 7, 7]}, %b{pidx}: {tensorTy [c]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [c]}, %b{pidx}: {tensorTy [c]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [4*c, c, 1, 1]}, %b{pidx}: {tensorTy [4*c]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [c, 4*c, 1, 1]}, %b{pidx}: {tensorTy [c]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [c]}"
+        pidx := pidx + 1
+      outShape := curShape
+    | .convNextDownsample ic oc _norm =>
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [ic]}, %b{pidx}: {tensorTy [ic]}"
+      pidx := pidx + 1
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [oc, ic, 2, 2]}, %b{pidx}: {tensorTy [oc]}"
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, h, w] => curShape := [b, oc, h / 2, w / 2]
       | _ => pure ()
       outShape := curShape
     | .maxPool size stride =>
@@ -1794,6 +1970,29 @@ private def emitForwardEvalSig (spec : NetSpec) (batchSize : Nat) : String := Id
         curShape := [b, oc, oH, oW]
       | _ => pure ()
       outShape := curShape
+    | .convNextStage channels nBlocks _norm _act =>
+      let c := channels
+      for _ in [:nBlocks] do
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [c, 1, 7, 7]}, %b{pidx}: {tensorTy [c]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [c]}, %b{pidx}: {tensorTy [c]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [4*c, c, 1, 1]}, %b{pidx}: {tensorTy [4*c]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [c, 4*c, 1, 1]}, %b{pidx}: {tensorTy [c]}"
+        pidx := pidx + 1
+        params := params ++ s!",\n    %W{pidx}: {tensorTy [c]}"
+        pidx := pidx + 1
+      outShape := curShape
+    | .convNextDownsample ic oc _norm =>
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [ic]}, %b{pidx}: {tensorTy [ic]}"
+      pidx := pidx + 1
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [oc, ic, 2, 2]}, %b{pidx}: {tensorTy [oc]}"
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, h, w] => curShape := [b, oc, h / 2, w / 2]
+      | _ => pure ()
+      outShape := curShape
     | .maxPool _ stride =>
       match curShape with
       | [b, c, h, w] =>
@@ -1955,6 +2154,32 @@ private structure FwdRec where
   isClsSlice      : Bool := false
   clsInShape      : List Nat := []
   clsInSSA        : String := ""
+  -- ═════════ ConvNeXt block intermediates ═════════
+  -- One FwdRec per ConvNeXt block with `isConvNextBlock := true`. Five
+  -- pidx slots from `cnbBasePidx`: DW (W,b), LN (γ,β), expand (W,b),
+  -- project (W,b), LayerScale (γ).
+  isConvNextBlock : Bool := false
+  cnbBasePidx     : Nat := 0
+  cnbChannels     : Nat := 0
+  cnbAct          : Activation := .gelu
+  cnbBlockInSSA   : String := ""    -- input to the block (residual root)
+  cnbDwOutSSA     : String := ""    -- DW + bias output, pre-LN
+  cnbLnNormSSA    : String := ""    -- (x − μ)·istd over channels
+  cnbLnIstdSSA    : String := ""    -- 1/σ on shape [b, h, w]
+  cnbLnOutSSA     : String := ""    -- post-LN, into 1×1 expand
+  cnbExpandOutSSA : String := ""    -- pre-activation (channels = 4c)
+  cnbActOutSSA    : String := ""    -- post-activation, into project
+  cnbActTanhSSA   : String := ""    -- saved tanh value for GELU backward
+  cnbProjectOutSSA : String := ""   -- pre-LayerScale (channels = c)
+  -- ═════════ ConvNeXt downsample intermediates ═════════
+  isConvNextDs    : Bool := false
+  cndBasePidx     : Nat := 0
+  cndIc           : Nat := 0
+  cndOc           : Nat := 0
+  cndInSSA        : String := ""    -- pre-LN
+  cndLnNormSSA    : String := ""
+  cndLnIstdSSA    : String := ""
+  cndLnOutSSA     : String := ""    -- post-LN, into 2×2 stride-2 conv
 instance : Inhabited FwdRec where
   default := { layer := .flatten, pidx := none, pos := 0,
                inputSSA := "", preActSSA := "", outputSSA := "",
@@ -3450,6 +3675,123 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
           addSkipGrad := "identity"
         }
 
+    | .convNextStage channels nBlocks _norm act =>
+      -- Per block: DW raw → LN-NCHW → 1×1 expand → activation → 1×1 project → LayerScale → residual.
+      -- One FwdRec per block with `isConvNextBlock := true`; backward uses saved intermediates.
+      for bi in [:nBlocks] do
+        match curShape with
+        | [b, _, h, w] =>
+          let blockIn := curSSA
+          let blockShape := curShape
+          let basePidx := pidx
+          let tag := s!"cn{pos}_{bi}"
+          let c := channels
+          let blockTy := tensorTy blockShape
+          let cTy := tensorTy [c]
+          let expShape := [b, 4*c, h, w]
+          let expTy := tensorTy expShape
+          -- 1) DW raw 7×7 (pidx)
+          let (pH0, pH1, pW0, pW1) := samePad h w 7 1
+          code := code ++ s!"    %dwr_cv{pidx} = \"stablehlo.convolution\"({blockIn}, %W{pidx}) " ++ "{\n"
+          code := code ++ "        batch_group_count = 1 : i64,\n"
+          code := code ++ convDimNumbers
+          code := code ++ s!"        feature_group_count = {c} : i64,\n"
+          code := code ++ s!"        padding = dense<[[{pH0}, {pH1}], [{pW0}, {pW1}]]> : tensor<2x2xi64>,\n"
+          code := code ++ "        rhs_dilation = array<i64: 1, 1>,\n"
+          code := code ++ "        window_strides = array<i64: 1, 1>\n"
+          code := code ++ s!"      " ++ "}" ++ s!" : ({blockTy}, {tensorTy [c, 1, 7, 7]}) -> {blockTy}\n"
+          code := code ++ s!"    %dwr_bb{pidx} = stablehlo.broadcast_in_dim %b{pidx}, dims = [1] : ({cTy}) -> {blockTy}\n"
+          code := code ++ s!"    %dwr_out{pidx} = stablehlo.add %dwr_cv{pidx}, %dwr_bb{pidx} : {blockTy}\n"
+          let dwOut := s!"%dwr_out{pidx}"
+          pidx := pidx + 1
+          -- 2) LN-NCHW (pidx)
+          let (lnCode, lnOut, lnNorm, lnIstd, _) := emitLayerNormForwardNCHW tag dwOut blockShape s!"%W{pidx}" s!"%b{pidx}"
+          code := code ++ lnCode
+          pidx := pidx + 1
+          -- 3) 1×1 expand c → 4c (pidx)
+          code := code ++ s!"    %cnx_cv{pidx} = \"stablehlo.convolution\"({lnOut}, %W{pidx}) " ++ "{\n"
+          code := code ++ convAttrBlock 0
+          code := code ++ s!"      " ++ "}" ++ s!" : ({blockTy}, {tensorTy [4*c, c, 1, 1]}) -> {expTy}\n"
+          code := code ++ s!"    %cnx_bb{pidx} = stablehlo.broadcast_in_dim %b{pidx}, dims = [1] : ({tensorTy [4*c]}) -> {expTy}\n"
+          code := code ++ s!"    %cnx_out{pidx} = stablehlo.add %cnx_cv{pidx}, %cnx_bb{pidx} : {expTy}\n"
+          let expandOut := s!"%cnx_out{pidx}"
+          pidx := pidx + 1
+          -- 4) Activation
+          let mut actOut := expandOut
+          let mut actTanh := ""
+          match act with
+          | .gelu =>
+            let (geCode, geOut, geT) := emitGeluForward tag expandOut expShape
+            code := code ++ geCode
+            actOut := geOut; actTanh := geT
+          | .relu =>
+            code := code ++ s!"    %cnar_z{tag} = stablehlo.constant dense<0.0> : {expTy}\n"
+            code := code ++ s!"    %cnar_o{tag} = stablehlo.maximum {expandOut}, %cnar_z{tag} : {expTy}\n"
+            actOut := s!"%cnar_o{tag}"
+          | _ =>
+            -- Fallback: identity (unsupported variants here)
+            actOut := expandOut
+          -- 5) 1×1 project 4c → c (pidx)
+          code := code ++ s!"    %cnp_cv{pidx} = \"stablehlo.convolution\"({actOut}, %W{pidx}) " ++ "{\n"
+          code := code ++ convAttrBlock 0
+          code := code ++ s!"      " ++ "}" ++ s!" : ({expTy}, {tensorTy [c, 4*c, 1, 1]}) -> {blockTy}\n"
+          code := code ++ s!"    %cnp_bb{pidx} = stablehlo.broadcast_in_dim %b{pidx}, dims = [1] : ({cTy}) -> {blockTy}\n"
+          code := code ++ s!"    %cnp_out{pidx} = stablehlo.add %cnp_cv{pidx}, %cnp_bb{pidx} : {blockTy}\n"
+          let projectOut := s!"%cnp_out{pidx}"
+          pidx := pidx + 1
+          -- 6) LayerScale γ ⊙ projectOut (pidx)
+          code := code ++ s!"    %cnls_bc{tag} = stablehlo.broadcast_in_dim %W{pidx}, dims = [1] : ({cTy}) -> {blockTy}\n"
+          code := code ++ s!"    %cnls_o{tag} = stablehlo.multiply {projectOut}, %cnls_bc{tag} : {blockTy}\n"
+          let lsOut := s!"%cnls_o{tag}"
+          pidx := pidx + 1
+          -- 7) Residual add
+          code := code ++ s!"    %cnres_o{tag} = stablehlo.add {blockIn}, {lsOut} : {blockTy}\n"
+          let blockOut := s!"%cnres_o{tag}"
+          curSSA := blockOut
+          curShape := blockShape
+          -- Push fat record for backward
+          let mut cnRec : FwdRec := default
+          cnRec := { cnRec with layer := l, pidx := none, pos, inputSSA := blockIn, outputSSA := blockOut, inShape := blockShape, outShape := blockShape }
+          cnRec := { cnRec with isConvNextBlock := true, cnbBasePidx := basePidx, cnbChannels := c, cnbAct := act }
+          cnRec := { cnRec with cnbBlockInSSA := blockIn, cnbDwOutSSA := dwOut, cnbLnNormSSA := lnNorm, cnbLnIstdSSA := lnIstd, cnbLnOutSSA := lnOut }
+          cnRec := { cnRec with cnbExpandOutSSA := expandOut, cnbActOutSSA := actOut, cnbActTanhSSA := actTanh, cnbProjectOutSSA := projectOut }
+          records := records.push cnRec
+        | _ => pure ()
+
+    | .convNextDownsample ic oc _norm =>
+      match curShape with
+      | [b, _, h, w] =>
+        let inSSA0 := curSSA
+        let inSh := curShape
+        let basePidx := pidx
+        let tag := s!"cnds{pos}"
+        let outShape := [b, oc, h / 2, w / 2]
+        -- 1) LN-NCHW (pidx)
+        let (lnCode, lnOut, lnNorm, lnIstd, _) := emitLayerNormForwardNCHW tag inSSA0 inSh s!"%W{pidx}" s!"%b{pidx}"
+        code := code ++ lnCode
+        pidx := pidx + 1
+        -- 2) 2×2 stride-2 valid-pad conv (pidx)
+        code := code ++ s!"    %cnds_cv{pidx} = \"stablehlo.convolution\"({lnOut}, %W{pidx}) " ++ "{\n"
+        code := code ++ "        batch_group_count = 1 : i64,\n"
+        code := code ++ convDimNumbers
+        code := code ++ "        feature_group_count = 1 : i64,\n"
+        code := code ++ "        padding = dense<[[0, 0], [0, 0]]> : tensor<2x2xi64>,\n"
+        code := code ++ "        rhs_dilation = array<i64: 1, 1>,\n"
+        code := code ++ "        window_strides = array<i64: 2, 2>\n"
+        code := code ++ s!"      " ++ "}" ++ s!" : ({tensorTy inSh}, {tensorTy [oc, ic, 2, 2]}) -> {tensorTy outShape}\n"
+        code := code ++ s!"    %cnds_bb{pidx} = stablehlo.broadcast_in_dim %b{pidx}, dims = [1] : ({tensorTy [oc]}) -> {tensorTy outShape}\n"
+        code := code ++ s!"    %cnds_o{pidx} = stablehlo.add %cnds_cv{pidx}, %cnds_bb{pidx} : {tensorTy outShape}\n"
+        let dsOut := s!"%cnds_o{pidx}"
+        pidx := pidx + 1
+        curSSA := dsOut
+        curShape := outShape
+        let mut cnRec : FwdRec := default
+        cnRec := { cnRec with layer := l, pidx := none, pos, inputSSA := inSSA0, outputSSA := dsOut, inShape := inSh, outShape := outShape }
+        cnRec := { cnRec with isConvNextDs := true, cndBasePidx := basePidx, cndIc := ic, cndOc := oc }
+        cnRec := { cnRec with cndInSSA := inSSA0, cndLnNormSSA := lnNorm, cndLnIstdSSA := lnIstd, cndLnOutSSA := lnOut }
+        records := records.push cnRec
+      | _ => pure ()
+
     | .patchEmbed ic dim pSize nP =>
       let pWIdx := pidx
       let pBIdx := pidx  -- shared pidx (W + b of conv)
@@ -4193,6 +4535,234 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
         | _ => pure ()
       else pure ()
 
+    | .convNextStage _channels _nBlocks _norm _act =>
+      if r.isConvNextBlock then
+        match r.inShape with
+        | [b, _, h, w] =>
+          code := code ++ s!"    // ════════════════════════════════════════════════════════════════\n"
+          code := code ++ s!"    // ConvNeXt block backward — see LeanMlir/Proofs/:\n"
+          code := code ++ s!"    //   Residual fan-in            Residual.lean: residual_has_vjp\n"
+          code := code ++ s!"    //   LayerScale (per-channel γ) Pointwise.lean: elemwiseProduct_has_vjp\n"
+          code := code ++ s!"    //   1×1 project / expand convs CNN.lean: conv2d_has_vjp3 / conv2d_weight_grad_has_vjp\n"
+          code := code ++ s!"    //   GELU                       LayerNorm.lean: pdiv_gelu (tanh-form diagonal)\n"
+          code := code ++ s!"    //   LN over channel axis       LayerNorm.lean: layerNorm_has_vjp (axis-relabeled)\n"
+          code := code ++ s!"    //   Depthwise 7×7 raw          Depthwise.lean: depthwise_has_vjp3 + depthwise_weight_grad_has_vjp3\n"
+          code := code ++ s!"    // ════════════════════════════════════════════════════════════════\n"
+          let basePidx := r.cnbBasePidx
+          let pDw := basePidx
+          let pLn := basePidx + 1
+          let pEx := basePidx + 2
+          let pPj := basePidx + 3
+          let pLs := basePidx + 4
+          let c := r.cnbChannels
+          let act := r.cnbAct
+          let blockTy := tensorTy r.inShape
+          let cTy := tensorTy [c]
+          let bhwTy := tensorTy [b, h, w]
+          let expShape := [b, 4*c, h, w]
+          let expTy := tensorTy expShape
+          let exB := tensorTy [4*c]
+          let cF := c.toFloat
+          let tag := s!"cnb{basePidx}"
+          let dy := gradSSA
+          -- 1) Residual fan-in: d_LSout = dy. d_blockIn_skip = dy (added at end).
+          -- 2) LayerScale backward: d_γ = sum_{b,h,w}(projectOut · dy); d_projectOut = γ_bc ⊙ dy.
+          code := code ++ s!"    %{tag}_lsgn = stablehlo.multiply {r.cnbProjectOutSSA}, {dy} : {blockTy}\n"
+          code := code ++ s!"    %d_W{pLs} = stablehlo.reduce(%{tag}_lsgn init: %zf) applies stablehlo.add across dimensions = [0, 2, 3]\n"
+          code := code ++ s!"          : ({blockTy}, tensor<f32>) -> {cTy}\n"
+          code := code ++ s!"    %{tag}_lsgbc = stablehlo.broadcast_in_dim %W{pLs}, dims = [1] : ({cTy}) -> {blockTy}\n"
+          code := code ++ s!"    %{tag}_dpj = stablehlo.multiply {dy}, %{tag}_lsgbc : {blockTy}\n"
+          -- 3) Project conv backward (1×1, stride 1, ic=4c, oc=c).
+          code := code ++ s!"    %{tag}_pjbtin = stablehlo.transpose {r.cnbActOutSSA}, dims = [1, 0, 2, 3] : ({expTy}) -> {tensorTy [4*c, b, h, w]}\n"
+          code := code ++ s!"    %{tag}_pjbtg = stablehlo.transpose %{tag}_dpj, dims = [1, 0, 2, 3] : ({blockTy}) -> {tensorTy [c, b, h, w]}\n"
+          code := code ++ s!"    %{tag}_pjdWr = \"stablehlo.convolution\"(%{tag}_pjbtin, %{tag}_pjbtg) " ++ "{\n"
+          code := code ++ convAttrBlock 0
+          code := code ++ s!"      " ++ "}" ++ s!" : ({tensorTy [4*c, b, h, w]}, {tensorTy [c, b, h, w]}) -> {tensorTy [4*c, c, 1, 1]}\n"
+          code := code ++ s!"    %d_W{pPj} = stablehlo.transpose %{tag}_pjdWr, dims = [1, 0, 2, 3] : ({tensorTy [4*c, c, 1, 1]}) -> {tensorTy [c, 4*c, 1, 1]}\n"
+          code := code ++ s!"    %d_b{pPj} = stablehlo.reduce(%{tag}_dpj init: %zf) applies stablehlo.add across dimensions = [0, 2, 3]\n"
+          code := code ++ s!"          : ({blockTy}, tensor<f32>) -> {cTy}\n"
+          code := code ++ s!"    %{tag}_pjWt = stablehlo.transpose %W{pPj}, dims = [1, 0, 2, 3] : ({tensorTy [c, 4*c, 1, 1]}) -> {tensorTy [4*c, c, 1, 1]}\n"
+          code := code ++ s!"    %{tag}_pjWrev = stablehlo.reverse %{tag}_pjWt, dims = [2, 3] : {tensorTy [4*c, c, 1, 1]}\n"
+          code := code ++ s!"    %{tag}_dact = \"stablehlo.convolution\"(%{tag}_dpj, %{tag}_pjWrev) " ++ "{\n"
+          code := code ++ convAttrBlock 0
+          code := code ++ s!"      " ++ "}" ++ s!" : ({blockTy}, {tensorTy [4*c, c, 1, 1]}) -> {expTy}\n"
+          -- 4) Activation backward: dy = %{tag}_dact, output = %{tag}_dexp.
+          let mut dExpandSSA := s!"%{tag}_dact"
+          match act with
+          | .gelu =>
+            code := code ++ s!"    // ─── GELU backward (tanh form) ───\n"
+            code := code ++ s!"    %{tag}_t2 = stablehlo.multiply {r.cnbActTanhSSA}, {r.cnbActTanhSSA} : {expTy}\n"
+            code := code ++ s!"    %{tag}_one = stablehlo.constant dense<1.0> : {expTy}\n"
+            code := code ++ s!"    %{tag}_1mt2 = stablehlo.subtract %{tag}_one, %{tag}_t2 : {expTy}\n"
+            code := code ++ s!"    %{tag}_c134 = stablehlo.constant dense<0.134145> : {expTy}\n"
+            code := code ++ s!"    %{tag}_xsq = stablehlo.multiply {r.cnbExpandOutSSA}, {r.cnbExpandOutSSA} : {expTy}\n"
+            code := code ++ s!"    %{tag}_cx2 = stablehlo.multiply %{tag}_c134, %{tag}_xsq : {expTy}\n"
+            code := code ++ s!"    %{tag}_idu = stablehlo.add %{tag}_one, %{tag}_cx2 : {expTy}\n"
+            code := code ++ s!"    %{tag}_csq = stablehlo.constant dense<0.7978845608028654> : {expTy}\n"
+            code := code ++ s!"    %{tag}_du = stablehlo.multiply %{tag}_idu, %{tag}_csq : {expTy}\n"
+            code := code ++ s!"    %{tag}_term2a = stablehlo.multiply %{tag}_1mt2, %{tag}_du : {expTy}\n"
+            code := code ++ s!"    %{tag}_c05 = stablehlo.constant dense<0.5> : {expTy}\n"
+            code := code ++ s!"    %{tag}_hx = stablehlo.multiply %{tag}_c05, {r.cnbExpandOutSSA} : {expTy}\n"
+            code := code ++ s!"    %{tag}_term2 = stablehlo.multiply %{tag}_hx, %{tag}_term2a : {expTy}\n"
+            code := code ++ s!"    %{tag}_1pt = stablehlo.add %{tag}_one, {r.cnbActTanhSSA} : {expTy}\n"
+            code := code ++ s!"    %{tag}_term1 = stablehlo.multiply %{tag}_c05, %{tag}_1pt : {expTy}\n"
+            code := code ++ s!"    %{tag}_dgdx = stablehlo.add %{tag}_term1, %{tag}_term2 : {expTy}\n"
+            code := code ++ s!"    %{tag}_dexp = stablehlo.multiply %{tag}_dact, %{tag}_dgdx : {expTy}\n"
+            dExpandSSA := s!"%{tag}_dexp"
+          | .relu =>
+            code := code ++ s!"    %{tag}_zero = stablehlo.constant dense<0.0> : {expTy}\n"
+            let i1Ty := expTy.replace "xf32>" "xi1>"
+            code := code ++ s!"    %{tag}_rmask = stablehlo.compare GT, {r.cnbExpandOutSSA}, %{tag}_zero : ({expTy}, {expTy}) -> {i1Ty}\n"
+            code := code ++ s!"    %{tag}_dexp = stablehlo.select %{tag}_rmask, %{tag}_dact, %{tag}_zero : {i1Ty}, {expTy}\n"
+            dExpandSSA := s!"%{tag}_dexp"
+          | _ =>
+            dExpandSSA := s!"%{tag}_dact"
+          -- 5) Expand conv backward (1×1, stride 1, ic=c, oc=4c).
+          code := code ++ s!"    %{tag}_exbtin = stablehlo.transpose {r.cnbLnOutSSA}, dims = [1, 0, 2, 3] : ({blockTy}) -> {tensorTy [c, b, h, w]}\n"
+          code := code ++ s!"    %{tag}_exbtg = stablehlo.transpose {dExpandSSA}, dims = [1, 0, 2, 3] : ({expTy}) -> {tensorTy [4*c, b, h, w]}\n"
+          code := code ++ s!"    %{tag}_exdWr = \"stablehlo.convolution\"(%{tag}_exbtin, %{tag}_exbtg) " ++ "{\n"
+          code := code ++ convAttrBlock 0
+          code := code ++ s!"      " ++ "}" ++ s!" : ({tensorTy [c, b, h, w]}, {tensorTy [4*c, b, h, w]}) -> {tensorTy [c, 4*c, 1, 1]}\n"
+          code := code ++ s!"    %d_W{pEx} = stablehlo.transpose %{tag}_exdWr, dims = [1, 0, 2, 3] : ({tensorTy [c, 4*c, 1, 1]}) -> {tensorTy [4*c, c, 1, 1]}\n"
+          code := code ++ s!"    %d_b{pEx} = stablehlo.reduce({dExpandSSA} init: %zf) applies stablehlo.add across dimensions = [0, 2, 3]\n"
+          code := code ++ s!"          : ({expTy}, tensor<f32>) -> {exB}\n"
+          code := code ++ s!"    %{tag}_exWt = stablehlo.transpose %W{pEx}, dims = [1, 0, 2, 3] : ({tensorTy [4*c, c, 1, 1]}) -> {tensorTy [c, 4*c, 1, 1]}\n"
+          code := code ++ s!"    %{tag}_exWrev = stablehlo.reverse %{tag}_exWt, dims = [2, 3] : {tensorTy [c, 4*c, 1, 1]}\n"
+          code := code ++ s!"    %{tag}_dlnout = \"stablehlo.convolution\"({dExpandSSA}, %{tag}_exWrev) " ++ "{\n"
+          code := code ++ convAttrBlock 0
+          code := code ++ s!"      " ++ "}" ++ s!" : ({expTy}, {tensorTy [c, 4*c, 1, 1]}) -> {blockTy}\n"
+          -- 6) LN-NCHW backward (three-term over channel axis = 1).
+          code := code ++ s!"    %{tag}_lngn = stablehlo.multiply %{tag}_dlnout, {r.cnbLnNormSSA} : {blockTy}\n"
+          code := code ++ s!"    %d_b{pLn} = stablehlo.reduce(%{tag}_dlnout init: %zf) applies stablehlo.add across dimensions = [0, 2, 3]\n"
+          code := code ++ s!"          : ({blockTy}, tensor<f32>) -> {cTy}\n"
+          code := code ++ s!"    %d_W{pLn} = stablehlo.reduce(%{tag}_lngn init: %zf) applies stablehlo.add across dimensions = [0, 2, 3]\n"
+          code := code ++ s!"          : ({blockTy}, tensor<f32>) -> {cTy}\n"
+          code := code ++ s!"    %{tag}_lngbc = stablehlo.broadcast_in_dim %W{pLn}, dims = [1] : ({cTy}) -> {blockTy}\n"
+          code := code ++ s!"    %{tag}_lndn = stablehlo.multiply %{tag}_dlnout, %{tag}_lngbc : {blockTy}\n"
+          code := code ++ s!"    %{tag}_lnsdn = stablehlo.reduce(%{tag}_lndn init: %zf) applies stablehlo.add across dimensions = [1]\n"
+          code := code ++ s!"          : ({blockTy}, tensor<f32>) -> {bhwTy}\n"
+          code := code ++ s!"    %{tag}_lndnn = stablehlo.multiply %{tag}_lndn, {r.cnbLnNormSSA} : {blockTy}\n"
+          code := code ++ s!"    %{tag}_lnsdnn = stablehlo.reduce(%{tag}_lndnn init: %zf) applies stablehlo.add across dimensions = [1]\n"
+          code := code ++ s!"          : ({blockTy}, tensor<f32>) -> {bhwTy}\n"
+          code := code ++ s!"    %{tag}_lnsdnbc = stablehlo.broadcast_in_dim %{tag}_lnsdn, dims = [0, 2, 3] : ({bhwTy}) -> {blockTy}\n"
+          code := code ++ s!"    %{tag}_lnsdnnbc = stablehlo.broadcast_in_dim %{tag}_lnsdnn, dims = [0, 2, 3] : ({bhwTy}) -> {blockTy}\n"
+          code := code ++ s!"    %{tag}_lnNc = stablehlo.constant dense<{cF}> : {blockTy}\n"
+          code := code ++ s!"    %{tag}_lnt1 = stablehlo.multiply %{tag}_lnNc, %{tag}_lndn : {blockTy}\n"
+          code := code ++ s!"    %{tag}_lnt2 = stablehlo.subtract %{tag}_lnt1, %{tag}_lnsdnbc : {blockTy}\n"
+          code := code ++ s!"    %{tag}_lnt3 = stablehlo.multiply {r.cnbLnNormSSA}, %{tag}_lnsdnnbc : {blockTy}\n"
+          code := code ++ s!"    %{tag}_lnt4 = stablehlo.subtract %{tag}_lnt2, %{tag}_lnt3 : {blockTy}\n"
+          code := code ++ s!"    %{tag}_lnistdbc = stablehlo.broadcast_in_dim {r.cnbLnIstdSSA}, dims = [0, 2, 3] : ({bhwTy}) -> {blockTy}\n"
+          code := code ++ s!"    %{tag}_lninvN = stablehlo.constant dense<{1.0 / cF}> : {blockTy}\n"
+          code := code ++ s!"    %{tag}_lnscale = stablehlo.multiply %{tag}_lnistdbc, %{tag}_lninvN : {blockTy}\n"
+          code := code ++ s!"    %{tag}_ddwout = stablehlo.multiply %{tag}_lnscale, %{tag}_lnt4 : {blockTy}\n"
+          -- 7) DW raw 7×7 stride-1 same-pad backward.
+          let pad : Nat := 3
+          code := code ++ s!"    %d_b{pDw} = stablehlo.reduce(%{tag}_ddwout init: %zf) applies stablehlo.add across dimensions = [0, 2, 3]\n"
+          code := code ++ s!"          : ({blockTy}, tensor<f32>) -> {cTy}\n"
+          code := code ++ s!"    %{tag}_dwbtin = stablehlo.transpose {r.cnbBlockInSSA}, dims = [1, 0, 2, 3] : ({blockTy}) -> {tensorTy [c, b, h, w]}\n"
+          code := code ++ s!"    %{tag}_dwbtg = stablehlo.transpose %{tag}_ddwout, dims = [1, 0, 2, 3] : ({blockTy}) -> {tensorTy [c, b, h, w]}\n"
+          code := code ++ s!"    %{tag}_dwdWr = \"stablehlo.convolution\"(%{tag}_dwbtin, %{tag}_dwbtg) " ++ "{\n"
+          code := code ++ s!"        batch_group_count = {c} : i64,\n"
+          code := code ++ convDimNumbers
+          code := code ++ "        feature_group_count = 1 : i64,\n"
+          code := code ++ s!"        padding = dense<[[{pad}, {pad}], [{pad}, {pad}]]> : tensor<2x2xi64>,\n"
+          code := code ++ "        rhs_dilation = array<i64: 1, 1>,\n"
+          code := code ++ "        window_strides = array<i64: 1, 1>\n"
+          code := code ++ s!"      " ++ "}" ++ s!" : ({tensorTy [c, b, h, w]}, {tensorTy [c, b, h, w]}) -> {tensorTy [1, c, 7, 7]}\n"
+          code := code ++ s!"    %d_W{pDw} = stablehlo.transpose %{tag}_dwdWr, dims = [1, 0, 2, 3] : ({tensorTy [1, c, 7, 7]}) -> {tensorTy [c, 1, 7, 7]}\n"
+          code := code ++ s!"    %{tag}_dwWrev = stablehlo.reverse %W{pDw}, dims = [2, 3] : {tensorTy [c, 1, 7, 7]}\n"
+          code := code ++ s!"    %{tag}_dxblk = \"stablehlo.convolution\"(%{tag}_ddwout, %{tag}_dwWrev) " ++ "{\n"
+          code := code ++ "        batch_group_count = 1 : i64,\n"
+          code := code ++ convDimNumbers
+          code := code ++ s!"        feature_group_count = {c} : i64,\n"
+          code := code ++ s!"        padding = dense<[[{pad}, {pad}], [{pad}, {pad}]]> : tensor<2x2xi64>,\n"
+          code := code ++ "        rhs_dilation = array<i64: 1, 1>,\n"
+          code := code ++ "        window_strides = array<i64: 1, 1>\n"
+          code := code ++ s!"      " ++ "}" ++ s!" : ({blockTy}, {tensorTy [c, 1, 7, 7]}) -> {blockTy}\n"
+          -- 8) Residual fan-in: dx_block = dy + dxblk
+          code := code ++ s!"    %{tag}_dx = stablehlo.add {dy}, %{tag}_dxblk : {blockTy}\n"
+          gradSSA := s!"%{tag}_dx"
+          gradShape := r.inShape
+        | _ => pure ()
+      else pure ()
+
+    | .convNextDownsample _ic _oc _norm =>
+      if r.isConvNextDs then
+        match r.inShape with
+        | [b, _, h, w] =>
+          code := code ++ s!"    // ─── ConvNeXt downsample backward (LN over channels + 2×2 stride-2 conv) ───\n"
+          let basePidx := r.cndBasePidx
+          let pLn := basePidx
+          let pCv := basePidx + 1
+          let ic := r.cndIc
+          let oc := r.cndOc
+          let outShape := r.outShape
+          let oH := outShape[2]!
+          let oW := outShape[3]!
+          let inTy := tensorTy r.inShape
+          let outTy := tensorTy outShape
+          let icTy := tensorTy [ic]
+          let ocTy := tensorTy [oc]
+          let bhwTy := tensorTy [b, h, w]
+          let icF := ic.toFloat
+          let tag := s!"cnds{basePidx}"
+          let dy := gradSSA
+          -- 1) 2×2 stride-2 conv backward (input shape [b, ic, h, w], output [b, oc, h/2, w/2]).
+          code := code ++ s!"    %{tag}_btin = stablehlo.transpose {r.cndLnOutSSA}, dims = [1, 0, 2, 3] : ({inTy}) -> {tensorTy [ic, b, h, w]}\n"
+          code := code ++ s!"    %{tag}_btg = stablehlo.transpose {dy}, dims = [1, 0, 2, 3] : ({outTy}) -> {tensorTy [oc, b, oH, oW]}\n"
+          code := code ++ s!"    %{tag}_dWr = \"stablehlo.convolution\"(%{tag}_btin, %{tag}_btg) " ++ "{\n"
+          code := code ++ "        batch_group_count = 1 : i64,\n"
+          code := code ++ convDimNumbers
+          code := code ++ "        feature_group_count = 1 : i64,\n"
+          code := code ++ "        lhs_dilation = array<i64: 1, 1>,\n"
+          code := code ++ "        padding = dense<[[0, 0], [0, 0]]> : tensor<2x2xi64>,\n"
+          code := code ++ "        rhs_dilation = array<i64: 2, 2>,\n"
+          code := code ++ "        window_strides = array<i64: 1, 1>\n"
+          code := code ++ s!"      " ++ "}" ++ s!" : ({tensorTy [ic, b, h, w]}, {tensorTy [oc, b, oH, oW]}) -> {tensorTy [ic, oc, 2, 2]}\n"
+          code := code ++ s!"    %d_W{pCv} = stablehlo.transpose %{tag}_dWr, dims = [1, 0, 2, 3] : ({tensorTy [ic, oc, 2, 2]}) -> {tensorTy [oc, ic, 2, 2]}\n"
+          code := code ++ s!"    %d_b{pCv} = stablehlo.reduce({dy} init: %zf) applies stablehlo.add across dimensions = [0, 2, 3]\n"
+          code := code ++ s!"          : ({outTy}, tensor<f32>) -> {ocTy}\n"
+          code := code ++ s!"    %{tag}_Wt = stablehlo.transpose %W{pCv}, dims = [1, 0, 2, 3] : ({tensorTy [oc, ic, 2, 2]}) -> {tensorTy [ic, oc, 2, 2]}\n"
+          code := code ++ s!"    %{tag}_Wrev = stablehlo.reverse %{tag}_Wt, dims = [2, 3] : {tensorTy [ic, oc, 2, 2]}\n"
+          let dxPad : Nat := 1
+          code := code ++ s!"    %{tag}_dlnout = \"stablehlo.convolution\"({dy}, %{tag}_Wrev) " ++ "{\n"
+          code := code ++ "        batch_group_count = 1 : i64,\n"
+          code := code ++ convDimNumbers
+          code := code ++ "        feature_group_count = 1 : i64,\n"
+          code := code ++ "        lhs_dilation = array<i64: 2, 2>,\n"
+          code := code ++ s!"        padding = dense<[[{dxPad}, {dxPad}], [{dxPad}, {dxPad}]]> : tensor<2x2xi64>,\n"
+          code := code ++ "        rhs_dilation = array<i64: 1, 1>,\n"
+          code := code ++ "        window_strides = array<i64: 1, 1>\n"
+          code := code ++ s!"      " ++ "}" ++ s!" : ({outTy}, {tensorTy [ic, oc, 2, 2]}) -> {inTy}\n"
+          -- 2) LN-NCHW backward (channels = ic).
+          code := code ++ s!"    %{tag}_lngn = stablehlo.multiply %{tag}_dlnout, {r.cndLnNormSSA} : {inTy}\n"
+          code := code ++ s!"    %d_b{pLn} = stablehlo.reduce(%{tag}_dlnout init: %zf) applies stablehlo.add across dimensions = [0, 2, 3]\n"
+          code := code ++ s!"          : ({inTy}, tensor<f32>) -> {icTy}\n"
+          code := code ++ s!"    %d_W{pLn} = stablehlo.reduce(%{tag}_lngn init: %zf) applies stablehlo.add across dimensions = [0, 2, 3]\n"
+          code := code ++ s!"          : ({inTy}, tensor<f32>) -> {icTy}\n"
+          code := code ++ s!"    %{tag}_lngbc = stablehlo.broadcast_in_dim %W{pLn}, dims = [1] : ({icTy}) -> {inTy}\n"
+          code := code ++ s!"    %{tag}_lndn = stablehlo.multiply %{tag}_dlnout, %{tag}_lngbc : {inTy}\n"
+          code := code ++ s!"    %{tag}_lnsdn = stablehlo.reduce(%{tag}_lndn init: %zf) applies stablehlo.add across dimensions = [1]\n"
+          code := code ++ s!"          : ({inTy}, tensor<f32>) -> {bhwTy}\n"
+          code := code ++ s!"    %{tag}_lndnn = stablehlo.multiply %{tag}_lndn, {r.cndLnNormSSA} : {inTy}\n"
+          code := code ++ s!"    %{tag}_lnsdnn = stablehlo.reduce(%{tag}_lndnn init: %zf) applies stablehlo.add across dimensions = [1]\n"
+          code := code ++ s!"          : ({inTy}, tensor<f32>) -> {bhwTy}\n"
+          code := code ++ s!"    %{tag}_lnsdnbc = stablehlo.broadcast_in_dim %{tag}_lnsdn, dims = [0, 2, 3] : ({bhwTy}) -> {inTy}\n"
+          code := code ++ s!"    %{tag}_lnsdnnbc = stablehlo.broadcast_in_dim %{tag}_lnsdnn, dims = [0, 2, 3] : ({bhwTy}) -> {inTy}\n"
+          code := code ++ s!"    %{tag}_lnNc = stablehlo.constant dense<{icF}> : {inTy}\n"
+          code := code ++ s!"    %{tag}_lnt1 = stablehlo.multiply %{tag}_lnNc, %{tag}_lndn : {inTy}\n"
+          code := code ++ s!"    %{tag}_lnt2 = stablehlo.subtract %{tag}_lnt1, %{tag}_lnsdnbc : {inTy}\n"
+          code := code ++ s!"    %{tag}_lnt3 = stablehlo.multiply {r.cndLnNormSSA}, %{tag}_lnsdnnbc : {inTy}\n"
+          code := code ++ s!"    %{tag}_lnt4 = stablehlo.subtract %{tag}_lnt2, %{tag}_lnt3 : {inTy}\n"
+          code := code ++ s!"    %{tag}_lnistdbc = stablehlo.broadcast_in_dim {r.cndLnIstdSSA}, dims = [0, 2, 3] : ({bhwTy}) -> {inTy}\n"
+          code := code ++ s!"    %{tag}_lninvN = stablehlo.constant dense<{1.0 / icF}> : {inTy}\n"
+          code := code ++ s!"    %{tag}_lnscale = stablehlo.multiply %{tag}_lnistdbc, %{tag}_lninvN : {inTy}\n"
+          code := code ++ s!"    %{tag}_dx = stablehlo.multiply %{tag}_lnscale, %{tag}_lnt4 : {inTy}\n"
+          gradSSA := s!"%{tag}_dx"
+          gradShape := r.inShape
+        | _ => pure ()
+      else pure ()
+
     | _ => pure ()
 
   -- ═══════════════ OPTIMIZER UPDATES ═══════════════
@@ -4355,6 +4925,96 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
         mRetTypes := mRetTypes.push (tensorTy shape) |>.push (tensorTy shape)
         vRetNames := vRetNames.push vwN |>.push vbN
         vRetTypes := vRetTypes.push (tensorTy shape) |>.push (tensorTy shape)
+      -- ConvNeXt block: 5 pidx slots (DW, LN, expand, project, LayerScale)
+      if r.isConvNextBlock then
+        let basePidx := r.cnbBasePidx
+        let c := r.cnbChannels
+        let cShape : List Nat := [c]
+        let dwShape : List Nat := [c, 1, 7, 7]
+        let exShape : List Nat := [4*c, c, 1, 1]; let exB : List Nat := [4*c]
+        let pjShape : List Nat := [c, 4*c, 1, 1]
+        -- DW (W, b)
+        let pDw := basePidx
+        let (sa1, wN, mwN, vwN) := emitUpdate s!"%W{pDw}" s!"%d_W{pDw}" s!"%m_W{pDw}" s!"%v_W{pDw}" dwShape s!"cnbDw{pDw}" wdActive
+        let (sa2, bN, mbN, vbN) := emitUpdate s!"%b{pDw}" s!"%d_b{pDw}" s!"%m_b{pDw}" s!"%v_b{pDw}" cShape s!"cnbDwb{pDw}" false
+        code := code ++ sa1 ++ sa2
+        paramRetNames := paramRetNames.push wN |>.push bN
+        paramRetTypes := paramRetTypes.push (tensorTy dwShape) |>.push (tensorTy cShape)
+        mRetNames := mRetNames.push mwN |>.push mbN
+        mRetTypes := mRetTypes.push (tensorTy dwShape) |>.push (tensorTy cShape)
+        vRetNames := vRetNames.push vwN |>.push vbN
+        vRetTypes := vRetTypes.push (tensorTy dwShape) |>.push (tensorTy cShape)
+        -- LN (γ, β) — no weight decay on γ/β
+        let pLn := basePidx + 1
+        let (sa3, gN, mgN, vgN) := emitUpdate s!"%W{pLn}" s!"%d_W{pLn}" s!"%m_W{pLn}" s!"%v_W{pLn}" cShape s!"cnbLng{pLn}" false
+        let (sa4, betaN, mbetaN, vbetaN) := emitUpdate s!"%b{pLn}" s!"%d_b{pLn}" s!"%m_b{pLn}" s!"%v_b{pLn}" cShape s!"cnbLnb{pLn}" false
+        code := code ++ sa3 ++ sa4
+        paramRetNames := paramRetNames.push gN |>.push betaN
+        paramRetTypes := paramRetTypes.push (tensorTy cShape) |>.push (tensorTy cShape)
+        mRetNames := mRetNames.push mgN |>.push mbetaN
+        mRetTypes := mRetTypes.push (tensorTy cShape) |>.push (tensorTy cShape)
+        vRetNames := vRetNames.push vgN |>.push vbetaN
+        vRetTypes := vRetTypes.push (tensorTy cShape) |>.push (tensorTy cShape)
+        -- Expand (W, b)
+        let pEx := basePidx + 2
+        let (sa5, wEx, mwEx, vwEx) := emitUpdate s!"%W{pEx}" s!"%d_W{pEx}" s!"%m_W{pEx}" s!"%v_W{pEx}" exShape s!"cnbEx{pEx}" wdActive
+        let (sa6, bEx, mbEx, vbEx) := emitUpdate s!"%b{pEx}" s!"%d_b{pEx}" s!"%m_b{pEx}" s!"%v_b{pEx}" exB s!"cnbExb{pEx}" false
+        code := code ++ sa5 ++ sa6
+        paramRetNames := paramRetNames.push wEx |>.push bEx
+        paramRetTypes := paramRetTypes.push (tensorTy exShape) |>.push (tensorTy exB)
+        mRetNames := mRetNames.push mwEx |>.push mbEx
+        mRetTypes := mRetTypes.push (tensorTy exShape) |>.push (tensorTy exB)
+        vRetNames := vRetNames.push vwEx |>.push vbEx
+        vRetTypes := vRetTypes.push (tensorTy exShape) |>.push (tensorTy exB)
+        -- Project (W, b)
+        let pPj := basePidx + 3
+        let (sa7, wPj, mwPj, vwPj) := emitUpdate s!"%W{pPj}" s!"%d_W{pPj}" s!"%m_W{pPj}" s!"%v_W{pPj}" pjShape s!"cnbPj{pPj}" wdActive
+        let (sa8, bPj, mbPj, vbPj) := emitUpdate s!"%b{pPj}" s!"%d_b{pPj}" s!"%m_b{pPj}" s!"%v_b{pPj}" cShape s!"cnbPjb{pPj}" false
+        code := code ++ sa7 ++ sa8
+        paramRetNames := paramRetNames.push wPj |>.push bPj
+        paramRetTypes := paramRetTypes.push (tensorTy pjShape) |>.push (tensorTy cShape)
+        mRetNames := mRetNames.push mwPj |>.push mbPj
+        mRetTypes := mRetTypes.push (tensorTy pjShape) |>.push (tensorTy cShape)
+        vRetNames := vRetNames.push vwPj |>.push vbPj
+        vRetTypes := vRetTypes.push (tensorTy pjShape) |>.push (tensorTy cShape)
+        -- LayerScale γ — no weight decay
+        let pLs := basePidx + 4
+        let (sa9, lsN, mlsN, vlsN) := emitUpdate s!"%W{pLs}" s!"%d_W{pLs}" s!"%m_W{pLs}" s!"%v_W{pLs}" cShape s!"cnbLs{pLs}" false
+        code := code ++ sa9
+        paramRetNames := paramRetNames.push lsN
+        paramRetTypes := paramRetTypes.push (tensorTy cShape)
+        mRetNames := mRetNames.push mlsN
+        mRetTypes := mRetTypes.push (tensorTy cShape)
+        vRetNames := vRetNames.push vlsN
+        vRetTypes := vRetTypes.push (tensorTy cShape)
+      -- ConvNeXt downsample: 2 pidx slots (LN, conv)
+      if r.isConvNextDs then
+        let basePidx := r.cndBasePidx
+        let ic := r.cndIc
+        let oc := r.cndOc
+        let icShape : List Nat := [ic]
+        let ocShape : List Nat := [oc]
+        let cvShape : List Nat := [oc, ic, 2, 2]
+        let pLn := basePidx
+        let pCv := basePidx + 1
+        let (sa1, gN, mgN, vgN) := emitUpdate s!"%W{pLn}" s!"%d_W{pLn}" s!"%m_W{pLn}" s!"%v_W{pLn}" icShape s!"cndLng{pLn}" false
+        let (sa2, betaN, mbetaN, vbetaN) := emitUpdate s!"%b{pLn}" s!"%d_b{pLn}" s!"%m_b{pLn}" s!"%v_b{pLn}" icShape s!"cndLnb{pLn}" false
+        code := code ++ sa1 ++ sa2
+        paramRetNames := paramRetNames.push gN |>.push betaN
+        paramRetTypes := paramRetTypes.push (tensorTy icShape) |>.push (tensorTy icShape)
+        mRetNames := mRetNames.push mgN |>.push mbetaN
+        mRetTypes := mRetTypes.push (tensorTy icShape) |>.push (tensorTy icShape)
+        vRetNames := vRetNames.push vgN |>.push vbetaN
+        vRetTypes := vRetTypes.push (tensorTy icShape) |>.push (tensorTy icShape)
+        let (sa3, wN, mwN, vwN) := emitUpdate s!"%W{pCv}" s!"%d_W{pCv}" s!"%m_W{pCv}" s!"%v_W{pCv}" cvShape s!"cndCv{pCv}" wdActive
+        let (sa4, bN, mbN, vbN) := emitUpdate s!"%b{pCv}" s!"%d_b{pCv}" s!"%m_b{pCv}" s!"%v_b{pCv}" ocShape s!"cndCvb{pCv}" false
+        code := code ++ sa3 ++ sa4
+        paramRetNames := paramRetNames.push wN |>.push bN
+        paramRetTypes := paramRetTypes.push (tensorTy cvShape) |>.push (tensorTy ocShape)
+        mRetNames := mRetNames.push mwN |>.push mbN
+        mRetTypes := mRetTypes.push (tensorTy cvShape) |>.push (tensorTy ocShape)
+        vRetNames := vRetNames.push vwN |>.push vbN
+        vRetTypes := vRetTypes.push (tensorTy cvShape) |>.push (tensorTy ocShape)
   -- Return order: params, m, v, loss, then BN stats (mean0, var0, mean1, var1, ...)
   let mut retNames := paramRetNames ++ mRetNames ++ vRetNames |>.push "%loss"
   let mut retTypes := paramRetTypes ++ mRetTypes ++ vRetTypes |>.push "tensor<f32>"
@@ -4676,6 +5336,63 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat) : String := Id.r
       match curShape with
       | [b, _, h, w] => curShape := [b, oc, (h + stride - 1) / stride, (w + stride - 1) / stride]
       | _ => pure ()
+    | .convNextStage channels nBlocks _norm _act =>
+      let c := channels
+      let cTy := tensorTy [c]
+      let dwTy := tensorTy [c, 1, 7, 7]
+      let exTy := tensorTy [4*c, c, 1, 1]
+      let exB := tensorTy [4*c]
+      let pjTy := tensorTy [c, 4*c, 1, 1]
+      for _ in [:nBlocks] do
+        -- DW (W, b)
+        params := params ++ s!"      %W{pidx}: {dwTy}, %b{pidx}: {cTy},\n"
+        paramRetTypes := paramRetTypes.push dwTy |>.push cTy
+        mRetTypes := mRetTypes.push dwTy |>.push cTy
+        vRetTypes := vRetTypes.push dwTy |>.push cTy
+        pidx := pidx + 1
+        -- LN (γ, β)
+        params := params ++ s!"      %W{pidx}: {cTy}, %b{pidx}: {cTy},\n"
+        paramRetTypes := paramRetTypes.push cTy |>.push cTy
+        mRetTypes := mRetTypes.push cTy |>.push cTy
+        vRetTypes := vRetTypes.push cTy |>.push cTy
+        pidx := pidx + 1
+        -- 1×1 expand (W, b)
+        params := params ++ s!"      %W{pidx}: {exTy}, %b{pidx}: {exB},\n"
+        paramRetTypes := paramRetTypes.push exTy |>.push exB
+        mRetTypes := mRetTypes.push exTy |>.push exB
+        vRetTypes := vRetTypes.push exTy |>.push exB
+        pidx := pidx + 1
+        -- 1×1 project (W, b)
+        params := params ++ s!"      %W{pidx}: {pjTy}, %b{pidx}: {cTy},\n"
+        paramRetTypes := paramRetTypes.push pjTy |>.push cTy
+        mRetTypes := mRetTypes.push pjTy |>.push cTy
+        vRetTypes := vRetTypes.push pjTy |>.push cTy
+        pidx := pidx + 1
+        -- LayerScale (γ only)
+        params := params ++ s!"      %W{pidx}: {cTy},\n"
+        paramRetTypes := paramRetTypes.push cTy
+        mRetTypes := mRetTypes.push cTy
+        vRetTypes := vRetTypes.push cTy
+        pidx := pidx + 1
+    | .convNextDownsample ic oc _norm =>
+      let icTy := tensorTy [ic]
+      let ocTy := tensorTy [oc]
+      let cvTy := tensorTy [oc, ic, 2, 2]
+      -- LN (γ, β)
+      params := params ++ s!"      %W{pidx}: {icTy}, %b{pidx}: {icTy},\n"
+      paramRetTypes := paramRetTypes.push icTy |>.push icTy
+      mRetTypes := mRetTypes.push icTy |>.push icTy
+      vRetTypes := vRetTypes.push icTy |>.push icTy
+      pidx := pidx + 1
+      -- 2×2 stride-2 conv (W, b)
+      params := params ++ s!"      %W{pidx}: {cvTy}, %b{pidx}: {ocTy},\n"
+      paramRetTypes := paramRetTypes.push cvTy |>.push ocTy
+      mRetTypes := mRetTypes.push cvTy |>.push ocTy
+      vRetTypes := vRetTypes.push cvTy |>.push ocTy
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, h, w] => curShape := [b, oc, h / 2, w / 2]
+      | _ => pure ()
     | .maxPool _size stride =>
       match curShape with
       | [b, c, h, w] => curShape := [b, c, (h + stride - 1) / stride, (w + stride - 1) / stride]
@@ -4883,6 +5600,24 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat) : String := Id.r
         mpidx := mpidx + 1
       params := params ++ s!"      %m_W{mpidx}: {tensorTy [oc, mid, 1, 1]}, %m_g{mpidx}: {gTyO}, %m_bt{mpidx}: {gTyO},\n"
       mpidx := mpidx + 1
+    | .convNextStage channels nBlocks _norm _act =>
+      let c := channels
+      let cTy := tensorTy [c]
+      let dwTy := tensorTy [c, 1, 7, 7]
+      let exTy := tensorTy [4*c, c, 1, 1]; let exB := tensorTy [4*c]
+      let pjTy := tensorTy [c, 4*c, 1, 1]
+      for _ in [:nBlocks] do
+        params := params ++ s!"      %m_W{mpidx}: {dwTy}, %m_b{mpidx}: {cTy},\n"; mpidx := mpidx + 1
+        params := params ++ s!"      %m_W{mpidx}: {cTy}, %m_b{mpidx}: {cTy},\n"; mpidx := mpidx + 1
+        params := params ++ s!"      %m_W{mpidx}: {exTy}, %m_b{mpidx}: {exB},\n"; mpidx := mpidx + 1
+        params := params ++ s!"      %m_W{mpidx}: {pjTy}, %m_b{mpidx}: {cTy},\n"; mpidx := mpidx + 1
+        params := params ++ s!"      %m_W{mpidx}: {cTy},\n"; mpidx := mpidx + 1
+    | .convNextDownsample ic oc _norm =>
+      let icTy := tensorTy [ic]
+      let ocTy := tensorTy [oc]
+      let cvTy := tensorTy [oc, ic, 2, 2]
+      params := params ++ s!"      %m_W{mpidx}: {icTy}, %m_b{mpidx}: {icTy},\n"; mpidx := mpidx + 1
+      params := params ++ s!"      %m_W{mpidx}: {cvTy}, %m_b{mpidx}: {ocTy},\n"; mpidx := mpidx + 1
     | .patchEmbed ic dim pSize nP =>
       params := params ++ s!"      %m_W{mpidx}: {tensorTy [dim, ic, pSize, pSize]}, %m_b{mpidx}: {tensorTy [dim]},\n"
       mpidx := mpidx + 1
@@ -5024,6 +5759,24 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat) : String := Id.r
         vpidx2 := vpidx2 + 1
       params := params ++ s!"      %v_W{vpidx2}: {tensorTy [oc, mid, 1, 1]}, %v_g{vpidx2}: {gTyO}, %v_bt{vpidx2}: {gTyO},\n"
       vpidx2 := vpidx2 + 1
+    | .convNextStage channels nBlocks _norm _act =>
+      let c := channels
+      let cTy := tensorTy [c]
+      let dwTy := tensorTy [c, 1, 7, 7]
+      let exTy := tensorTy [4*c, c, 1, 1]; let exB := tensorTy [4*c]
+      let pjTy := tensorTy [c, 4*c, 1, 1]
+      for _ in [:nBlocks] do
+        params := params ++ s!"      %v_W{vpidx2}: {dwTy}, %v_b{vpidx2}: {cTy},\n"; vpidx2 := vpidx2 + 1
+        params := params ++ s!"      %v_W{vpidx2}: {cTy}, %v_b{vpidx2}: {cTy},\n"; vpidx2 := vpidx2 + 1
+        params := params ++ s!"      %v_W{vpidx2}: {exTy}, %v_b{vpidx2}: {exB},\n"; vpidx2 := vpidx2 + 1
+        params := params ++ s!"      %v_W{vpidx2}: {pjTy}, %v_b{vpidx2}: {cTy},\n"; vpidx2 := vpidx2 + 1
+        params := params ++ s!"      %v_W{vpidx2}: {cTy},\n"; vpidx2 := vpidx2 + 1
+    | .convNextDownsample ic oc _norm =>
+      let icTy := tensorTy [ic]
+      let ocTy := tensorTy [oc]
+      let cvTy := tensorTy [oc, ic, 2, 2]
+      params := params ++ s!"      %v_W{vpidx2}: {icTy}, %v_b{vpidx2}: {icTy},\n"; vpidx2 := vpidx2 + 1
+      params := params ++ s!"      %v_W{vpidx2}: {cvTy}, %v_b{vpidx2}: {ocTy},\n"; vpidx2 := vpidx2 + 1
     | .patchEmbed ic dim pSize nP =>
       params := params ++ s!"      %v_W{vpidx2}: {tensorTy [dim, ic, pSize, pSize]}, %v_b{vpidx2}: {tensorTy [dim]},\n"
       vpidx2 := vpidx2 + 1
