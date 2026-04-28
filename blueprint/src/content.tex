@@ -1077,35 +1077,40 @@ tackle attention.
 };
 
 % Left pillar: ResNet-34
-\node[primitive] (cnn) at (-9.0, -2.3) {
+\node[primitive] (mlp) at (-9.0, -2.3) {
+  \textbf{Ch~3: MLP} \\
+  \texttt{dense\_weight\_grad\_correct} \\
+  \texttt{relu\_has\_vjp\_correct}
+};
+\node[primitive] (cnn) at (-9.0, -3.7) {
   \textbf{Ch~4: CNN} \\
   \texttt{conv2d\_has\_vjp3} \\
   \texttt{maxPool2\_has\_vjp3\_correct}
 };
-\node[primitive] (bn)  at (-9.0, -4.0) {
+\node[primitive] (bn)  at (-9.0, -5.1) {
   \textbf{Ch~5: BatchNorm} \\
   \texttt{pdiv\_bnNormalize} \\
   \texttt{pdiv\_bnAffine}
 };
-\node[primitive] (res) at (-9.0, -5.7) {
+\node[primitive] (res) at (-9.0, -6.5) {
   \textbf{Ch~6: residual skip} \\
   \texttt{residual\_has\_vjp\_correct}
 };
-\node[final] (r34) at (-9.0, -7.7) {
+\node[final] (r34) at (-9.0, -8.0) {
   \textbf{Full ResNet-34} \\
   (NetSpec composition)
 };
 
-% Middle pillar: EfficientNet
-\node[primitive] (dw) at (-4.0, -2.3) {
+% Middle pillar: EfficientNet (shifted down + slightly right)
+\node[primitive] (dw) at (-2.5, -4.0) {
   \textbf{Ch~7: depthwise conv} \\
   \texttt{depthwise\_has\_vjp3\_correct}
 };
-\node[primitive] (se) at (-4.0, -4.0) {
+\node[primitive] (se) at (-2.5, -5.7) {
   \textbf{Ch~8: SE block} \\
   \texttt{seBlock\_has\_vjp\_correct}
 };
-\node[final] (enet) at (-4.0, -7.7) {
+\node[final] (enet) at (-2.5, -9.4) {
   \textbf{Full EfficientNet-B0} \\
   (NetSpec composition)
 };
@@ -1138,10 +1143,12 @@ tackle attention.
   \texttt{vit\_full\_has\_vjp}
 };
 
-% Foundation -> R34 primitives
-\draw[arr] (found.south west) to[out=-160, in=80] (cnn.north);
-\draw[arr] (found.south west) to[out=-130, in=70] (bn.north east);
-\draw[arr] (found.south west) to[out=-110, in=60] (res.north east);
+% Foundation -> R34 primitives. Arrow to Ch 4 routes via cnn.east so it
+% sweeps below Ch 3 instead of through it.
+\draw[arr] (found.south west) to[out=-170, in=85] (mlp.north east);
+\draw[arr] (found.south west) to[out=-150, in=20] (cnn.east);
+\draw[arr] (found.south west) to[out=-130, in=20] (bn.east);
+\draw[arr] (found.south west) to[out=-115, in=20] (res.east);
 % Foundation -> ENet primitives
 \draw[arr] (found.south) to[out=-100, in=70] (dw.north east);
 \draw[arr] (found.south) to[out=-80, in=60] (se.north east);
@@ -1153,6 +1160,7 @@ tackle attention.
 \draw[arr] (matkit.south east) to[out=-60, in=20] (mhsa.east);
 
 % R34 down-flow
+\draw[arr] (mlp) -- (cnn);
 \draw[arr] (cnn) -- (bn);
 \draw[arr] (bn)  -- (res);
 \draw[arr] (res) -- (r34);
@@ -1170,7 +1178,7 @@ tackle attention.
 \draw[arr] (block) -- (body);
 \draw[arr] (body)  -- (vit);
 \end{tikzpicture}}
-\caption{Three architecture spines, all the way down to Ch~2 foundation. ResNet-34 (left) needs only the foundation calculus and Chs~4--6 primitives. EfficientNet-B0 (middle) adds Ch~7's depthwise conv and Ch~8's SE block; dashed arrows mark Chs~4 (CNN) and 5 (BN), shared with R34. ViT (right) is the only path that needs the matrix kit; its longer chain runs through MHSA and the transformer block before bundling into the full ViT VJP. Every node is a Lean theorem.}
+\caption{Three architecture spines, all the way down to Ch~2 foundation. ResNet-34 (left) needs only the foundation calculus and Chs~3--6 primitives. EfficientNet-B0 (middle) adds Ch~7's depthwise conv and Ch~8's SE block; dashed arrows mark Chs~4 (CNN) and 5 (BN), shared with R34. ViT (right) is the only path that needs the matrix kit; its longer chain runs through MHSA and the transformer block before bundling into the full ViT VJP. Every node is a Lean theorem.}
 \label{fig:spines}
 \end{figure}
 
