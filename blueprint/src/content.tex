@@ -2956,15 +2956,14 @@ Run with \texttt{./.lake/build/bin/ablation enet-b0-swish} and
 \hline
 Run                          & Val accuracy & $\Delta$ vs Swish \\
 \hline
-\texttt{enet-b0-swish}       & ??.??\%      & --- \\
-\texttt{enet-b0-relu}        & ??.??\%      & ?? \\
+\texttt{enet-b0-swish}       & $87.58\%$ (3419/3904) & --- \\
+\texttt{enet-b0-relu}        & $87.78\%$ (3427/3904) & $+0.20$ \\
 \hline
 \end{tabular}
 \end{center}
 
-\textbf{TODO: fill in numbers from
-\texttt{logs/ablation\_enet-b0-swish.log} and
-\texttt{logs/ablation\_enet-b0-relu.log}} once both runs complete.
+The full step-by-step logs for both runs are archived at
+\texttt{runs/2026-04-28-enet-b0-imagenette/}.
 
 What the codegen emits per activation site:
 
@@ -2977,13 +2976,25 @@ What the codegen emits per activation site:
 \end{tabular}
 \end{center}
 
-So a Swish lift, if real at this scale, costs you a small amount of
-per-step wall clock for whatever accuracy bump it earns. If the lift
-is in the noise (?? $\le$ 0.5 points), the takeaway is that Swish
-matters more at ImageNet scale than at Imagenette scale, which is
-the standard story for activation-function tweaks: they get
-swamped by larger sources of variance (init, augmentation, schedule)
-on smaller datasets.
+The result: ReLU edges Swish by $0.20$ points --- sign-flipped from
+the paper's $+0.6$ ImageNet lift in Swish's favor. Both numbers are
+well within seed noise at this scale (one seed each, $9469$ training
+images, $80$ epochs), so we read this as a wash rather than as
+evidence ReLU is better. The takeaway is the standard one for
+activation-function tweaks: at the Imagenette scale the
+\emph{activation} choice is swamped by larger sources of variance
+(init, augmentation, schedule, optimizer hyperparameters), and the
+$0.6$-point ImageNet lift the paper claims doesn't transfer down.
+
+Per-epoch wall clock on the RX~7900~XTX (ROCm/HIP) was $4.83$ min for
+Swish and $4.96$ min for ReLU. The ReLU run was on GPU~1 of a 2-GPU
+node and the Swish run on GPU~0; the small wall-clock gap reflects
+that asymmetry, not a Swish/ReLU cost difference. Per-op count, Swish
+emits two ops (\texttt{logistic + multiply}) vs ReLU's one
+(\texttt{maximum}), but on a saturated GPU the second op fuses into
+the surrounding pipeline and the per-step cost ends up nearly
+identical. Practically, the activation choice neither helps accuracy
+nor materially changes throughput at this scale.
 
 \section{Side quests}
 \label{sec:enet_side_quests}
