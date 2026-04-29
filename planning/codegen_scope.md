@@ -54,6 +54,34 @@ Bestiary (shape-only): `mambaBlock`, `swinStage`, `patchMerging`,
    that actually runs.
 3. If step 2 doesn't happen for a release cycle, leave it shape-only.
 
+## Static-graph-only
+
+The MLIR network shape and `train_step` signature are fully determined
+at compile time. **No per-step random state is injected through the
+MLIR signature.** This rules out:
+
+- dropout
+- stochastic depth / DropPath / DropBlock
+- anything that needs per-layer random masks generated at runtime
+
+What it leaves available is essentially all of the modern recipe
+surface that doesn't touch the graph internals:
+
+- **Data pipeline (tier 1)** — anything that mutates the input tensor
+  before the graph sees it (Mixup, CutMix, KNN-Mixup, RandAugment,
+  Random Erasing, CutOut, Mosaic, AugMix, etc.).
+- **Loss block (tier 2)** — focal loss, label smoothing, distillation,
+  contrastive, soft-label routing. Touches one MLIR block, no cross-
+  cutting plumbing.
+- **Weight-space (tier 1)** — EMA, SWA, SWAG sample, temperature
+  scaling. Operates on the param ByteArray outside the graph.
+- **Eval-time (tier 1)** — TTA, KNN classifier head, calibration.
+  Doesn't change training; runs forward at most.
+
+This excludes ~20% of the modern recipe surface — mostly regularization
+techniques that mattered at much larger scales than the book targets.
+Worth the trade for keeping the codegen narrow.
+
 ## Watch-outs
 
 - **Don't speculatively back-emit** a layer for a network you might
