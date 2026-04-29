@@ -4658,6 +4658,30 @@ def alphaGoZeroPolicy : NetSpec where
   ]
 \end{verbatim}
 
+The value head shares the first two layers (body) and diverges at
+the head — one filter, two-layer MLP down to a single scalar
+(\texttt{tanh} is applied downstream; \texttt{Activation} doesn't
+include it):
+
+\begin{verbatim}
+def alphaGoZeroValue : NetSpec where
+  name   := "AlphaGo Zero (value head)"
+  imageH := 19
+  imageW := 19
+  layers := [
+    .convBn 17 256 3 1 .same,                     -- shared body
+    .residualBlock 256 256 19 1,                  -- shared body
+    .conv2d 256 1 1 .same .identity,              -- value head: 1 filter
+    .flatten,
+    .dense (1 * 19 * 19) 256 .relu,
+    .dense 256 1 .identity                        -- → scalar (tanh applied downstream)
+  ]
+\end{verbatim}
+
+The chess and tiny variants follow the same shape with different
+\texttt{(planes, blocks, board)} parameters --- 119/40/8 for chess,
+17/3/9 for the tiny fixture.
+
 \subsubsection*{MuZero (\texttt{Bestiary/MuZero.lean})}
 \emph{Zero} new primitives --- three ResNet-style networks (representation,
 dynamics, prediction) reusing \texttt{convBn} + \texttt{residualBlock}
@@ -4675,6 +4699,61 @@ def muZeroGoRepresentation : NetSpec where
   layers := [
     .convBn 17 256 3 1 .same,                     -- observation → hidden
     .residualBlock 256 256 16 1                   -- 16 ResBlocks (AlphaZero-shaped body)
+  ]
+\end{verbatim}
+
+The dynamics network $g$ takes the hidden state plus a one-channel
+action plane and predicts the next hidden state. A separate reward
+head branches off the same trunk and emits a scalar:
+
+\begin{verbatim}
+def muZeroGoDynamics : NetSpec where
+  name   := "MuZero Go — dynamics g (next-state path)"
+  imageH := 19
+  imageW := 19
+  layers := [
+    .convBn 257 256 3 1 .same,                    -- 256 hidden + 1 action plane
+    .residualBlock 256 256 16 1                   -- → next hidden (256, 19, 19)
+  ]
+
+def muZeroGoDynamicsReward : NetSpec where
+  name   := "MuZero Go — dynamics g (reward head)"
+  imageH := 19
+  imageW := 19
+  layers := [
+    .conv2d 256 1 1 .same .identity,
+    .flatten,
+    .dense (1 * 19 * 19) 128 .relu,
+    .dense 128 1 .identity                        -- scalar reward
+  ]
+\end{verbatim}
+
+The prediction network $f$ is a small two-headed body --- same shape
+as AlphaZero's policy/value heads, with two fewer ResBlocks because
+the trunk has already done most of the work in $h$:
+
+\begin{verbatim}
+def muZeroGoPredictionPolicy : NetSpec where
+  name   := "MuZero Go — prediction f (policy head)"
+  imageH := 19
+  imageW := 19
+  layers := [
+    .residualBlock 256 256 2 1,                   -- small head body
+    .conv2d 256 2 1 .same .identity,
+    .flatten,
+    .dense (2 * 19 * 19) 362 .identity            -- 361 moves + pass
+  ]
+
+def muZeroGoPredictionValue : NetSpec where
+  name   := "MuZero Go — prediction f (value head)"
+  imageH := 19
+  imageW := 19
+  layers := [
+    .residualBlock 256 256 2 1,
+    .conv2d 256 1 1 .same .identity,
+    .flatten,
+    .dense (1 * 19 * 19) 256 .relu,
+    .dense 256 1 .identity                        -- scalar value
   ]
 \end{verbatim}
 
@@ -5002,6 +5081,37 @@ def alphaFold2 : NetSpec where
     .structureModule 384 128 8
   ]
 \end{verbatim}
+
+The two primitives are conceptually separate networks chained back to
+back; the linear \texttt{NetSpec} flattens that.
+
+\textbf{Evoformer} (48 blocks) is the perception/refinement stage. It
+maintains a \emph{dual} representation: a multiple-sequence-alignment
+tensor $\mathrm{MSA}\!\in\!\mathbb{R}^{s \times r \times c_m}$ (where
+$s$ is the number of homologs found by the database search and $r$ is
+the number of residues) and a pair tensor
+$\mathrm{Pair}\!\in\!\mathbb{R}^{r \times r \times c_z}$ encoding
+predicted residue-residue relationships. Each block updates both via
+seven stacked operations (row attention with pair bias, column
+attention, MSA transition, outer-product-mean into pair, two triangle
+multiplicative updates, two triangle attentions, pair transition).
+Forty-eight rounds of that turn raw evolutionary signal into a
+self-consistent geometry-implied pair representation.
+
+\textbf{Structure Module} (8 recurrent rounds, shared weights) is the
+geometry stage. It consumes the final pair tensor + a per-residue
+``single'' embedding and emits 3D backbone frames plus side-chain
+$\chi$ angles. Each round runs Invariant Point Attention (IPA) over
+the residues, updates each residue's local frame relative to its
+neighbors, and feeds back into the next round. The shared-weights
+recurrence is unusual --- most networks unroll different parameters
+per layer --- and reflects that each round is the same fixed-point
+iteration on the protein's 3D structure.
+
+The bundled-primitive shortcut means Lean sees one \texttt{NetSpec}
+with two layers; the actual graph is a much larger DAG with the dual
+representation and the cross-stage handoff. \S~\ref{layer:evoformerBlock}
+and \S~\ref{layer:structureModule} document the bundling explicitly.
 
 \chapter{Getting started}
 \label{app:getting_started}
