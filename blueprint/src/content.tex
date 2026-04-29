@@ -3908,6 +3908,11 @@ post-2015 CNN dropped FC stacks for \texttt{globalAvgPool} + one final
 dense. LRN is omitted (replaced in the field by BatchNorm in 2015);
 dropout is training-time only.
 
+Krizhevsky trained on two GTX 580 cards (3 GB each) for $\sim$6 days,
+the two-tower model is a hardware constraint, not a design choice.
+The winning submission combines convnets with KNN sampling and
+10-crop test-time averaging.
+
 \begin{verbatim}
 def alexNet : NetSpec where
   name   := "AlexNet (Krizhevsky 2012)"
