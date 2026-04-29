@@ -1,5 +1,15 @@
 # SIGSEGV in `miopen::kernels[abi:cxx11]()` on first `conv_general_dilated` (gfx1100 / ROCm 7.2)
 
+**Filed upstream:** [ROCm/MIOpen#3955](https://github.com/ROCm/MIOpen/issues/3955)
+
+**Status: Fixed.** Confirmed fixed by upgrading to `jax 0.10.0` /
+`jaxlib 0.10.0` / `jax-rocm7-{pjrt,plugin} 0.9.1.post4`. ROCm /
+MIOpen versions unchanged (7.2.0 / 3.5.1). All six reproducers in
+this report now exit 0 on gfx1100; the previous SIGSEGV no longer
+fires. Per the maintainer comment, the issue reproduces with
+`jax 0.9.2` + `jax-rocm7-plugin 0.9.1.post3` (this report's exact
+versions) but does not reproduce on 0.10.0.
+
 ## Summary
 
 JAX 0.9.2 with `jax-rocm7-plugin 0.9.1.post3` segfaults on any call to
@@ -160,7 +170,9 @@ Blocks all convolution-using JAX workloads on gfx1100 / ROCm 7.2. MLP-style
 dense-only networks work; any CNN (MNIST CNN, ResNet, any
 torchvision-equivalent) SIGSEGV at JAX compile time.
 
-Workaround: `JAX_PLATFORMS=cpu` (slow but correct).
+Workaround on the original 0.9.2 stack: `JAX_PLATFORMS=cpu` (slow
+but correct). On 0.10.0+ the workaround is no longer needed — GPU
+conv runs correctly.
 
 ## Files
 
