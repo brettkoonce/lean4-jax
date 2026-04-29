@@ -520,6 +520,15 @@ def vitTinyCutmixConfig : TrainConfig :=
 def vitTinyKnnMixupConfig : TrainConfig :=
   { vitTinyBareConfig with useKnnMixup := true, knnMixupAlpha := 1.0 }
 
+-- "Recipe 2" — the full Ch 9 (ConvNeXt) aug stack on the same base
+-- recipe: CutMix + Random Erasing + RandAugment-color, layered onto
+-- the existing Adam + cosine + warmup + WD + label smoothing setup.
+def vitTinyRecipe2Config : TrainConfig :=
+  { vitTinyBareConfig with
+      useCutmix := true, cutmixAlpha := 1.0,
+      randomErasing := true, randomErasingProb := 0.25,
+      useRandAugment := true, randAugmentN := 2, randAugmentM := 9.0 }
+
 -- Focal loss requires no smoothing + no soft-label aug; disable both.
 def vitTinyFocalConfig : TrainConfig :=
   { vitTinyBareConfig with
@@ -825,6 +834,7 @@ def ablations : List (String × AblationRun) := [
   ("vit-tiny-cutmix",      ⟨vitTinyAblationSpec, vitTinyCutmixConfig,      .imagenette, "data/imagenette"⟩),
   ("vit-tiny-knn-mixup",   ⟨vitTinyAblationSpec, vitTinyKnnMixupConfig,    .imagenette, "data/imagenette"⟩),
   ("vit-tiny-focal",       ⟨vitTinyAblationSpec, vitTinyFocalConfig,       .imagenette, "data/imagenette"⟩),
+  ("vit-tiny-recipe2",     ⟨vitTinyAblationSpec, vitTinyRecipe2Config,     .imagenette, "data/imagenette"⟩),
   ("vit-tiny-full",        ⟨vitTinyAblationSpec, vitTinyFullConfig,        .imagenette, "data/imagenette"⟩),
   ("vit-tiny-ema",         ⟨vitTinyAblationSpec, vitTinyEmaConfig,         .imagenette, "data/imagenette"⟩),
   ("vit-tiny-swa",         ⟨vitTinyAblationSpec, vitTinySwaConfig,         .imagenette, "data/imagenette"⟩),
