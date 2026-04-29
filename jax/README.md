@@ -111,8 +111,9 @@ auto-dispatches to GPU when one is available:
 # CUDA (NVIDIA)
 pip install jax[cuda12]
 
-# ROCm (AMD) — requires manual install, see below
-pip install jax==0.9.2 jax-rocm7-plugin==0.9.1.post3 jax-rocm7-pjrt==0.9.1.post3
+# ROCm (AMD) — manual install
+pip install jax==0.10.0 jaxlib==0.10.0 \
+            jax-rocm7-plugin==0.9.1.post4 jax-rocm7-pjrt==0.9.1.post4
 ```
 
 **Multi-GPU data parallelism** is automatic via `jax.sharding`. The codegen
@@ -122,30 +123,23 @@ Lean spec or training config — just add more GPUs.
 
 ### ROCm status (April 2026)
 
-Tested on 2× RX 7900 XTX (gfx1100) with ROCm 7.2.0:
+Tested on 2× RX 7900 XTX (gfx1100) with ROCm 7.2.0 + jax 0.10.0
+(`jax-rocm7-plugin 0.9.1.post4`). All models below now run with JIT
+on GPU; the earlier `JAX_DISABLE_JIT=1` / `ROCR_VISIBLE_DEVICES=0` /
+`JAX_PLATFORMS=cpu` workarounds are no longer needed.
 
-| Model | ROCm status | Notes |
-|-------|-------------|-------|
-| MNIST MLP | JIT works, 17s (1 GPU) | Matmul-only models work with JIT |
-| MNIST CNN | Eager only, 350s | Conv+flatten+dense backward segfaults under JIT |
-| CIFAR-10 CNN | Eager only, 659s | Same conv fusion bug |
+**Previously open, now fixed (jax 0.10.0):**
 
-**Known issues:**
-- **Conv JIT segfault** — `jax.jit(value_and_grad(f))` segfaults when `f`
-  combines conv + reshape (flatten) + matmul in the backward pass. Affects all
-  conv models. Workaround: `JAX_DISABLE_JIT=1` (eager mode, ~15× slower).
-  See [`../upstream-issues/2026-04-jax-jit-conv-backward-segv/`](../upstream-issues/2026-04-jax-jit-conv-backward-segv/) for minimal reproducer and details.
-  Reported upstream: [ROCm/jax#745](https://github.com/ROCm/jax/issues/745).
-- **Multi-GPU sharding hangs** — `jax.sharding.Mesh` causes XLA compilation
-  to hang indefinitely on gfx1100, even for trivial MLP models. Workaround:
-  `ROCR_VISIBLE_DEVICES=0`. See [`../upstream-issues/2026-04-jax-rocm-multigpu-mesh-hang/`](../upstream-issues/2026-04-jax-rocm-multigpu-mesh-hang/) for reproducer.
-- **`jax[rocm]` pip extra broken** — JAX 0.9.2 defines `rocm7-local` but
-  requires `jax-rocm7-plugin==0.9.2.*` which doesn't exist yet. Install
-  the 0.9.1.post3 packages manually.
+- Conv-on-ROCm SIGSEGV (ROCm/MIOpen#3955) — closed.
+- Conv-backward JIT segfault (ROCm/jax#745) — closed.
+- Multi-GPU `Mesh` sharding hang (ROCm/jax#746) — closed.
+
+See [`../upstream-issues/`](../upstream-issues/) for the historical
+reproducers and confirmation comments.
 
 Run conv models on ROCm with:
 ```bash
-LLVM_PATH=/opt/rocm/llvm HIP_VISIBLE_DEVICES=0 JAX_DISABLE_JIT=1 \
+LLVM_PATH=/opt/rocm/llvm HIP_VISIBLE_DEVICES=0 \
   .lake/build/bin/mnist-cnn
 ```
 

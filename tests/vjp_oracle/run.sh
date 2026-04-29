@@ -5,20 +5,19 @@
 # the backward pass, so a small Δ there means the Lean hand-derived
 # VJP agrees with JAX's value_and_grad.
 #
-# Usage: tests/vjp_oracle/run.sh [JAX_PLATFORMS=cpu] [case1 case2 ...]
-# If JAX_PLATFORMS is set in the environment, it's respected (needed
-# on mars — see upstream-issues/2026-04-rocm-miopen-conv-segv/).
+# Usage: tests/vjp_oracle/run.sh [case1 case2 ...]
+# Runs phase 2 (JAX) on whatever JAX_PLATFORMS resolves to — defaults
+# to ROCm on AMD hosts now that the prior MIOpen conv SIGSEGV is
+# fixed (upgrade to jax 0.10.0+).
 set -u
 cd "$(dirname "$0")/../.."  # → repo root
 
-# Auto-default IREE_BACKEND and JAX_PLATFORMS on AMD hosts. Needed
-# because LeanMlir/Train.lean defaults IREE_BACKEND to "cuda", and
-# JAX-ROCm segfaults on conv on gfx1100 (ROCm/MIOpen#3955). User env
-# wins. Detect via /dev/kfd (the ROCm kernel-fusion-driver device)
-# or /opt/rocm — rocminfo isn't always on PATH.
+# Auto-default IREE_BACKEND on AMD hosts. LeanMlir/Train.lean defaults
+# IREE_BACKEND to "cuda"; flip to rocm when /dev/kfd or /opt/rocm
+# present. User env wins. (JAX_PLATFORMS is no longer auto-pinned to
+# CPU — the original ROCm/MIOpen#3955 bug is fixed in jax 0.10.0+.)
 if [ -z "${IREE_BACKEND:-}" ] && { [ -e /dev/kfd ] || [ -d /opt/rocm ]; }; then
   export IREE_BACKEND=rocm
-  export JAX_PLATFORMS="${JAX_PLATFORMS:-cpu}"
 fi
 
 # On NVIDIA hosts, pin to a single GPU so phase 2's auto-sharding

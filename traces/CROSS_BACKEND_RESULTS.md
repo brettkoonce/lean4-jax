@@ -106,11 +106,13 @@ weight-decay config as MLP (15 epochs / 7020 steps).
 | **mars** (gfx1100 / CPU) | `mnist_cnn.phase3-noshuf-rocm.jsonl`  | `mnist_cnn.phase2-noshuf-cpu.jsonl` |
 | **ares** (CUDA)          | `mnist_cnn.phase3-noshuf-cuda.jsonl`  | `mnist_cnn.phase2-noshuf-cuda.jsonl` |
 
-Phase 2 on mars is on CPU because JAX-ROCm 0.9.1-plugin segfaults on
-any `conv_general_dilated` call on gfx1100 / ROCm 7.2 — see
-`upstream-issues/2026-04-rocm-miopen-conv-segv/` for the isolated repro
-and MIOpen backtrace. `JAX_PLATFORMS=cpu` is the correct workaround
-for cross-backend diff; the math doesn't care which XLA backend ran.
+Phase 2 on mars is on CPU here because the captured traces predate
+the jax 0.10.0 upgrade — JAX-ROCm 0.9.1-plugin used to segfault on
+any `conv_general_dilated` call on gfx1100 / ROCm 7.2 (see
+`upstream-issues/2026-04-rocm-miopen-conv-segv/` for the historical
+repro and MIOpen backtrace). The bug is fixed in jax 0.10.0+; future
+captures can use ROCm directly. The math doesn't care which XLA
+backend ran.
 
 ### Per-step loss agreement (7020 steps)
 
@@ -160,7 +162,8 @@ LEAN_MLIR_INIT_LOAD=$(pwd)/traces/mnist_cnn.init.bin \
 LEAN_MLIR_NO_SHUFFLE=1 \
 LEAN_MLIR_TRACE_OUT=$(pwd)/traces/mnist_cnn.phase2-noshuf-<machine>.jsonl \
   .venv/bin/python3 jax/.lake/build/generated_mnist_cnn.py
-# (on mars: prepend JAX_PLATFORMS=cpu — see upstream-issues/ for why)
+# (Now defaults to ROCm on mars; original captures here used
+#  JAX_PLATFORMS=cpu to dodge MIOpen#3955, which is now fixed.)
 ```
 
 Step 1 should agree to ~1e-5 on same-hardware cross-compiler comparisons.
