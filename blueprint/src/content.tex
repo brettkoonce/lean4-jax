@@ -3030,6 +3030,162 @@ in transformers. Diagonal activation Jacobian, same family as ReLU.
 
 Chapter~\ref{chap:attention} uses both to define ViT.
 
+\section{Example: ConvNeXt-T on Imagenette}
+\label{sec:convnext_example}
+
+ConvNeXt (Liu et al.\ 2022,
+\href{https://arxiv.org/abs/2201.03545}{arXiv:2201.03545}) was the
+``ConvNets strike back'' paper: a deliberate back-port of design
+choices from the Swin Transformer back into a pure CNN, asking
+which of those choices were doing the actual work. The answer:
+depthwise $7 \times 7$ convs at lower channel counts, LayerNorm
+instead of BatchNorm, GELU instead of ReLU, and an inverted-
+bottleneck-style $4\times$ expansion in every block. None of those
+ingredients are transformer-specific. The architecture below is
+pure convolution top to bottom; the modernization is in the
+\emph{recipe}, not the receptive field.
+
+ConvNeXt-T is the smallest variant in the paper, $\sim$28M params
+(roughly the parameter budget of ResNet-50). At ImageNet-1K scale
+the paper reports $82.1\%$ top-1, beating Swin-T at the same
+compute budget. At our 9.5K-image Imagenette scale, the data
+regime is different but the architectural story still holds.
+
+\subsection*{The architecture}
+
+\begin{verbatim}
+-- 1
+import LeanMlir
+
+-- 2
+def convNextTiny : NetSpec where
+  name   := "ConvNeXt-T-GELU"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .convBn 3 96 4 4 .same,                          -- patchify stem 224→56
+    .convNextStage 96 3 .ln .gelu,                   -- 3 blocks @ 96 ch
+    .convNextDownsample 96 192,                      -- LN + 2×2 stride 2 → 28
+    .convNextStage 192 3 .ln .gelu,                  -- 3 blocks @ 192 ch
+    .convNextDownsample 192 384,                     -- → 14
+    .convNextStage 384 9 .ln .gelu,                  -- 9 blocks @ 384 ch
+    .convNextDownsample 384 768,                     -- → 7
+    .convNextStage 768 3 .ln .gelu,                  -- 3 blocks @ 768 ch
+    .globalAvgPool,
+    .dense 768 10 .identity
+  ]
+
+-- 3
+def convNextTinyConfig : TrainConfig where
+  learningRate   := 0.001
+  batchSize      := 32
+  epochs         := 80
+  useAdam        := true
+  weightDecay    := 0.0001
+  cosineDecay    := true
+  warmupEpochs   := 3
+  augment        := true
+  labelSmoothing := 0.1
+
+-- 4
+def main (args : List String) : IO Unit :=
+  convNextTiny.train convNextTinyConfig
+    (args.head?.getD "data/imagenette")
+\end{verbatim}
+
+The structure follows the paper's macro-design prescription:
+4 stages with block counts $(3, 3, 9, 3)$ and channels doubling on
+every downsample $(96 \to 192 \to 384 \to 768)$, with the heavy
+9-block stage at the $14 \times 14$ / 384-channel resolution.
+\texttt{.convNextStage} is $N$ ConvNeXt blocks (DW $7\times 7$ +
+LN over channels + $1\times 1$ expand $4\times$ + GELU + $1\times 1$
+project + LayerScale + residual). The stem is a $4 \times 4$
+stride-4 conv (mirrored from ViT's patch-embed), not the
+$7 \times 7$ stride-2 stem of a ResNet --- one of the seven
+modernization-recipe items called out in the paper. The same base
+recipe as the EnetB0 chapter (Adam @ 0.001, cosine, warmup-3,
+WD 1e-4, label smoothing 0.1) keeps the cross-architecture
+comparison clean.
+
+\subsection*{Results}
+
+\begin{verbatim}
+$ IREE_BACKEND=rocm IREE_CHIP=gfx1100 \
+    ./.lake/build/bin/ablation convnext-tiny-gelu
+ConvNeXt-T-GELU: 27826186 params
+Generating train step MLIR...
+  790422 chars
+Compiling vmfbs...
+  forward compiled
+  eval forward compiled
+  train step compiled
+  session loaded
+  train: 9469 images
+  27826186 params + m + v (318 MB)
+training: 295 batches/epoch, batch=32, Adam, lr=0.001000,
+          cosine warmup=3, label_smooth=0.1, wd=1e-4
+  BN layers: 1, BN stat floats: 192
+  step 0/295: loss=2.453635 (2030ms)
+Epoch 10/80: loss=0.959386 lr=0.000985 (596s/epoch)
+Epoch 20/80: loss=0.581696 lr=0.000897
+Epoch 40/80: loss=0.522144 lr=0.000551
+Epoch 60/80: loss=0.504293 lr=0.000173
+Epoch 80/80: loss=0.501892 lr=0.000000
+Saved params + BN stats.
+
+$ LEAN_MLIR_EVAL_ONLY=1 \
+    ./.lake/build/bin/ablation convnext-tiny-gelu
+EVAL ONLY  ConvNeXt-T-GELU: 3316/3904 = 84.94%
+\end{verbatim}
+
+Final val accuracy \textbf{84.94\%} on Imagenette, wall time
+$\sim$13.3 hours, train loss plateaus at the same $\sim$0.50
+label-smoothing floor as ResNet-34 / MobileNet V2 / EfficientNet-B0.
+Extending the comparison table from the EfficientNet chapter:
+
+\begin{center}
+\begin{tabular}{l r r r r r}
+\hline
+Model            & Params  & MLIR     & Step time & Total    & Val acc \\
+\hline
+ResNet-34        & 21.29M  & 518 KB   & 1400 ms   & 9.5 h    & 90.29\% \\
+MobileNet V2     &  2.24M  & 741 KB   &  830 ms   & 5.4 h    & 87.09\% \\
+EfficientNet-B0  &  7.16M  & 938 KB   &  940 ms   & 6.2 h    & 87.58\% \\
+ConvNeXt-T       & 27.83M  & 790 KB   & 2030 ms   & 13.3 h   & 84.94\% \\
+\hline
+\end{tabular}
+\end{center}
+
+\begin{itemize}
+  \item \textbf{ConvNeXt-T is the slowest per step} (2030 ms vs
+    EnetB0's 940 ms) because depthwise $7 \times 7$ convs at the
+    early stages plus LayerNorm-over-channels touch every spatial
+    position twice per block. The MLIR is mid-pack at 790 KB ---
+    smaller than EnetB0 because there's no SE machinery, larger than
+    ResNet-34 because LayerScale and per-stage downsamples bulk up
+    the per-block emit.
+  \item \textbf{84.94\% is below EnetB0's 87.58\%} on the same
+    base recipe. Two things contribute: (a) ConvNeXt-T at 28M
+    params has 4$\times$ EnetB0's parameter count and our 9.5K
+    training images don't have the data scale to fill that
+    capacity without aug; (b) the ConvNeXt paper trains with the
+    full DeiT recipe (Mixup, CutMix, RandAugment, Random Erasing)
+    where the modernization actually lives. The next section
+    layers those in --- with proper aug, ConvNeXt-T's accuracy at
+    this scale catches up to or passes EnetB0.
+  \item \textbf{The architecture is fine, the recipe is the lever.}
+    The 84.94\% number we land here vs the paper's 82.1\% top-1
+    on ImageNet-1K is the same model getting different scores on
+    different datasets, not a code-correctness issue. (And, in
+    fact, this very chapter shipped with a $13$ hour ConvNeXt-T
+    run that initially \emph{appeared} to land at 10.8\% --- a
+    measurement bug in the eval pipeline that read pixels past
+    per-image bounds. Catching that bug required a separate eval
+    harness loaded from the saved checkpoint; the model was fine
+    all along. Worth keeping in mind for any chapter where a
+    surprising number shows up: re-eval before re-architect.)
+\end{itemize}
+
 \section{Data Augmentation}
 
 ConvNeXt's headline accuracy depends on a heavy augmentation pack
@@ -3431,7 +3587,8 @@ Epoch 80/80: loss=0.986243 lr=0.000000 (102234ms)
 
 Final val accuracy \textbf{71.70\%} on Imagenette, wall time
 \textbf{$\sim$2.3 hours} --- the fastest of any Imagenette-scale
-model in Part 1. Expanding the comparison table from the SE chapter:
+model in Part 1. Expanding the comparison table from the
+ConvNeXt chapter:
 
 \begin{center}
 \begin{tabular}{l r r r r r}
@@ -3441,6 +3598,7 @@ Model            & Params  & MLIR     & Step time & Total   & Val acc \\
 ResNet-34        & 21.29M  & 518 KB   & 1400 ms   & 9.5 h   & 90.29\% \\
 MobileNet V2     &  2.24M  & 741 KB   &  830 ms   & 5.4 h   & 87.09\% \\
 EfficientNet-B0  &  7.16M  & 938 KB   &  940 ms   & 6.2 h   & 87.58\% \\
+ConvNeXt-T       & 27.83M  & 790 KB   & 2030 ms   & 13.3 h  & 84.94\% \\
 ViT-Tiny         &  5.53M  & 742 KB   &  360 ms   & 2.3 h   & 71.70\% \\
 \hline
 \end{tabular}
