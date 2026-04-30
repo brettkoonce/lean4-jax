@@ -219,6 +219,18 @@ lean_exe «test-focal-emit» where
   root := `tests.TestFocalEmit
   moreLinkArgs := ireeLink
 
+lean_exe «test-randaugment» where
+  root := `tests.TestRandAugment
+  moreLinkArgs := ireeLink
+
+lean_exe «inspect-convnext-bn» where
+  root := `tests.InspectConvNeXtBN
+  moreLinkArgs := ireeLink
+
+lean_exe «inspect-convnext» where
+  root := `MainInspectConvNeXt
+  moreLinkArgs := ireeLink
+
 lean_exe «test-convnext-train-step» where
   root := `tests.TestConvNextTrainStep
   moreLinkArgs := ireeLink

@@ -142,12 +142,21 @@ private structure DatasetIO where
       slice, the batch size, and a seed (epoch * 10000 + bi). Must
       return a buffer matching `inputFlatDim spec` floats per image. -/
   augmentBatch : (raw : ByteArray) → (batch : USize) → (seed : Nat) → IO ByteArray
-  /-- Deterministic preprocessing used when cfg.augment=false. Datasets
-      whose on-disk image size differs from the model's input size (e.g.
-      Imagenette: 256 stored, 224 expected) override this to do a
-      center-crop. MNIST and CIFAR default to identity since their
-      stored size already matches the input. -/
+  /-- Deterministic preprocessing for **training** when cfg.augment=false.
+      Datasets whose on-disk training size differs from the model's
+      input size (e.g. Imagenette: 256 stored, 224 expected) override
+      this to do a center-crop. MNIST and CIFAR default to identity
+      since their stored size already matches the input. NOT used for
+      validation — val data is loaded at the model's input size
+      directly, see `valPreprocessBatch`. -/
   preprocessBatch : (raw : ByteArray) → (batch : USize) → IO ByteArray := fun raw _ => return raw
+  /-- Deterministic preprocessing for **validation**. Defaults to
+      identity because val data is loaded at the model's input size in
+      every dataset (Imagenette: 224 via `loadImagenette` even though
+      train is 256; MNIST/CIFAR: same size as train). Override only if
+      a future dataset stores val data at a different size from the
+      input. -/
+  valPreprocessBatch : (raw : ByteArray) → (batch : USize) → IO ByteArray := fun raw _ => return raw
 
 /-- Imagenette: 256×256 train, 224×224 val, random-crop-to-224 + hflip.
     When augment=false, falls back to deterministic center-crop 256→224
@@ -161,6 +170,13 @@ private def imagenetteIO : DatasetIO where
   augmentBatch := fun raw batch seed => do
     let cropped ← F32.randomCrop raw batch 3 256 256 224 224 seed.toUSize
     F32.randomHFlip cropped batch 3 224 224 (seed + 7777).toUSize
+  -- Train data is stored at 256×256 and crops down to 224×224 here
+  -- (augment=false path). Val data is stored at 224×224 (see
+  -- `loadImagenette`'s `img_size=224` in f32_helpers.c) — DOES NOT
+  -- need cropping. The eval pipeline must NOT call this on val data;
+  -- it'd read 256-pixel-strided memory across a 224-pixel-strided
+  -- buffer and pull pixels from neighbouring images in the batch.
+  -- Eval uses the input directly; see runTraining's eval loop.
   preprocessBatch := fun raw batch =>
     F32.centerCrop raw batch 3 256 256 224 224
 
@@ -475,7 +491,7 @@ def runTraining (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
             let xba ← if cfg.useTTA then
                         dio.augmentBatch xbaRaw evalBatch.toUSize (epoch * 100000 + bi * 31 + k)
                       else
-                        dio.preprocessBatch xbaRaw evalBatch.toUSize
+                        dio.valPreprocessBatch xbaRaw evalBatch.toUSize
             let logits ← IreeSession.forwardF32 evalSess spec.evalFnName
                             evalParams evalShapesBA xba evalXSh evalBatch.toUSize nClasses
             let mom : Float := 1.0 / (k.toFloat + 1.0)
@@ -516,7 +532,7 @@ def runTraining (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
         let sampledEvalParams := sampledWeights.append runningBnStats
         for bi in [:evalSteps] do
           let xbaRaw := F32.sliceImages valImg (bi * evalBatch) evalBatch dio.valPixels
-          let xba ← dio.preprocessBatch xbaRaw evalBatch.toUSize
+          let xba ← dio.valPreprocessBatch xbaRaw evalBatch.toUSize
           let logits ← IreeSession.forwardF32 evalSess spec.evalFnName
                           sampledEvalParams evalShapesBA xba evalXSh evalBatch.toUSize nClasses
           let mom : Float := 1.0 / (k.toFloat + 1.0)

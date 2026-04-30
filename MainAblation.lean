@@ -511,11 +511,24 @@ def vitTinyEraseConfig : TrainConfig :=
 def vitTinyRandAugConfig : TrainConfig :=
   { vitTinyBareConfig with useRandAugment := true, randAugmentN := 2, randAugmentM := 9.0 }
 
+-- M=4 variant — paper-recommended-for-small-data magnitude. RA at
+-- M=9 collapses ViT-T at our 9.5K-image scale (the paper trains on
+-- 1.2M images for 300 epochs). M=4 might be the right scale for
+-- Imagenette.
+def vitTinyRandAugM4Config : TrainConfig :=
+  { vitTinyBareConfig with useRandAugment := true, randAugmentN := 2, randAugmentM := 4.0 }
+
 def vitTinyMixupConfig : TrainConfig :=
   { vitTinyBareConfig with useMixup := true, mixupAlpha := 0.8 }
 
 def vitTinyCutmixConfig : TrainConfig :=
   { vitTinyBareConfig with useCutmix := true, cutmixAlpha := 1.0 }
+
+-- CutMix + heavy WD (0.05). The DeiT/ConvNeXt paper recommended WD;
+-- cutmix already wins (77.1%), this tests whether the WD bump that
+-- the paper says matters actually lifts at our scale.
+def vitTinyCutmixWd05Config : TrainConfig :=
+  { vitTinyCutmixConfig with weightDecay := 0.05 }
 
 def vitTinyKnnMixupConfig : TrainConfig :=
   { vitTinyBareConfig with useKnnMixup := true, knnMixupAlpha := 1.0 }
@@ -840,8 +853,10 @@ def ablations : List (String × AblationRun) := [
   ("vit-tiny-bare",        ⟨vitTinyAblationSpec, vitTinyBareConfig,        .imagenette, "data/imagenette"⟩),
   ("vit-tiny-erase",       ⟨vitTinyAblationSpec, vitTinyEraseConfig,       .imagenette, "data/imagenette"⟩),
   ("vit-tiny-randaug",     ⟨vitTinyAblationSpec, vitTinyRandAugConfig,     .imagenette, "data/imagenette"⟩),
+  ("vit-tiny-randaug-m4",  ⟨vitTinyAblationSpec, vitTinyRandAugM4Config,   .imagenette, "data/imagenette"⟩),
   ("vit-tiny-mixup",       ⟨vitTinyAblationSpec, vitTinyMixupConfig,       .imagenette, "data/imagenette"⟩),
   ("vit-tiny-cutmix",      ⟨vitTinyAblationSpec, vitTinyCutmixConfig,      .imagenette, "data/imagenette"⟩),
+  ("vit-tiny-cutmix-wd05", ⟨vitTinyAblationSpec, vitTinyCutmixWd05Config,  .imagenette, "data/imagenette"⟩),
   ("vit-tiny-knn-mixup",   ⟨vitTinyAblationSpec, vitTinyKnnMixupConfig,    .imagenette, "data/imagenette"⟩),
   ("vit-tiny-focal",       ⟨vitTinyAblationSpec, vitTinyFocalConfig,       .imagenette, "data/imagenette"⟩),
   ("vit-tiny-recipe2",     ⟨vitTinyAblationSpec, vitTinyRecipe2Config,     .imagenette, "data/imagenette"⟩),
