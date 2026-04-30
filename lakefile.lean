@@ -276,6 +276,9 @@ lean_exe «bestiary-alphazero» where
 lean_exe «bestiary-highway» where
   root := `Bestiary.Highway
 
+lean_exe «bestiary-densenet» where
+  root := `Bestiary.DenseNet
+
 lean_exe «bestiary-mamba» where
   root := `Bestiary.Mamba
 

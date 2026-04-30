@@ -187,6 +187,18 @@ inductive Layer where
   -- segmentation feature backbone in Mask R-CNN, RetinaNet, and most
   -- 2-stage detection families.
   | fpnModule (c2 c3 c4 c5 target : Nat)
+  -- DenseNet dense block (Huang et al.\ 2017). `nLayers` BN-ReLU-1×1-
+  -- BN-ReLU-3×3 sub-layers, each adding `growthRate` channels to the
+  -- running concatenation. Input has `ic` channels; output has
+  -- `ic + nLayers · growthRate`. The 1×1 conv expands to `4·growthRate`
+  -- channels (the "bottleneck" ratio from DenseNet-BC). Bundled
+  -- because the dense connectivity (each sub-layer reads all preceding
+  -- concat outputs) doesn't fit a linear NetSpec.
+  | denseBlock (ic growthRate nLayers : Nat)
+  -- DenseNet transition layer between dense blocks. BN + 1×1 conv
+  -- (ic → oc) + 2×2 average pool stride 2. Halves spatial resolution
+  -- and (typically) halves channel count to compress feature reuse.
+  | transitionLayer (ic oc : Nat)
 deriving Repr
 
 structure NetSpec where

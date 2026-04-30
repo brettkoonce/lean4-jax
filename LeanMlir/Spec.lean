@@ -294,6 +294,21 @@ def Layer.nParams : Layer → Nat
       let br3 := (ic * b3r + 2 * b3r) + (25 * b3r * b3 + 2 * b3)
       let br4 := (ic * b4 + 2 * b4)
       br1 + br2 + br3 + br4
+  | .denseBlock ic gr nLayers =>
+      -- Each sub-layer (i in [0..nLayers)): BN(c_i) + 1×1 (c_i → 4gr) +
+      -- BN(4gr) + 3×3 (4gr → gr), where c_i = ic + i·gr.
+      -- Per-layer params:
+      --   2·c_i             (BN1 γ/β)
+      --   c_i·4gr + 4gr     (1×1 conv weight + bias)
+      --   2·(4gr) = 8gr     (BN2 γ/β)
+      --   9·4gr·gr + gr     (3×3 conv weight + bias)
+      let perI := fun i =>
+        let cI := ic + i * gr
+        2 * cI + cI * 4 * gr + 4 * gr + 8 * gr + 9 * 4 * gr * gr + gr
+      (List.range nLayers).foldl (fun acc i => acc + perI i) 0
+  | .transitionLayer ic oc =>
+      -- BN(ic) γ/β + 1×1 (ic → oc) + bias. Avg pool has no params.
+      2 * ic + ic * oc + oc
   | _                        => 0
 
 def NetSpec.totalParams (s : NetSpec) : Nat :=
@@ -301,13 +316,13 @@ def NetSpec.totalParams (s : NetSpec) : Nat :=
 
 -- Feature queries (used by codegen to gate helper emission)
 def NetSpec.hasConv (s : NetSpec) : Bool :=
-  s.layers.any fun | .conv2d .. => true | .convBn .. => true | .residualBlock .. => true | .bottleneckBlock .. => true | .separableConv .. => true | .invertedResidual .. => true | .mbConv .. => true | .mbConvV3 .. => true | .fusedMbConv .. => true | .uib .. => true | .fireModule .. => true | .patchEmbed .. => true | _ => false
+  s.layers.any fun | .conv2d .. => true | .convBn .. => true | .residualBlock .. => true | .bottleneckBlock .. => true | .separableConv .. => true | .invertedResidual .. => true | .mbConv .. => true | .mbConvV3 .. => true | .fusedMbConv .. => true | .uib .. => true | .fireModule .. => true | .patchEmbed .. => true | .denseBlock .. => true | .transitionLayer .. => true | _ => false
 
 def NetSpec.hasPool (s : NetSpec) : Bool :=
   s.layers.any fun | .maxPool .. => true | _ => false
 
 def NetSpec.hasBn (s : NetSpec) : Bool :=
-  s.layers.any fun | .convBn .. => true | .residualBlock .. => true | .bottleneckBlock .. => true | .separableConv .. => true | .invertedResidual .. => true | .mbConv .. => true | .mbConvV3 .. => true | .fusedMbConv .. => true | .uib .. => true | .fireModule .. => true | _ => false
+  s.layers.any fun | .convBn .. => true | .residualBlock .. => true | .bottleneckBlock .. => true | .separableConv .. => true | .invertedResidual .. => true | .mbConv .. => true | .mbConvV3 .. => true | .fusedMbConv .. => true | .uib .. => true | .fireModule .. => true | .denseBlock .. => true | .transitionLayer .. => true | _ => false
 
 def NetSpec.hasResidual (s : NetSpec) : Bool :=
   s.layers.any fun | .residualBlock .. => true | .bottleneckBlock .. => true | _ => false
@@ -390,7 +405,9 @@ def NetSpec.archStr (s : NetSpec) : String :=
     | .darknetBlock c n          => s!"Dark{n}(c={c})"
     | .cspBlock i o n            => s!"CSP{n}({i}→{o})"
     | .inceptionModule ic b1 _ b2 _ b3 b4 =>
-        s!"Inc({ic}→{b1 + b2 + b3 + b4})")
+        s!"Inc({ic}→{b1 + b2 + b3 + b4})"
+    | .denseBlock ic gr n         => s!"Dense{n}({ic}→{ic + n * gr},gr={gr})"
+    | .transitionLayer ic oc      => s!"Trans({ic}→{oc})")
 
 -- ===========================================================================
 -- Validation: catch channel/dimension mismatches at `lake build` time
@@ -434,6 +451,8 @@ def Layer.outChannels : Layer → Nat
   | .darknetBlock c _               => c    -- preserves channels
   | .cspBlock _ oc _                => oc
   | .inceptionModule _ b1 _ b2 _ b3 b4 => b1 + b2 + b3 + b4  -- concat of branches
+  | .denseBlock ic gr nLayers       => ic + nLayers * gr  -- concat grows by gr per layer
+  | .transitionLayer _ oc           => oc
   | _                               => 0  -- pool/flatten/GAP: pass-through
 
 /-- Input channels expected by a layer. Returns 0 for layers that accept any input. -/
@@ -474,6 +493,8 @@ def Layer.inChannels : Layer → Nat
   | .darknetBlock c _               => c
   | .cspBlock ic _ _                => ic
   | .inceptionModule ic _ _ _ _ _ _ => ic
+  | .denseBlock ic _ _              => ic
+  | .transitionLayer ic _           => ic
   | _                               => 0  -- pool/flatten/GAP: accept anything
 
 /-- Validate that channel dimensions chain correctly through the spec.

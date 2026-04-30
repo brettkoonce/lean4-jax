@@ -4181,6 +4181,56 @@ def xception : NetSpec where
   ]
 \end{verbatim}
 
+\subsubsection*{DenseNet (\texttt{Bestiary/DenseNet.lean})}
+\emph{Two} new primitives (\texttt{.denseBlock}, \texttt{.transitionLayer}).
+DenseNet (Huang et al.\ 2017,
+\href{https://arxiv.org/abs/1608.06993}{arXiv:1608.06993}) takes the
+ResNet bypass idea to its concatenative extreme: every layer in a
+``dense block'' reads the channel-wise concatenation of all preceding
+layers' outputs. Each layer adds only \texttt{growth\_rate} new
+channels (32 in the paper), so the per-layer parameter count stays
+small while feature reuse compounds. Variants: DenseNet-121 (6.97M
+params, paper 6.8M), DenseNet-169 (12.51M, paper 12.5M), DenseNet-201
+(18.13M, paper 18.6M), tiny fixture.
+
+The dense connectivity pattern doesn't fit a linear NetSpec at the
+sub-layer granularity (each sub-layer reads a growing concatenation of
+its predecessors), so the block is bundled as a shape-only primitive
+\texttt{Layer.denseBlock ic growth\_rate n\_layers} alongside
+\texttt{Layer.transitionLayer ic oc} (BN + 1$\times$1 conv +
+2$\times$2 avg-pool, halves channels and spatial between blocks).
+Same modeling trick we use for \texttt{mambaBlock}, \texttt{swinStage},
+\texttt{evoformerBlock} --- the architectural novelty is inside the
+bundled op.
+
+\begin{verbatim}
+def denseNet121 : NetSpec where
+  name   := "DenseNet-121"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .convBn 3 64 7 2 .same,                       -- stem 7×7 stride 2
+    .maxPool 3 2,                                  -- 3×3 stride 2 → 56×56
+    .denseBlock 64 32 6,                           -- → 256 channels
+    .transitionLayer 256 128,                      -- → 128 @ 28×28
+    .denseBlock 128 32 12,                         -- → 512 channels
+    .transitionLayer 512 256,                      -- → 256 @ 14×14
+    .denseBlock 256 32 24,                         -- → 1024 channels
+    .transitionLayer 1024 512,                     -- → 512 @ 7×7
+    .denseBlock 512 32 16,                         -- → 1024 channels
+    .globalAvgPool,
+    .dense 1024 10 .identity
+  ]
+\end{verbatim}
+
+The pedagogical hook: DenseNet sits next to ResNet historically (2017
+vs 2015) but architecturally generalizes the bypass primitive ---
+ResNet's $y = f(x) + x$ becomes $y_i = f_i([y_0, \ldots, y_{i-1}])$.
+The cost: activation memory grows quadratically in block depth from
+the concatenation. Modern CNN architectures (EfficientNet, ConvNeXt)
+took the per-layer-parameter-efficiency lesson but dropped the
+all-pairs concatenation in favor of standard residual paths.
+
 \subsubsection*{ShuffleNet (\texttt{Bestiary/ShuffleNet.lean})}
 \emph{One} new primitive (\S~\ref{layer:shuffleBlock}). Grouped
 1$\times$1 convs + channel shuffle (Zhang et al.\ 2017,
