@@ -4020,12 +4020,26 @@ and an extra nonlinearity in the middle; three stacked $3\times 3$s
 match a $7\times 7$. The whole architecture is just \emph{that}
 trick repeated.
 
-Variants: VGG-16 (138M params, paper-exact) and VGG-19 (144M, paper
-144M), plus a CIFAR-sized fixture. The big numbers come almost
-entirely from the FC head: the first dense layer alone
-($7\times 7\times 512 \to 4096$) is $\sim$102M of the 138M. This is
-the dense-head bloat that GAP + single-FC heads (Network-in-Network
-2013, ResNet 2015) eventually fixed.
+All four paper variants:
+
+\begin{center}
+\begin{tabular}{l c r}
+\hline
+Name    & Per-stage convs    & Params \\
+\hline
+VGG-11  & (1, 1, 2, 2, 2)    & 132.9M \\
+VGG-13  & (2, 2, 2, 2, 2)    & 133.0M \\
+VGG-16  & (2, 2, 3, 3, 3)    & 138.4M \\
+VGG-19  & (2, 2, 4, 4, 4)    & 143.7M \\
+\hline
+\end{tabular}
+\end{center}
+
+All paper-exact. The big numbers come almost entirely from the FC
+head: the first dense layer alone ($7\times 7\times 512 \to 4096$)
+is $\sim$102M of the 138M for VGG-16. This is the dense-head bloat
+that GAP + single-FC heads (Network-in-Network 2013, ResNet 2015)
+eventually fixed.
 
 \begin{verbatim}
 def vgg16 : NetSpec where
@@ -4327,9 +4341,21 @@ ResNet bypass idea to its concatenative extreme: every layer in a
 ``dense block'' reads the channel-wise concatenation of all preceding
 layers' outputs. Each layer adds only \texttt{growth\_rate} new
 channels (32 in the paper), so the per-layer parameter count stays
-small while feature reuse compounds. Variants: DenseNet-121 (6.97M
-params, paper 6.8M), DenseNet-169 (12.51M, paper 12.5M), DenseNet-201
-(18.13M, paper 18.6M), tiny fixture.
+small while feature reuse compounds.
+
+\begin{center}
+\begin{tabular}{l c r}
+\hline
+Name          & Block counts        & Params              \\
+\hline
+DenseNet-121  & (6, 12, 24, 16)     &  7.0M (paper 6.8M)  \\
+DenseNet-169  & (6, 12, 32, 32)     & 12.5M (paper 12.5M) \\
+DenseNet-201  & (6, 12, 48, 32)     & 18.1M (paper 18.6M) \\
+\hline
+\end{tabular}
+\end{center}
+
+All within $\sim$3\% of the paper. Plus a tiny fixture for testing.
 
 The dense connectivity pattern doesn't fit a linear NetSpec at the
 sub-layer granularity (each sub-layer reads a growing concatenation of

@@ -40,6 +40,59 @@ We model VGG-16 (canonical) and VGG-19 here, plus a tiny CIFAR fixture.
 -/
 
 -- ════════════════════════════════════════════════════════════════
+-- § VGG-11 (lightest paper variant)
+-- ════════════════════════════════════════════════════════════════
+
+def vgg11 : NetSpec where
+  name := "VGG-11"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .conv2d 3 64 3 .same .relu,                     -- stage 1: 1 conv
+    .maxPool 2 2,
+    .conv2d 64 128 3 .same .relu,                   -- stage 2: 1 conv
+    .maxPool 2 2,
+    .conv2d 128 256 3 .same .relu,                  -- stage 3: 2 convs
+    .conv2d 256 256 3 .same .relu,
+    .maxPool 2 2,
+    .conv2d 256 512 3 .same .relu,                  -- stage 4: 2 convs
+    .conv2d 512 512 3 .same .relu,
+    .maxPool 2 2,
+    .conv2d 512 512 3 .same .relu,                  -- stage 5: 2 convs
+    .conv2d 512 512 3 .same .relu,
+    .maxPool 2 2,
+    .flatten,
+    .dense (7 * 7 * 512) 4096 .relu,
+    .dense 4096 4096 .relu,
+    .dense 4096 1000 .identity
+  ]
+
+-- ════════════════════════════════════════════════════════════════
+-- § VGG-13
+-- ════════════════════════════════════════════════════════════════
+
+def vgg13 : NetSpec where
+  name := "VGG-13"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .conv2d 3 64 3 .same .relu, .conv2d 64 64 3 .same .relu,
+    .maxPool 2 2,
+    .conv2d 64 128 3 .same .relu, .conv2d 128 128 3 .same .relu,
+    .maxPool 2 2,
+    .conv2d 128 256 3 .same .relu, .conv2d 256 256 3 .same .relu,
+    .maxPool 2 2,
+    .conv2d 256 512 3 .same .relu, .conv2d 512 512 3 .same .relu,
+    .maxPool 2 2,
+    .conv2d 512 512 3 .same .relu, .conv2d 512 512 3 .same .relu,
+    .maxPool 2 2,
+    .flatten,
+    .dense (7 * 7 * 512) 4096 .relu,
+    .dense 4096 4096 .relu,
+    .dense 4096 1000 .identity
+  ]
+
+-- ════════════════════════════════════════════════════════════════
 -- § VGG-16 (paper canonical, ~138M params)
 -- ════════════════════════════════════════════════════════════════
 
@@ -160,6 +213,8 @@ def main : IO Unit := do
   IO.println "  Deep stacks of 3×3 convs + max pool + heavy FC head."
   IO.println "  The dense-head era; the FC layers hold ~80% of params."
 
+  summarize vgg11
+  summarize vgg13
   summarize vgg16
   summarize vgg19
   summarize tinyVgg
