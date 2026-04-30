@@ -157,12 +157,16 @@ opaque randomErasing (images : @& ByteArray) (batch : USize) (channels : USize)
 /-- RandAugment-Color (Cubuk et al. 2019, color-only subset). Per image,
     apply `nOps` random ops drawn from {identity, brightness, contrast,
     color, autocontrast} with magnitude `m` (0–10, paper default 9).
-    Geometric ops (rotate / shear / translate) are TODO. Linear in pixel
-    values, so works directly in normalized space without de-norm. -/
+    Geometric ops (rotate / shear / translate) are TODO.
+
+    `imagenetNorm = 1` tells the kernel the incoming images are
+    ImageNet-mean/std normalized (Imagenette / Imagewoof); the kernel
+    de-normalizes to [0,1] sRGB, applies ops, then re-normalizes. Pass
+    `0` for already-in-[0,1] datasets (CIFAR, MNIST). -/
 @[extern "lean_f32_rand_augment"]
 opaque randAugment (images : @& ByteArray) (batch : USize) (channels : USize)
     (height : USize) (width : USize) (nOps : USize) (m : Float)
-    (seed : USize) : IO ByteArray
+    (imagenetNorm : USize) (seed : USize) : IO ByteArray
 
 /-- EMA on squared values: out = (1−mom)·running + mom·batch². Used by
     SWAG to maintain a running E[θ²] alongside SWA's running E[θ]. -/

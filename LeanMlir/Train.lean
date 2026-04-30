@@ -363,7 +363,11 @@ def runTraining (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
       -- DeiT-style aug. RandAugment first (color-only subset), then RE.
       if cfg.useRandAugment then
         let raSeed : USize := stepSeed ^^^ (5 : USize)
-        xba ← F32.randAugment xba batch augC.toUSize augH.toUSize augW.toUSize cfg.randAugmentN.toUSize cfg.randAugmentM raSeed
+        -- ImageNet-normalized inputs need a de-norm/re-norm round-trip
+        -- around the color ops (which assume [0,1] sRGB). For CIFAR /
+        -- MNIST images already in [0,1], pass 0 to skip the round-trip.
+        let imagenetNorm : USize := match ds with | .imagenette => 1 | _ => 0
+        xba ← F32.randAugment xba batch augC.toUSize augH.toUSize augW.toUSize cfg.randAugmentN.toUSize cfg.randAugmentM imagenetNorm raSeed
       if cfg.randomErasing then
         xba ← F32.randomErasing xba batch augC.toUSize augH.toUSize augW.toUSize cfg.randomErasingProb stepSeed
       -- Mixup XOR CutMix XOR KNN-Mixup (paper convention: pick one per batch).

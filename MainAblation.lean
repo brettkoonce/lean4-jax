@@ -529,6 +529,16 @@ def vitTinyRecipe2Config : TrainConfig :=
       randomErasing := true, randomErasingProb := 0.25,
       useRandAugment := true, randAugmentN := 2, randAugmentM := 9.0 }
 
+-- Recipe 2 + EMA + heavy WD — same data-aug stack, plus EMA (decay
+-- 0.9999) and weight decay bumped to 0.05 (the DeiT/ConvNeXt paper
+-- default; recipe 2 uses 1e-4, which is 500× too small for the
+-- modern recipe to regularize properly). Two knobs in one cell since
+-- we're just looking for what moves the needle right now.
+def vitTinyRecipe2EmaConfig : TrainConfig :=
+  { vitTinyRecipe2Config with
+      useEMA := true, emaDecay := 0.9999,
+      weightDecay := 0.05 }
+
 -- Focal loss requires no smoothing + no soft-label aug; disable both.
 def vitTinyFocalConfig : TrainConfig :=
   { vitTinyBareConfig with
@@ -835,6 +845,7 @@ def ablations : List (String × AblationRun) := [
   ("vit-tiny-knn-mixup",   ⟨vitTinyAblationSpec, vitTinyKnnMixupConfig,    .imagenette, "data/imagenette"⟩),
   ("vit-tiny-focal",       ⟨vitTinyAblationSpec, vitTinyFocalConfig,       .imagenette, "data/imagenette"⟩),
   ("vit-tiny-recipe2",     ⟨vitTinyAblationSpec, vitTinyRecipe2Config,     .imagenette, "data/imagenette"⟩),
+  ("vit-tiny-recipe2-ema", ⟨vitTinyAblationSpec, vitTinyRecipe2EmaConfig,  .imagenette, "data/imagenette"⟩),
   ("vit-tiny-full",        ⟨vitTinyAblationSpec, vitTinyFullConfig,        .imagenette, "data/imagenette"⟩),
   ("vit-tiny-ema",         ⟨vitTinyAblationSpec, vitTinyEmaConfig,         .imagenette, "data/imagenette"⟩),
   ("vit-tiny-swa",         ⟨vitTinyAblationSpec, vitTinySwaConfig,         .imagenette, "data/imagenette"⟩),

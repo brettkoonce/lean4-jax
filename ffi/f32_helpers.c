@@ -833,10 +833,8 @@ LEAN_EXPORT lean_obj_res lean_f32_random_erasing(
 // ============================================================
 // RandAugment-Color (Cubuk et al. 2019, color-only subset)
 // ============================================================
-// The full RandAugment policy has ~14 ops including geometric ones
-// (rotate / shear / translate) that need bilinear interpolation. This
-// kernel implements 4 *linear* color ops that work directly in
-// normalized space — no de-norm/re-norm round-trip:
+// Implements 4 color ops (brightness, contrast, color, autocontrast)
+// + identity, applied to images in [0, 1] sRGB space:
 //
 //   identity      — no-op
 //   brightness    — img *= factor                  (factor ~ 1 ± strength*0.5)
@@ -844,10 +842,46 @@ LEAN_EXPORT lean_obj_res lean_f32_random_erasing(
 //   color         — lerp toward per-pixel grayscale (saturation knob)
 //   autocontrast  — stretch min→0 / max→1 (no magnitude, image-derived)
 //
-// Per image: pick `n_ops` ops uniformly with replacement from the 5,
-// apply each in sequence with magnitude `m` (0–10 typical, paper
-// default M=9). Geometric ops (rotate/shear/translate) are TODO.
+// `imagenet_norm` flag tells the kernel whether the incoming images
+// are ImageNet-mean/std normalized (Imagenette). When set, we de-norm
+// to [0,1] sRGB at the start of each per-image augmentation pass,
+// apply ops in [0,1] (with clamp between ops), then re-norm at the
+// end. CIFAR / MNIST / pre-normalized data passes flag=0 and the ops
+// apply directly. Geometric ops (rotate/shear/translate) still TODO.
 // ----------------------------------------------------------------
+
+static const float IMAGENET_MEAN[3] = {0.485f, 0.456f, 0.406f};
+static const float IMAGENET_STD[3]  = {0.229f, 0.224f, 0.225f};
+
+// De-normalize NCHW (channels=3, ImageNet stats): x = x_norm*std + mean.
+static inline void denormalize_imagenet(float* img, size_t channels,
+                                        size_t plane) {
+    if (channels != 3) return;
+    for (size_t c = 0; c < channels; c++) {
+        float* p = img + c * plane;
+        float mu = IMAGENET_MEAN[c], sd = IMAGENET_STD[c];
+        for (size_t k = 0; k < plane; k++) p[k] = p[k] * sd + mu;
+    }
+}
+
+// Re-normalize NCHW (channels=3, ImageNet stats): x_norm = (x - mean)/std.
+static inline void renormalize_imagenet(float* img, size_t channels,
+                                        size_t plane) {
+    if (channels != 3) return;
+    for (size_t c = 0; c < channels; c++) {
+        float* p = img + c * plane;
+        float mu = IMAGENET_MEAN[c], inv_sd = 1.0f / IMAGENET_STD[c];
+        for (size_t k = 0; k < plane; k++) p[k] = (p[k] - mu) * inv_sd;
+    }
+}
+
+// Clamp to [0,1] — used between ops to keep values in valid sRGB range.
+static inline void clamp01(float* img, size_t pixels) {
+    for (size_t k = 0; k < pixels; k++) {
+        if (img[k] < 0.0f) img[k] = 0.0f;
+        else if (img[k] > 1.0f) img[k] = 1.0f;
+    }
+}
 
 static inline void apply_brightness(float* img, size_t pixels, double factor) {
     float f = (float)factor;
@@ -902,9 +936,10 @@ static inline double rand_factor(double m, uint64_t* s) {
 LEAN_EXPORT lean_obj_res lean_f32_rand_augment(
     b_lean_obj_arg images, size_t batch, size_t channels,
     size_t height, size_t width, size_t n_ops, double m,
-    size_t seed, lean_obj_arg w) {
+    size_t imagenet_norm, size_t seed, lean_obj_arg w) {
     (void)w;
-    size_t pixels = channels * height * width;
+    size_t plane = height * width;
+    size_t pixels = channels * plane;
     size_t nbytes = batch * pixels * 4;
     lean_object* out = lean_alloc_sarray(1, nbytes, nbytes);
     float* o = (float*)lean_sarray_cptr(out);
@@ -913,6 +948,7 @@ LEAN_EXPORT lean_obj_res lean_f32_rand_augment(
     const int N_KINDS = 5;  // identity, brightness, contrast, color, autocontrast
     for (size_t i = 0; i < batch; i++) {
         float* img = o + i * pixels;
+        if (imagenet_norm) denormalize_imagenet(img, channels, plane);
         for (size_t k = 0; k < n_ops; k++) {
             int op = (int)(f32_xorshift64(&s) % N_KINDS);
             switch (op) {
@@ -922,7 +958,9 @@ LEAN_EXPORT lean_obj_res lean_f32_rand_augment(
                 case 3: apply_color(img, channels, height, width, rand_factor(m, &s)); break;
                 case 4: apply_autocontrast(img, pixels); break;
             }
+            if (imagenet_norm) clamp01(img, pixels);
         }
+        if (imagenet_norm) renormalize_imagenet(img, channels, plane);
     }
     return lean_io_result_mk_ok(out);
 }
