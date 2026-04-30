@@ -560,17 +560,81 @@ def runTraining (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
     IO.FS.writeBinFile s!"{pfx}_swag_deviations.bin" (F32.concat swagDeviations)
   IO.eprintln "Saved params + BN stats."
 
+/-- Eval-only mode: skip training entirely, load saved params + bn_stats,
+    run the eval forward on val data, print accuracy. Used to re-eval
+    existing checkpoints against a fixed eval pipeline (e.g. after the
+    Imagenette `centerCrop` bug was fixed). Requires `compileVmfbs` to
+    have produced (or cached) the `_fwd_eval.vmfb` already. -/
+def evalOnly (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
+    (dataDir : String) : IO Unit := do
+  let pfx := spec.buildPrefix
+  let dio := datasetIO ds
+
+  let paramsPath := s!"{pfx}_params.bin"
+  let bnPath := s!"{pfx}_bn_stats.bin"
+  if !(← System.FilePath.pathExists paramsPath) then
+    IO.eprintln s!"ERROR: no saved params at {paramsPath}"
+    IO.eprintln "  (train this cell once, or check that pfx matches its saved files)"
+    IO.Process.exit 1
+  IO.eprintln s!"loading {paramsPath}..."
+  let params ← IO.FS.readBinFile paramsPath
+  let runningBnStats ← if (← System.FilePath.pathExists bnPath)
+                       then IO.FS.readBinFile bnPath
+                       else pure ByteArray.empty
+  let evalParams := params.append runningBnStats
+
+  let evalVmfb := s!"{pfx}_fwd_eval.vmfb"
+  if !(← System.FilePath.pathExists evalVmfb) then
+    IO.eprintln s!"ERROR: no eval vmfb at {evalVmfb}"
+    IO.eprintln "  (run a training cycle first to compile, or call compileVmfbs)"
+    IO.Process.exit 1
+  let evalSess ← IreeSession.create evalVmfb
+  IO.eprintln "  eval session loaded"
+
+  let (valImg, valLbl, nVal) ← dio.loadVal dataDir
+  let evalBatch : Nat := cfg.batchSize
+  let evalSteps := nVal / evalBatch
+  let evalXSh := spec.xShape evalBatch
+  let evalShapesBA := spec.evalShapesBA
+  let nClasses := spec.numClasses.toUSize
+
+  let mut correct : Nat := 0
+  let mut total : Nat := 0
+  for bi in [:evalSteps] do
+    let xbaRaw := F32.sliceImages valImg (bi * evalBatch) evalBatch dio.valPixels
+    let xba ← dio.valPreprocessBatch xbaRaw evalBatch.toUSize
+    let logits ← IreeSession.forwardF32 evalSess spec.evalFnName
+                    evalParams evalShapesBA xba evalXSh evalBatch.toUSize nClasses
+    let lblSlice := F32.sliceLabels valLbl (bi * evalBatch) evalBatch
+    for i in [:evalBatch] do
+      let pred := F32.argmax10 logits (i * spec.numClasses).toUSize
+      let label := lblSlice.data[i * 4]!.toNat
+      if pred.toNat == label then correct := correct + 1
+      total := total + 1
+  let acc := correct.toFloat / total.toFloat * 100.0
+  IO.eprintln s!"EVAL ONLY  {spec.name}: {correct}/{total} = {acc}%"
+
 /-- End-to-end: compile all three vmfbs, load the train-step session,
     and run the training loop on the chosen dataset. The high-level
     entry point that every Main*Train.lean now calls.
+
+    `LEAN_MLIR_EVAL_ONLY=1` short-circuits to `evalOnly` — skips
+    training, loads the saved checkpoint, runs eval. Used for re-eval
+    after a fixed eval pipeline.
 
     Defaults to Imagenette so existing trainers don't have to change. -/
 def train (spec : NetSpec) (cfg : TrainConfig) (dataDir : String)
     (ds : DatasetKind := .imagenette) : IO Unit := do
   IO.eprintln s!"{spec.name}: {spec.totalParams} params"
-  let trainVmfb ← spec.compileVmfbs cfg
-  let sess ← IreeSession.create trainVmfb
-  IO.eprintln "  session loaded"
-  spec.runTraining cfg ds dataDir sess
+  match (← IO.getEnv "LEAN_MLIR_EVAL_ONLY") with
+  | some _ =>
+    -- compileVmfbs is cheap when cached and produces the eval vmfb we need.
+    let _ ← spec.compileVmfbs cfg
+    spec.evalOnly cfg ds dataDir
+  | none => do
+    let trainVmfb ← spec.compileVmfbs cfg
+    let sess ← IreeSession.create trainVmfb
+    IO.eprintln "  session loaded"
+    spec.runTraining cfg ds dataDir sess
 
 end NetSpec
