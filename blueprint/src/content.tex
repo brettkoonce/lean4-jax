@@ -1103,12 +1103,12 @@ tackle attention.
   (NetSpec composition)
 };
 
-% Middle pillar: EfficientNet (shifted down + slightly right)
-\node[primitive] (dw) at (-2.5, -4.0) {
+% Middle pillar: EfficientNet (shifted south to clear shared-arrow lines)
+\node[primitive] (dw) at (-2.5, -4.8) {
   \textbf{Ch~7: depthwise conv} \\
   \texttt{depthwise\_has\_vjp3\_correct}
 };
-\node[primitive] (se) at (-2.5, -5.7) {
+\node[primitive] (se) at (-2.5, -6.5) {
   \textbf{Ch~8: SE block} \\
   \texttt{seBlock\_has\_vjp\_correct}
 };
@@ -1240,6 +1240,10 @@ Practical reading style: work through Chapter~\ref{chap:tensor}
 slowly, then skim the rest at the pace of ``forward pass I know
 \(\to\) new \texttt{*\_has\_vjp} theorem \(\to\) see what theorems it
 cites \(\to\) move on.'' The dependency DAG is your friend.
+
+\bigskip
+\noindent I have endeavored to read as many of your papers as
+possible. Part 2 is deliberately patterned on your practice.
 
 \chapter{MNIST: 1D MLP}
 \label{chap:mlp}
