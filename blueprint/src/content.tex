@@ -3769,76 +3769,43 @@ Twenty-two new \texttt{Layer} constructors were added by the bestiary chapters.
 None are codegen-backed (MlirCodegen emits \texttt{// UNSUPPORTED}); the
 goal is pedagogical shape + parameter accounting, not training runs.
 
-\begin{definition}[Mamba block]
-  \label{layer:mambaBlock}
-  \lean{Layer.mambaBlock}
+\begin{definition}[Inception module]
+  \label{layer:inceptionModule}
+  \lean{Layer.inceptionModule}
   \leanok
-  Selective state-space block in the S6 formulation (Gu \& Dao 2023).
-  Signature: \texttt{mambaBlock (dim stateSize expand nBlocks : Nat)}.
-  Bundles RMSNorm + linear expand + depthwise 1D conv + SiLU +
-  selective-scan SSM + gated product + output projection, for
-  \texttt{nBlocks} stacked layers. The selective scan is the novel
-  primitive; everything else could be decomposed to existing layers if
-  we cared to unpack the bundle.
+  The GoogLeNet parallel-branch module (Szegedy et al.\ 2014). Four
+  branches computed in parallel: 1$\times$1 conv (b1 channels); 1$\times$1
+  reduce then 3$\times$3 (b2); 1$\times$1 reduce then 5$\times$5 (b3);
+  3$\times$3 maxPool then 1$\times$1 (b4). Concat along channels for
+  \texttt{b1 + b2 + b3 + b4} outputs. The 1$\times$1 dimension reducers on
+  branches 2 and 3 are the paper's trick --- they make the expensive
+  3$\times$3 and 5$\times$5 convs operate on reduced channel counts.
+  Signature: \texttt{inceptionModule (ic b1 b2reduce b2 b3reduce b3 b4 : Nat)}.
 \end{definition}
 
-\begin{definition}[Swin Transformer stage]
-  \label{layer:swinStage}
-  \lean{Layer.swinStage}
+\begin{definition}[DenseNet dense block]
+  \label{layer:denseBlock}
+  \lean{Layer.denseBlock}
   \leanok
-  Windowed multi-head self-attention at fixed spatial resolution (Liu
-  et al.\ 2021). Signature:
-  \texttt{swinStage (dim heads mlpDim windowSize nBlocks : Nat)}. Internal
-  blocks alternate W-MSA and SW-MSA (shifted-window) to let information
-  cross window boundaries.
+  DenseNet's bundled dense block (Huang et al.\ 2017). \texttt{nLayers}
+  BN-ReLU-1$\times$1-BN-ReLU-3$\times$3 sub-stacks, each adding
+  \texttt{growthRate} channels to the running concatenation of
+  preceding outputs. Input has \texttt{ic} channels; output has
+  \texttt{ic + nLayers $\cdot$ growthRate}. Bundled because each
+  sub-layer reads a growing concat of all preceding sub-layers,
+  which doesn't fit a linear NetSpec at sub-layer granularity.
+  Signature: \texttt{denseBlock (ic growthRate nLayers : Nat)}.
 \end{definition}
 
-\begin{definition}[Patch merging]
-  \label{layer:patchMerging}
-  \lean{Layer.patchMerging}
+\begin{definition}[DenseNet transition layer]
+  \label{layer:transitionLayer}
+  \lean{Layer.transitionLayer}
   \leanok
-  Swin's 2$\times$2 spatial downsample + linear channel projection
-  (\texttt{inDim $\to$ outDim}). Transformer-side analog of a stride-2
-  conv.
-\end{definition}
-
-\begin{definition}[UNet encoder stage]
-  \label{layer:unetDown}
-  \lean{Layer.unetDown}
-  \leanok
-  $2 \times$ \texttt{(conv3$\times$3 + BN + ReLU)} then \texttt{maxPool-2}.
-  Saves its pre-pool activation as a skip for the matching
-  \texttt{unetUp}. Signature: \texttt{unetDown (ic oc : Nat)}.
-\end{definition}
-
-\begin{definition}[UNet decoder stage]
-  \label{layer:unetUp}
-  \lean{Layer.unetUp}
-  \leanok
-  Transposed-conv $2\times$ upsample + concat with matching skip +
-  $2 \times$ \texttt{(conv3$\times$3 + BN + ReLU)}. Signature:
-  \texttt{unetUp (ic oc : Nat)}, where \texttt{oc} is both the output
-  channel count and the expected skip width.
-\end{definition}
-
-\begin{definition}[Transformer decoder (DETR-style)]
-  \label{layer:transformerDecoder}
-  \lean{Layer.transformerDecoder}
-  \leanok
-  \texttt{nBlocks} blocks of self-attention over
-  \texttt{nQueries} learned object queries + cross-attention against an
-  encoder output + FFN. The query embedding is part of the layer's
-  parameters. Signature:
-  \texttt{transformerDecoder (dim heads mlpDim nBlocks nQueries : Nat)}.
-\end{definition}
-
-\begin{definition}[DETR prediction heads]
-  \label{layer:detrHeads}
-  \lean{Layer.detrHeads}
-  \leanok
-  Per-query class head (linear \texttt{dim $\to$ nClasses+1} with the
-  ``no object'' slot) + box head (3-layer MLP to 4 scalars
-  \texttt{(cx, cy, w, h)}). Signature: \texttt{detrHeads (dim nClasses : Nat)}.
+  Inter-block downsample for DenseNet. BN + 1$\times$1 conv
+  (\texttt{ic $\to$ oc}) + 2$\times$2 average-pool stride 2.
+  Halves spatial resolution and (typically) halves channel count
+  via the 1$\times$1 conv to compress feature reuse between dense
+  blocks. Signature: \texttt{transitionLayer (ic oc : Nat)}.
 \end{definition}
 
 \begin{definition}[ShuffleNet v1 stage]
@@ -3867,30 +3834,6 @@ goal is pedagogical shape + parameter accounting, not training runs.
   \texttt{shuffleV2Block (ic oc nUnits : Nat)}.
 \end{definition}
 
-\begin{definition}[Evoformer block (AlphaFold 2)]
-  \label{layer:evoformerBlock}
-  \lean{Layer.evoformerBlock}
-  \leanok
-  Dual-representation (MSA + pair) joint update: MSA row-attention with
-  pair bias + MSA column-attention + MSA transition +
-  outer-product-mean ($\to$ pair) + triangle multiplicative (outgoing,
-  incoming) + triangle self-attention (starting node, ending node) +
-  pair transition. Signature:
-  \texttt{evoformerBlock (msaChannels pairChannels nBlocks : Nat)}.
-  The triangulation-aware operations are the key inductive bias.
-\end{definition}
-
-\begin{definition}[Structure Module (AlphaFold 2)]
-  \label{layer:structureModule}
-  \lean{Layer.structureModule}
-  \leanok
-  Recurrent Invariant Point Attention + backbone frame update +
-  side-chain $\chi$-angle prediction. \textbf{Weights shared across
-  \texttt{nBlocks} rounds} --- param count does not multiply by
-  \texttt{nBlocks}. Signature:
-  \texttt{structureModule (singleChannels pairChannels nBlocks : Nat)}.
-\end{definition}
-
 \begin{definition}[MobileViT block]
   \label{layer:mobileVitBlock}
   \lean{Layer.mobileVitBlock}
@@ -3906,45 +3849,24 @@ goal is pedagogical shape + parameter accounting, not training runs.
   the transformer proof chapter.
 \end{definition}
 
-\begin{definition}[WaveNet block]
-  \label{layer:waveNetBlock}
-  \lean{Layer.waveNetBlock}
+\begin{definition}[Swin Transformer stage]
+  \label{layer:swinStage}
+  \lean{Layer.swinStage}
   \leanok
-  One stack of \texttt{nLayers} dilated causal residual blocks with
-  doubling dilation rates $2^0, 2^1, \ldots, 2^{\texttt{nLayers}-1}$
-  (van den Oord et al.\ 2016). Each block: dilated 2-tap causal conv
-  $\to$ gated activation $\tanh(\text{filter}) \odot \sigma(\text{gate})$
-  $\to$ 1$\times$1 project back to \texttt{residualCh} (residual path) +
-  1$\times$1 skip projection to \texttt{skipCh}. Skip outputs across
-  blocks are summed into the final head. Signature:
-  \texttt{waveNetBlock (residualCh skipCh nLayers : Nat)}. Output
-  channels are \texttt{skipCh}: bestiary convention picks the skip path
-  as the "forward" output since it's what feeds the final classifier.
+  Windowed multi-head self-attention at fixed spatial resolution (Liu
+  et al.\ 2021). Signature:
+  \texttt{swinStage (dim heads mlpDim windowSize nBlocks : Nat)}. Internal
+  blocks alternate W-MSA and SW-MSA (shifted-window) to let information
+  cross window boundaries.
 \end{definition}
 
-\begin{definition}[Positional encoding]
-  \label{layer:positionalEncoding}
-  \lean{Layer.positionalEncoding}
+\begin{definition}[Patch merging]
+  \label{layer:patchMerging}
+  \lean{Layer.patchMerging}
   \leanok
-  Sinusoidal frequency basis (Vaswani 2017, reused by NeRF 2020):
-  $\gamma(p) = (\sin 2^0 \pi p, \cos 2^0 \pi p, \ldots, \sin 2^{L-1} \pi p, \cos 2^{L-1} \pi p)$.
-  Zero trainable parameters --- it's a deterministic lift of a
-  low-dim coordinate into a high-frequency feature space where an
-  MLP has enough wiggle room to represent sharp details. Output dim
-  $=$ inputDim $\cdot 2 \cdot$ numFrequencies. Signature:
-  \texttt{positionalEncoding (inputDim numFrequencies : Nat)}.
-\end{definition}
-
-\begin{definition}[NeRF MLP core]
-  \label{layer:nerfMLP}
-  \lean{Layer.nerfMLP}
-  \leanok
-  The whole NeRF network (Mildenhall et al.\ 2020) bundled as one
-  primitive: 8 hidden ReLU-FC layers of \texttt{hiddenDim}, mid-skip
-  concatenating $\gamma(x)$ at layer 5, dual output heads
-  (1-dim volume density $\sigma$ + 3-dim RGB via a direction-conditioned
-  branch). Under 600K parameters at the canonical config. Signature:
-  \texttt{nerfMLP (encodedPosDim encodedDirDim hiddenDim : Nat)}.
+  Swin's 2$\times$2 spatial downsample + linear channel projection
+  (\texttt{inDim $\to$ outDim}). Transformer-side analog of a stride-2
+  conv.
 \end{definition}
 
 \begin{definition}[Darknet residual block]
@@ -3989,6 +3911,45 @@ goal is pedagogical shape + parameter accounting, not training runs.
   \texttt{fpnModule (c2 c3 c4 c5 target : Nat)}.
 \end{definition}
 
+\begin{definition}[Transformer decoder (DETR-style)]
+  \label{layer:transformerDecoder}
+  \lean{Layer.transformerDecoder}
+  \leanok
+  \texttt{nBlocks} blocks of self-attention over
+  \texttt{nQueries} learned object queries + cross-attention against an
+  encoder output + FFN. The query embedding is part of the layer's
+  parameters. Signature:
+  \texttt{transformerDecoder (dim heads mlpDim nBlocks nQueries : Nat)}.
+\end{definition}
+
+\begin{definition}[DETR prediction heads]
+  \label{layer:detrHeads}
+  \lean{Layer.detrHeads}
+  \leanok
+  Per-query class head (linear \texttt{dim $\to$ nClasses+1} with the
+  ``no object'' slot) + box head (3-layer MLP to 4 scalars
+  \texttt{(cx, cy, w, h)}). Signature: \texttt{detrHeads (dim nClasses : Nat)}.
+\end{definition}
+
+\begin{definition}[UNet encoder stage]
+  \label{layer:unetDown}
+  \lean{Layer.unetDown}
+  \leanok
+  $2 \times$ \texttt{(conv3$\times$3 + BN + ReLU)} then \texttt{maxPool-2}.
+  Saves its pre-pool activation as a skip for the matching
+  \texttt{unetUp}. Signature: \texttt{unetDown (ic oc : Nat)}.
+\end{definition}
+
+\begin{definition}[UNet decoder stage]
+  \label{layer:unetUp}
+  \lean{Layer.unetUp}
+  \leanok
+  Transposed-conv $2\times$ upsample + concat with matching skip +
+  $2 \times$ \texttt{(conv3$\times$3 + BN + ReLU)}. Signature:
+  \texttt{unetUp (ic oc : Nat)}, where \texttt{oc} is both the output
+  channel count and the expected skip width.
+\end{definition}
+
 \begin{definition}[Atrous Spatial Pyramid Pooling]
   \label{layer:asppModule}
   \lean{Layer.asppModule}
@@ -4003,43 +3964,82 @@ goal is pedagogical shape + parameter accounting, not training runs.
   \texttt{asppModule (ic oc : Nat)}.
 \end{definition}
 
-\begin{definition}[Inception module]
-  \label{layer:inceptionModule}
-  \lean{Layer.inceptionModule}
+\begin{definition}[Mamba block]
+  \label{layer:mambaBlock}
+  \lean{Layer.mambaBlock}
   \leanok
-  The GoogLeNet parallel-branch module (Szegedy et al.\ 2014). Four
-  branches computed in parallel: 1$\times$1 conv (b1 channels); 1$\times$1
-  reduce then 3$\times$3 (b2); 1$\times$1 reduce then 5$\times$5 (b3);
-  3$\times$3 maxPool then 1$\times$1 (b4). Concat along channels for
-  \texttt{b1 + b2 + b3 + b4} outputs. The 1$\times$1 dimension reducers on
-  branches 2 and 3 are the paper's trick --- they make the expensive
-  3$\times$3 and 5$\times$5 convs operate on reduced channel counts.
-  Signature: \texttt{inceptionModule (ic b1 b2reduce b2 b3reduce b3 b4 : Nat)}.
+  Selective state-space block in the S6 formulation (Gu \& Dao 2023).
+  Signature: \texttt{mambaBlock (dim stateSize expand nBlocks : Nat)}.
+  Bundles RMSNorm + linear expand + depthwise 1D conv + SiLU +
+  selective-scan SSM + gated product + output projection, for
+  \texttt{nBlocks} stacked layers. The selective scan is the novel
+  primitive; everything else could be decomposed to existing layers if
+  we cared to unpack the bundle.
 \end{definition}
 
-\begin{definition}[DenseNet dense block]
-  \label{layer:denseBlock}
-  \lean{Layer.denseBlock}
+\begin{definition}[WaveNet block]
+  \label{layer:waveNetBlock}
+  \lean{Layer.waveNetBlock}
   \leanok
-  DenseNet's bundled dense block (Huang et al.\ 2017). \texttt{nLayers}
-  BN-ReLU-1$\times$1-BN-ReLU-3$\times$3 sub-stacks, each adding
-  \texttt{growthRate} channels to the running concatenation of
-  preceding outputs. Input has \texttt{ic} channels; output has
-  \texttt{ic + nLayers $\cdot$ growthRate}. Bundled because each
-  sub-layer reads a growing concat of all preceding sub-layers,
-  which doesn't fit a linear NetSpec at sub-layer granularity.
-  Signature: \texttt{denseBlock (ic growthRate nLayers : Nat)}.
+  One stack of \texttt{nLayers} dilated causal residual blocks with
+  doubling dilation rates $2^0, 2^1, \ldots, 2^{\texttt{nLayers}-1}$
+  (van den Oord et al.\ 2016). Each block: dilated 2-tap causal conv
+  $\to$ gated activation $\tanh(\text{filter}) \odot \sigma(\text{gate})$
+  $\to$ 1$\times$1 project back to \texttt{residualCh} (residual path) +
+  1$\times$1 skip projection to \texttt{skipCh}. Skip outputs across
+  blocks are summed into the final head. Signature:
+  \texttt{waveNetBlock (residualCh skipCh nLayers : Nat)}. Output
+  channels are \texttt{skipCh}: bestiary convention picks the skip path
+  as the "forward" output since it's what feeds the final classifier.
 \end{definition}
 
-\begin{definition}[DenseNet transition layer]
-  \label{layer:transitionLayer}
-  \lean{Layer.transitionLayer}
+\begin{definition}[Positional encoding]
+  \label{layer:positionalEncoding}
+  \lean{Layer.positionalEncoding}
   \leanok
-  Inter-block downsample for DenseNet. BN + 1$\times$1 conv
-  (\texttt{ic $\to$ oc}) + 2$\times$2 average-pool stride 2.
-  Halves spatial resolution and (typically) halves channel count
-  via the 1$\times$1 conv to compress feature reuse between dense
-  blocks. Signature: \texttt{transitionLayer (ic oc : Nat)}.
+  Sinusoidal frequency basis (Vaswani 2017, reused by NeRF 2020):
+  $\gamma(p) = (\sin 2^0 \pi p, \cos 2^0 \pi p, \ldots, \sin 2^{L-1} \pi p, \cos 2^{L-1} \pi p)$.
+  Zero trainable parameters --- it's a deterministic lift of a
+  low-dim coordinate into a high-frequency feature space where an
+  MLP has enough wiggle room to represent sharp details. Output dim
+  $=$ inputDim $\cdot 2 \cdot$ numFrequencies. Signature:
+  \texttt{positionalEncoding (inputDim numFrequencies : Nat)}.
+\end{definition}
+
+\begin{definition}[NeRF MLP core]
+  \label{layer:nerfMLP}
+  \lean{Layer.nerfMLP}
+  \leanok
+  The whole NeRF network (Mildenhall et al.\ 2020) bundled as one
+  primitive: 8 hidden ReLU-FC layers of \texttt{hiddenDim}, mid-skip
+  concatenating $\gamma(x)$ at layer 5, dual output heads
+  (1-dim volume density $\sigma$ + 3-dim RGB via a direction-conditioned
+  branch). Under 600K parameters at the canonical config. Signature:
+  \texttt{nerfMLP (encodedPosDim encodedDirDim hiddenDim : Nat)}.
+\end{definition}
+
+\begin{definition}[Evoformer block (AlphaFold 2)]
+  \label{layer:evoformerBlock}
+  \lean{Layer.evoformerBlock}
+  \leanok
+  Dual-representation (MSA + pair) joint update: MSA row-attention with
+  pair bias + MSA column-attention + MSA transition +
+  outer-product-mean ($\to$ pair) + triangle multiplicative (outgoing,
+  incoming) + triangle self-attention (starting node, ending node) +
+  pair transition. Signature:
+  \texttt{evoformerBlock (msaChannels pairChannels nBlocks : Nat)}.
+  The triangulation-aware operations are the key inductive bias.
+\end{definition}
+
+\begin{definition}[Structure Module (AlphaFold 2)]
+  \label{layer:structureModule}
+  \lean{Layer.structureModule}
+  \leanok
+  Recurrent Invariant Point Attention + backbone frame update +
+  side-chain $\chi$-angle prediction. \textbf{Weights shared across
+  \texttt{nBlocks} rounds} --- param count does not multiply by
+  \texttt{nBlocks}. Signature:
+  \texttt{structureModule (singleChannels pairChannels nBlocks : Nat)}.
 \end{definition}
 
 \section{Bestiary entries}
