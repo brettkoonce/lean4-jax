@@ -4373,15 +4373,31 @@ def squeezeNet1_1 : NetSpec where
   ]
 \end{verbatim}
 
-\subsubsection*{Inception v1 / v3 / v4 (\texttt{Bestiary/Inception.lean})}
-\emph{One} new primitive (\S~\ref{layer:inceptionModule}). GoogLeNet's parallel multi-scale
-conv-branches concatenated along channels (Szegedy et al.\ 2014,
-\href{https://arxiv.org/abs/1409.4842}{arXiv:1409.4842}); the
-1$\times$1 dimension reducer was invented here. Variants: GoogLeNet (7M, paper-exact),
-Inception-v3 (23.8M, paper 23M), Inception-v4 (33M, paper 42M ---
-a bit low because our unified module approximates v3/v4's richer
-module catalog). Auxiliary classifiers (v1) and asymmetric
-factorizations (v3/v4) are bestiary omissions.
+\subsubsection*{GoogLeNet / Inception v1 (\texttt{Bestiary/Inception.lean})}
+\emph{One} new primitive (\S~\ref{layer:inceptionModule}). The
+parallel-branch architecture that won ImageNet 2014 (Szegedy et
+al.\ 2014, \href{https://arxiv.org/abs/1409.4842}{arXiv:1409.4842}).
+Three durable contributions, each still standard kit:
+
+\begin{itemize}
+  \item \textbf{1$\times$1 conv as dimension reducer} --- placed
+    before the expensive 3$\times$3 / 5$\times$5 branches, it
+    keeps parallel-branch FLOPs tractable. This is the move every
+    later efficiency-CNN family (MobileNet, EfficientNet, ResNet
+    bottleneck, ShuffleNet) builds on.
+  \item \textbf{Global average pool replaces the FC head}
+    (idea cited from Network-in-Network 2013, popularized here).
+    GoogLeNet's classifier is one \texttt{globalAvgPool $\to$ dense},
+    not VGG's three-stack of 4096-wide FCs --- the same head
+    pattern Chapter~\ref{chap:residual} onward inherits.
+  \item \textbf{Auxiliary classifiers} branched off the middle of
+    the network at training time, providing intermediate gradient
+    signal. A precursor to deep supervision; the bestiary omits
+    them for spec simplicity.
+\end{itemize}
+
+GoogLeNet ships at 7M parameters --- $\sim$$20\times$ smaller
+than VGG-16 at competitive accuracy on ImageNet 2014.
 
 \begin{verbatim}
 def googLeNet : NetSpec where
@@ -4413,6 +4429,39 @@ def googLeNet : NetSpec where
     .dense 1024 1000 .identity
   ]
 \end{verbatim}
+
+\subsubsection*{Inception v3 / v4 (\texttt{Bestiary/Inception.lean})}
+\emph{Zero} new primitives --- reuses
+\S~\ref{layer:inceptionModule}. Inception v3 (Szegedy et al.\ 2015,
+\href{https://arxiv.org/abs/1512.00567}{arXiv:1512.00567}) and v4
+(2016, \href{https://arxiv.org/abs/1602.07261}{arXiv:1602.07261})
+are recipe-and-refinement papers more than architecture papers.
+Three contributions worth pulling out from v3:
+
+\begin{itemize}
+  \item \textbf{Label smoothing}: the cross-entropy target is
+    $0.9$ on the true class and $0.1 / (\mathrm{nClasses} - 1)$
+    elsewhere instead of a hard one-hot. Prevents the softmax from
+    collapsing all probability onto the argmax, which improves
+    calibration and ImageNet accuracy. Now standard in every
+    modern recipe (DeiT, ConvNeXt, our own
+    \texttt{TrainConfig.labelSmoothing}).
+  \item \textbf{Asymmetric factorizations}: a 7$\times$1 followed
+    by a 1$\times$7 conv replaces a single 7$\times$7 with the
+    same receptive field at $\sim$$1/3.5$ the FLOPs. Variant
+    blocks include 1$\times$3 + 3$\times$1 pairs.
+  \item \textbf{BN-Aux} on the auxiliary classifier branch ---
+    the auxiliary classifier of v1 was rebranded as a regularizer
+    rather than a gradient-injection mechanism.
+\end{itemize}
+
+Inception v4 layers more refinement on top: a wider initial stem
+(stem-A / stem-B / stem-C blocks), three Inception module variants
+specialized per spatial resolution, and a residual variant
+(Inception-ResNet) tested in the same paper. Variants here:
+Inception-v3 (23.8M, paper 23M), Inception-v4 (33M, paper 42M ---
+a bit low because our unified \texttt{.inceptionModule} primitive
+approximates v3/v4's richer module catalog).
 
 \subsubsection*{Xception (\texttt{Bestiary/Xception.lean})}
 \emph{One} new primitive (\texttt{.separableConv}).
