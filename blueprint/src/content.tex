@@ -3702,22 +3702,68 @@ architectures off the shelf. Stamp collecting, as Rutherford would say.
 \chapter{Bestiary of Architectures}
 \label{chap:bestiary}
 
-The proof chapters above cover every layer shipped in Part 1's trainers
-(MLP, CNN, ResNet, MobileNet, EfficientNet, ViT). The \textbf{bestiary} is
-the book's Part 2: a catalogue of famous architectures expressed as pure
-\texttt{NetSpec} values --- no training runs, no VJP commitments, just
+Part 1 introduced a small set of \texttt{NetSpec} primitives across
+chapters 2--10 and proved each one's backward pass:
+
+\begin{itemize}
+  \item Atomic ops: \texttt{.dense}, \texttt{.flatten},
+    \texttt{.conv2d}, \texttt{.maxPool}, \texttt{.convBn},
+    \texttt{.globalAvgPool}, plus the \texttt{Activation} enum
+    (Ch 3--6).
+  \item \texttt{.residualBlock} (Ch 6, ResNet-34).
+  \item \texttt{.invertedResidual} (Ch 7, MobileNet V2).
+  \item \texttt{.mbConv} with optional Squeeze-and-Excitation
+    (Ch 8, EfficientNet-B0).
+  \item \texttt{.convNextStage} + \texttt{.convNextDownsample}
+    (Ch 9, ConvNeXt-T).
+  \item \texttt{.patchEmbed} + \texttt{.transformerEncoder}
+    (Ch 10, ViT-Tiny).
+\end{itemize}
+
+Call this the \emph{primary-sequence toolbox} --- everything a
+reader has internalized after finishing Part 1. The \textbf{bestiary}
+is Part 2: a catalogue of famous architectures expressed as pure
+\texttt{NetSpec} values, no training runs, no VJP commitments, just
 ``here's what this architecture looks like in $\sim$15 lines of Lean.''
 
-Each bestiary entry introduces zero or one new \texttt{Layer} constructor
-for its architectural idiom. The primitive is bundled at the right
-abstraction level (a single Transformer encoder block, a whole Mamba
-block, a stage of Swin attention, etc.) --- formalizing every sub-op of
-a modern architecture would be an asymptote we don't approach.
+\paragraph*{What ``\(N\) new primitives'' means.}
+Every bestiary entry leads with how many new \texttt{Layer}
+constructors it asks the reader to absorb \emph{on top of the
+primary-sequence toolbox}.
+
+\begin{itemize}
+  \item \emph{Zero new primitives} means the architecture composes
+    entirely from things you already know --- VGG (just $3\times 3$
+    conv stacks), AlphaZero (\texttt{convBn} + \texttt{residualBlock}),
+    Highway Networks (two parallel \texttt{dense} paths plus a blend
+    that's just product rule + additive fan-in from Ch 2). The
+    architecture is conceptually a free read.
+  \item \emph{One new primitive} means one bundled architectural
+    idiom that wasn't in Part 1 --- \texttt{.bottleneckBlock} for
+    deeper ResNets, \texttt{.fireModule} for SqueezeNet,
+    \texttt{.mambaBlock} for Mamba, etc. The primitive is bundled
+    at the right abstraction level (a whole Mamba block, a stage of
+    Swin attention) so reading it is one chunk, not twenty
+    sub-ops.
+  \item \emph{Two or three new primitives} are reserved for
+    architectures that genuinely combine multiple novel idioms ---
+    DETR (\texttt{.transformerDecoder} + \texttt{.detrHeads}),
+    DenseNet (\texttt{.denseBlock} + \texttt{.transitionLayer}),
+    Stable Diffusion (\texttt{.unetDown} + \texttt{.unetUp} +
+    \texttt{.transformerDecoder}). At most three; if you'd need
+    more, the architecture probably warranted its own chapter.
+\end{itemize}
+
+This count is calibrated to the \emph{reader} (what's new vs.\ what
+they've seen), not to the codebase (where some bestiary primitives
+were drafted earlier and already sit in \texttt{Types.lean}).
+Formalizing every sub-op of every modern architecture would be an
+asymptote we don't approach.
 
 \section{Bestiary-only \texttt{Layer} primitives}
 \label{sec:bestiary_primitives}
 
-Twenty-two new \texttt{Layer} constructors were added by the bestiary chapters.
+Twenty-four new \texttt{Layer} constructors were added by the bestiary chapters.
 None are codegen-backed (MlirCodegen emits \texttt{// UNSUPPORTED}); the
 goal is pedagogical shape + parameter accounting, not training runs.
 
@@ -3990,6 +4036,31 @@ goal is pedagogical shape + parameter accounting, not training runs.
   Signature: \texttt{inceptionModule (ic b1 b2reduce b2 b3reduce b3 b4 : Nat)}.
 \end{definition}
 
+\begin{definition}[DenseNet dense block]
+  \label{layer:denseBlock}
+  \lean{Layer.denseBlock}
+  \leanok
+  DenseNet's bundled dense block (Huang et al.\ 2017). \texttt{nLayers}
+  BN-ReLU-1$\times$1-BN-ReLU-3$\times$3 sub-stacks, each adding
+  \texttt{growthRate} channels to the running concatenation of
+  preceding outputs. Input has \texttt{ic} channels; output has
+  \texttt{ic + nLayers $\cdot$ growthRate}. Bundled because each
+  sub-layer reads a growing concat of all preceding sub-layers,
+  which doesn't fit a linear NetSpec at sub-layer granularity.
+  Signature: \texttt{denseBlock (ic growthRate nLayers : Nat)}.
+\end{definition}
+
+\begin{definition}[DenseNet transition layer]
+  \label{layer:transitionLayer}
+  \lean{Layer.transitionLayer}
+  \leanok
+  Inter-block downsample for DenseNet. BN + 1$\times$1 conv
+  (\texttt{ic $\to$ oc}) + 2$\times$2 average-pool stride 2.
+  Halves spatial resolution and (typically) halves channel count
+  via the 1$\times$1 conv to compress feature reuse between dense
+  blocks. Signature: \texttt{transitionLayer (ic oc : Nat)}.
+\end{definition}
+
 \section{Bestiary entries}
 \label{sec:bestiary_entries}
 
@@ -4176,10 +4247,10 @@ parameters. ResNet won by simplifying away $T$, but the underlying
 calculus is identical --- product + additive fan-in either way.
 
 \subsubsection*{ResNet (\texttt{Bestiary/ResNet.lean})}
-\emph{Zero} new primitives --- the \texttt{.bottleneckBlock}
-constructor is already in \texttt{Types.lean}. ResNet-34 (the basic-
-block variant) is in Chapter~\ref{chap:residual} of the book; this
-entry covers the deeper bottleneck variants
+\emph{One} new primitive (\texttt{.bottleneckBlock}). Chapter
+\ref{chap:residual} introduces residual networks via the basic-
+block variant ResNet-34; this entry covers the deeper bottleneck
+variants
 \textbf{ResNet-50 / ResNet-101 / ResNet-152} (He et al.\ 2015,
 \href{https://arxiv.org/abs/1512.03385}{arXiv:1512.03385}). Each
 bottleneck block is $1\times 1$ reduce $\to$ $3\times 3$ work
@@ -4276,8 +4347,7 @@ masks). The dropout-free WRN variant is also reported in the
 paper and lands within $\sim$0.3\% of the dropout one on CIFAR-10.
 
 \subsubsection*{SqueezeNet (\texttt{Bestiary/SqueezeNet.lean})}
-\emph{Zero} new primitives --- the \texttt{.fireModule} constructor was
-already in \texttt{Types.lean}. AlexNet-level accuracy in 1.25M params
+\emph{One} new primitive (\texttt{.fireModule}). AlexNet-level accuracy in 1.25M params
 via the fire module (Iandola et al.\ 2016,
 \href{https://arxiv.org/abs/1602.07360}{arXiv:1602.07360}): squeeze 1$\times$1 conv followed by parallel
 expand 1$\times$1 + 3$\times$3 convs concatenated. The early
@@ -4363,7 +4433,7 @@ def googLeNet : NetSpec where
 \end{verbatim}
 
 \subsubsection*{Xception (\texttt{Bestiary/Xception.lean})}
-\emph{Zero} new primitives --- reuses existing \texttt{.separableConv}.
+\emph{One} new primitive (\texttt{.separableConv}).
 ``Extreme Inception'' (Chollet 2017,
 \href{https://arxiv.org/abs/1610.02357}{arXiv:1610.02357}): every conv
 is a depthwise-separable conv. The
@@ -4641,7 +4711,7 @@ def yolo : NetSpec where
 \end{verbatim}
 
 \subsubsection*{Mask R-CNN (\texttt{Bestiary/MaskRCNN.lean})}
-\emph{One} new primitive (\S~\ref{layer:fpnModule}). The canonical two-stage detector +
+\emph{Two} new primitives (\texttt{.bottleneckBlock} + \S~\ref{layer:fpnModule}). The canonical two-stage detector +
 instance segmentation reference (He et al.\ 2017,
 \href{https://arxiv.org/abs/1703.06870}{arXiv:1703.06870}). Five architectural
 pieces: ResNet-FPN backbone, RPN for anchor-box proposals, ROI-Align
@@ -4777,7 +4847,7 @@ def deeplabv3plusResnet101 : NetSpec where
 \end{verbatim}
 
 \subsubsection*{SegFormer (\texttt{Bestiary/SegFormer.lean})}
-\emph{Zero} new primitives. Semantic segmentation (Xie et al.\ 2021,
+\emph{One} new primitive (\S~\ref{layer:patchMerging}). Semantic segmentation (Xie et al.\ 2021,
 \href{https://arxiv.org/abs/2105.15203}{arXiv:2105.15203}) via a
 hierarchical transformer pyramid (MiT encoder: 4 stages of
 \texttt{.transformerEncoder} glued by \texttt{.patchMerging}) and a
@@ -4817,7 +4887,7 @@ def segformerB2 : NetSpec where
 \end{verbatim}
 
 \subsubsection*{SAM (\texttt{Bestiary/SAM.lean})}
-\emph{Zero} new primitives. Promptable segmentation (Kirillov et
+\emph{One} new primitive (\S~\ref{layer:transformerDecoder}). Promptable segmentation (Kirillov et
 al.\ 2023, \href{https://arxiv.org/abs/2304.02643}{arXiv:2304.02643}): a ViT image encoder runs once per image, a tiny prompt
 encoder tokenizes clicks / boxes / masks, a lightweight transformer
 mask decoder cross-attends between image tokens, prompt tokens, and
@@ -4850,7 +4920,7 @@ segmentation (UNet again), but the training objective is generative:
 denoise a random input until it becomes a plausible sample.
 
 \subsubsection*{VAE (\texttt{Bestiary/VAE.lean})}
-\emph{Zero} new primitives. The classical variational autoencoder
+\emph{One} new primitive (\S~\ref{layer:unetUp}). The classical variational autoencoder
 (Kingma \& Welling 2013, \href{https://arxiv.org/abs/1312.6114}{arXiv:1312.6114}): encoder outputs
 $(\mu, \log \sigma^2)$ (represented as a single tensor with doubled
 final width), the reparameterization trick
@@ -4912,7 +4982,7 @@ def dcganGenerator : NetSpec where
 \end{verbatim}
 
 \subsubsection*{Pix2Pix (\texttt{Bestiary/Pix2Pix.lean})}
-\emph{Zero} new primitives. The paired-data ancestor of CycleGAN,
+\emph{Two} new primitives (\S~\ref{layer:unetDown}, \S~\ref{layer:unetUp}). The paired-data ancestor of CycleGAN,
 from the same lab 9 months earlier (Isola et al.\ 2017,
 \href{https://arxiv.org/abs/1611.07004}{arXiv:1611.07004}). UNet
 generator (8 levels, $\sim$70M approx vs paper $\sim$54M --- our
@@ -4979,7 +5049,7 @@ def cycleganGenerator : NetSpec where
 \end{verbatim}
 
 \subsubsection*{DDPM (\texttt{Bestiary/Diffusion.lean})}
-\emph{Zero} new primitives. The denoiser in Ho et al.'s DDPM (2020,
+\emph{Three} new primitives (\S~\ref{layer:unetDown}, \S~\ref{layer:unetUp}, \S~\ref{layer:positionalEncoding}). The denoiser in Ho et al.'s DDPM (2020,
 \href{https://arxiv.org/abs/2006.11239}{arXiv:2006.11239}) is a UNet
 --- literally the same \S~\ref{layer:unetDown} and
 \S~\ref{layer:unetUp} Ronneberger shipped in 2015. Everything ``diffusion'' lives in the training loop:
@@ -5016,7 +5086,7 @@ def ddpmCifar : NetSpec where
 \end{verbatim}
 
 \subsubsection*{Stable Diffusion (\texttt{Bestiary/StableDiffusion.lean})}
-\emph{Zero} new primitives. The paper that made generative image
+\emph{Three} new primitives (\S~\ref{layer:unetDown}, \S~\ref{layer:unetUp}, \S~\ref{layer:transformerDecoder}). The paper that made generative image
 models consumer-reachable (Rombach et al.\ 2022,
 \href{https://arxiv.org/abs/2112.10752}{arXiv:2112.10752}). Two architectural
 moves over DDPM, each individually small: (a) \emph{latent diffusion}
@@ -5310,7 +5380,7 @@ def gpt2Small : NetSpec where
 \end{verbatim}
 
 \subsubsection*{QANet (\texttt{Bestiary/QANet.lean})}
-\emph{Zero} new primitives. The 2018 reading-comprehension
+\emph{One} new primitive (\texttt{.separableConv}). The 2018 reading-comprehension
 architecture (Yu et al.\ 2018,
 \href{https://arxiv.org/abs/1804.09541}{arXiv:1804.09541}) that killed
 the BiLSTM for SQuAD-style
@@ -5410,7 +5480,7 @@ def waveNet : NetSpec where
 \end{verbatim}
 
 \subsubsection*{Whisper (\texttt{Bestiary/Whisper.lean})}
-\emph{Zero} new primitives. Encoder-decoder transformer over log-mel
+\emph{One} new primitive (\S~\ref{layer:transformerDecoder}). Encoder-decoder transformer over log-mel
 spectrograms (Radford et al.\ 2022,
 \href{https://arxiv.org/abs/2212.04356}{arXiv:2212.04356}). Encoder is
 \texttt{.transformerEncoder} on the 1500 post-stem audio tokens;
