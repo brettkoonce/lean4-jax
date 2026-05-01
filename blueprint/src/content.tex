@@ -1016,9 +1016,11 @@ stay the same as for ResNet.
 \texttt{elemwiseProduct\_has\_vjp} for the SE gate. Still no matrix
 composition.
 
-\textbf{Target: LayerNorm + GELU (Ch 9).} Same Ch 2 subset as
-EfficientNet. Ch 9 is self-contained in its own theorems and doesn't
-reach back into the tensor-calculus chapter at all.
+\textbf{Target: ConvNeXt (Ch 9).} Same Ch 2 subset as
+EfficientNet. Ch 9 introduces LayerNorm and GELU as new primitives
+but their VJPs are self-contained --- the proofs reuse BN's three-term
+template (Ch 5) for LayerNorm and \(\fderiv\) directly for GELU,
+neither of which reaches back into the tensor-calculus chapter.
 
 \textbf{Target: Attention / ViT (Ch 10).} You finally need the
 2D-matrix half of this chapter: the full \texttt{pdivMat} /
