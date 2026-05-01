@@ -14,16 +14,27 @@ in Lean.
 Companion code for the upcoming book *Verified Deep Learning with Lean4*
 (follow-up to [Convolutional Neural Networks with Swift for TensorFlow](https://doi.org/10.1007/978-1-4842-6168-2), Apress).
 
-**Current version: `v0.5.5`** — Swish/SiLU lands as a first-class
-activation (forward + backward + proved `swish_has_vjp_correct`),
-unlocking an EfficientNet-B0 GELU-vs-ReLU activation ablation pair.
-The independent-kernel comparator re-check now covers **38 theorems**
-(up from 27), via public `*_has_vjp_correct` wrappers across MLP,
-CNN, Residual, Depthwise, SE, LayerNorm, and Attention. Plus Ch 2
-gets a "Why VJPs, not Jacobians?" bridge, a "What about non-smooth
-points?" subsection explaining the canonical pdiv-derived witness
-pattern, and a three-pillar TikZ spine diagram (R34 / EfficientNet /
-ViT).
+**Current version: `v0.5.6`** — Chapter 9 lands its ConvNeXt-T
+worked example (84.94% val on Imagenette, paper-faithful recipe);
+Chapter 10 gets a Data Augmentation section with a 9-row ViT
+recipe ablation table — CutMix is the load-bearing knob at 9.5K
+images, and stacking RandAugment + Random Erasing on top of it
+*hurts* val accuracy. Bestiary gets paper-exact entries for VGG,
+ResNet-50/101/152, WRN, and DenseNet, plus the "N new primitives"
+claim reframed around the Ch 2-10 reader's toolbox (what's free)
+rather than the codebase (what's already in `Types.lean`). Found
+and fixed a long-standing eval-pipeline bug along the way:
+`centerCrop` was running on already-224 val data, reading past
+per-image bounds and making heavy-aug runs appear to collapse.
+New `LEAN_MLIR_EVAL_ONLY=1` mode re-evals saved checkpoints in
+~5 sec each.
+
+The `v0.5.5` headline still holds: Swish/SiLU as a first-class
+activation (forward + backward + proved `swish_has_vjp_correct`)
+plus the independent-kernel comparator re-check covering 38
+theorems via public `*_has_vjp_correct` wrappers, and Ch 2's
+"Why VJPs, not Jacobians?" bridge + canonical-pdiv witness
+explainer + three-pillar TikZ spine diagram.
 
 The `v0.5.4` headline still holds: MNIST MLP *and* CNN training
 traces agree at the **float32 ULP floor** between two independent
@@ -395,7 +406,7 @@ ROCm 7.2.0 / gfx1100.
   author  = {Brett Koonce and Claude Code},
   title   = {Verified Deep Learning with Lean4: Formal Backpropagation from MLP to Attention, via MLIR},
   url     = {https://github.com/brettkoonce/lean4-mlir},
-  version = {0.5.5},
+  version = {0.5.6},
   year    = {2026},
 }
 ```
