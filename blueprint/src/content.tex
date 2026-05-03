@@ -651,6 +651,75 @@ Mechanical; see \leandocref{Proofs.vjp3\_comp}.
 Mechanical; see \leandocref{Proofs.biPath3\_has\_vjp}.
 \end{proof}
 
+\section*{The chapter in one example: MLP gradients}
+
+Take a one-hidden-layer MLP with cross-entropy loss:
+\[
+  \ell(W_1, b_1, W_2, b_2;\, x, t) =
+  \mathrm{CE}\bigl(\mathrm{softmax}(W_2 \cdot \mathrm{ReLU}(W_1 x + b_1) + b_2),\ t\bigr).
+\]
+
+Computing \(\nabla \ell\) with respect to all four parameters
+requires exactly the theorems above. Each step below names the
+theorem (or foreshadows the Ch 3 theorem) that makes that step
+formally correct.
+
+\paragraph{Step 1 --- the loss is a composition.}
+\(\ell = \mathrm{CE} \circ \mathrm{softmax} \circ \mathrm{dense}_2 \circ
+\mathrm{ReLU} \circ \mathrm{dense}_1\). Gradient through a composition
+is the chain rule (Theorem~\ref{ax:pdiv_comp}), applied at each
+arrow. The backward pass walks this chain right-to-left, accumulating
+gradients at each layer's parameters along the way.
+
+\paragraph{Step 2 --- softmax cross-entropy.}
+The gradient of CE w.r.t. pre-softmax logits \(z\) is the closed form
+\(dz = \mathrm{softmax}(z) - t\)
+(Theorem~\ref{ax:softmaxCE_grad}, proved in Ch 3 next to softmax itself).
+This is the starting upstream gradient; everything below propagates it backward.
+
+\paragraph{Step 3 --- through \(\mathrm{dense}_2\), gradient w.r.t. \(b_2\).}
+The map \(b_2 \mapsto W_2 h + b_2\) is the identity in \(b_2\)
+(with the rest held constant): identity Jacobian
+(Theorem~\ref{ax:pdiv_id}), VJP passes the gradient through unchanged
+(Theorem~\ref{thm:identity_has_vjp}). So \(\nabla_{b_2} \ell = dz\).
+
+\paragraph{Step 4 --- gradient w.r.t. \(W_2\).}
+The map \(W_2 \mapsto W_2 h\) is matmul with the right factor \(h\)
+held constant: Jacobian by Theorem~\ref{thm:pdivMat_matmul_right_const},
+VJP is the outer product (Theorem~\ref{thm:matmul_right_const_has_vjp}):
+\(\nabla_{W_2} \ell = dz \otimes h\).
+
+\paragraph{Step 5 --- gradient w.r.t. \(h\) (the ReLU activation).}
+The map \(h \mapsto W_2 h\) is matmul with the left factor \(W_2\)
+held constant: Jacobian by Theorem~\ref{thm:pdivMat_matmul_left_const},
+VJP is matmul by transpose (Theorem~\ref{thm:matmul_left_const_has_vjp}):
+\(dh = W_2^T\, dz\).
+
+\paragraph{Step 6 --- through the ReLU.}
+The ReLU VJP is the gated-gradient
+(Theorem~\ref{thm:relu_has_vjp}, formalized in Ch 3):
+\(dh_{\text{pre}} = dh \odot \mathbb{1}_{h_{\text{pre}} > 0}\).
+
+\paragraph{Steps 7--8 --- through \(\mathrm{dense}_1\).}
+Symmetric to Steps 3--4. Identity VJP gives
+\(\nabla_{b_1} \ell = dh_{\text{pre}}\); matmul-right-const VJP
+gives \(\nabla_{W_1} \ell = dh_{\text{pre}} \otimes x\).
+
+\paragraph{What we just used.}
+Eight steps, eight theorems. Six from this chapter (chain rule,
+identity Jacobian and VJP, matmul (left- and right-constant)
+Jacobians and VJPs); two foreshadowed for Ch 3 (softmax CE, ReLU
+VJP). No new mathematical machinery is needed for the entire MLP
+backward pass.
+
+Every architecture in Part 2 extends this template the same way:
+ResNet adds additive fan-in (Theorem~\ref{thm:biPath_has_vjp}) for
+the residual skip; ConvNeXt replaces ReLU with GELU (one new
+operator VJP); ViT adds attention's softmax-VJP chain (two new
+operator VJPs). The structural rules above \emph{never change};
+later chapters add operator-specific theorems and compose them
+through the chain rule we just proved.
+
 \section*{How to read this book}
 
 Every chapter after this one follows the same pattern:
