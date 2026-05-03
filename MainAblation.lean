@@ -662,6 +662,15 @@ def convNextTinyConfig : TrainConfig where
   augment      := true
   labelSmoothing := 0.1
 
+-- CutMix on ConvNeXt-T (alpha=1.0, the paper default). Tests whether the
+-- DeiT/ConvNeXt aug pack lifts a paper-architecture beyond bare base.
+def convNextTinyCutmixConfig : TrainConfig :=
+  { convNextTinyConfig with useCutmix := true, cutmixAlpha := 1.0 }
+
+-- RandAugment on ConvNeXt-T (N=2, M=9 — the paper recipe default).
+def convNextTinyRandAugConfig : TrainConfig :=
+  { convNextTinyConfig with useRandAugment := true, randAugmentN := 2, randAugmentM := 9.0 }
+
 -- Mini CIFAR-sized ConvNeXt: one stage at 32 channels and one at 64.
 -- Same primitives, fast to compile, useful for the activation ablation
 -- on CIFAR-10 if Imagenette compute isn't available.
@@ -873,7 +882,9 @@ def ablations : List (String × AblationRun) := [
   -- Chapter 9: ConvNeXt-Tiny activation ablation (GELU vs ReLU, both
   -- with LN). The full paper recipe on Imagenette (224×224); a CIFAR
   -- "mini" pair at 32×32 doubles as a fast-compile smoke variant.
-  ("convnext-tiny-gelu",    ⟨convNextTinyGeluSpec,   convNextTinyConfig, .imagenette, "data/imagenette"⟩),
+  ("convnext-tiny-gelu",         ⟨convNextTinyGeluSpec, convNextTinyConfig,         .imagenette, "data/imagenette"⟩),
+  ("convnext-tiny-gelu-cutmix",  ⟨convNextTinyGeluSpec, convNextTinyCutmixConfig,   .imagenette, "data/imagenette"⟩),
+  ("convnext-tiny-gelu-randaug", ⟨convNextTinyGeluSpec, convNextTinyRandAugConfig,  .imagenette, "data/imagenette"⟩),
   ("convnext-tiny-relu",    ⟨convNextTinyReluSpec,   convNextTinyConfig, .imagenette, "data/imagenette"⟩),
   ("convnext-tiny-bn-gelu", ⟨convNextTinyBnGeluSpec, convNextTinyConfig, .imagenette, "data/imagenette"⟩),
   ("convnext-tiny-bn-relu", ⟨convNextTinyBnReluSpec, convNextTinyConfig, .imagenette, "data/imagenette"⟩),

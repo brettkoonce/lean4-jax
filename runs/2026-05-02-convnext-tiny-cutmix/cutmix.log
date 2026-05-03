@@ -1,0 +1,630 @@
+⚠ [2/602] Replayed LeanMlir.Spec
+warning: LeanMlir/Spec.lean:26:35: unused variable `stride`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+warning: LeanMlir/Spec.lean:38:27: unused variable `stride`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+warning: LeanMlir/Spec.lean:61:32: unused variable `stride`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+warning: LeanMlir/Spec.lean:75:22: unused variable `stride`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+⚠ [5/602] Replayed LeanMlir.MlirCodegen
+warning: LeanMlir/MlirCodegen.lean:1700:15: unused variable `size`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+warning: LeanMlir/MlirCodegen.lean:2681:6: unused variable `spatialN`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+warning: LeanMlir/MlirCodegen.lean:4750:14: unused variable `bhwTy`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+warning: LeanMlir/MlirCodegen.lean:4946:14: unused variable `bhwTy`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+warning: LeanMlir/MlirCodegen.lean:5352:14: unused variable `ic`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+warning: LeanMlir/MlirCodegen.lean:5352:20: unused variable `kSize`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+warning: LeanMlir/MlirCodegen.lean:5361:13: unused variable `fanIn`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+warning: LeanMlir/MlirCodegen.lean:5368:14: unused variable `ic`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+warning: LeanMlir/MlirCodegen.lean:5368:20: unused variable `kSize`
+
+Note: This linter can be disabled with `set_option linter.unusedVariables false`
+⚠ [7/602] Replayed LeanMlir.Train
+warning: LeanMlir/Train.lean:73:14: `String.trim` has been deprecated: Use `String.trimAscii` instead
+
+Note: The updated constant has a different type:
+  String → String.Slice
+instead of
+  String → String
+⚠ [1948/2129] Replayed LeanMlir.Proofs.Tensor
+warning: LeanMlir/Proofs/Tensor.lean:1645:15: This simp argument is unused:
+  eq_self_iff_true
+
+Hint: Omit it from the simp argument list.
+  simp only [̵e̵q̵_̵s̵e̵l̵f̵_̵i̵f̵f̵_̵t̵r̵u̵e̵,̵ ̵i̵t̵e̵_̵t̵r̵u̵e̵]̵[̲i̲t̲e̲_̲t̲r̲u̲e̲]̲
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+warning: LeanMlir/Proofs/Tensor.lean:1647:15: This simp argument is unused:
+  eq_self_iff_true
+
+Hint: Omit it from the simp argument list.
+  simp only [̵e̵q̵_̵s̵e̵l̵f̵_̵i̵f̵f̵_̵t̵r̵u̵e̵,̵ ̵i̵t̵e̵_̵t̵r̵u̵e̵]̵[̲i̲t̲e̲_̲t̲r̲u̲e̲]̲
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+⚠ [2115/2129] Replayed LeanMlir.Proofs.BatchNorm
+warning: LeanMlir/Proofs/BatchNorm.lean:711:12: This simp argument is unused:
+  Finset.sum_ite_eq'
+
+Hint: Omit it from the simp argument list.
+  simp [̵F̵i̵n̵s̵e̵t̵.̵s̵u̵m̵_̵i̵t̵e̵_̵e̵q̵'̵,̵ ̵F̵i̵n̵s̵e̵t̵.̵m̵e̵m̵_̵u̵n̵i̵v̵]̵[̲F̲i̲n̲s̲e̲t̲.̲m̲e̲m̲_̲u̲n̲i̲v̲]̲
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+⚠ [2182/2189] Replayed LeanMlir.Proofs.LayerNorm
+warning: LeanMlir/Proofs/LayerNorm.lean:203:15: This simp argument is unused:
+  basisVec_apply
+
+Hint: Omit it from the simp argument list.
+  simp only [̵b̵a̵s̵i̵s̵V̵e̵c̵_̵a̵p̵p̵l̵y̵,̵ ̵i̵f̵_̵p̵o̵s̵[̲i̲f̲_̲p̲o̲s̲ rfl, one_mul]
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+warning: LeanMlir/Proofs/LayerNorm.lean:324:15: This simp argument is unused:
+  basisVec_apply
+
+Hint: Omit it from the simp argument list.
+  simp only [̵b̵a̵s̵i̵s̵V̵e̵c̵_̵a̵p̵p̵l̵y̵,̵ ̵i̵f̵_̵p̵o̵s̵[̲i̲f̲_̲p̲o̲s̲ rfl, one_mul]
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+⚠ [2184/2189] Replayed LeanMlir.Proofs.Attention
+warning: LeanMlir/Proofs/Attention.lean:1260:12: This simp argument is unused:
+  if_pos rfl
+
+Hint: Omit it from the simp argument list.
+  simp ̵[̵i̵f̵_̵p̵o̵s̵ ̵r̵f̵l̵]̵
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+warning: LeanMlir/Proofs/Attention.lean:1272:10: This simp argument is unused:
+  if_pos rfl
+
+Hint: Omit it from the simp argument list.
+  simp [̵i̵f̵_̵p̵o̵s̵ ̵r̵f̵l̵]̵ ̵at h0
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+warning: LeanMlir/Proofs/Attention.lean:1291:12: This simp argument is unused:
+  if_pos rfl
+
+Hint: Omit it from the simp argument list.
+  simp [̵i̵f̵_̵p̵o̵s̵ ̵r̵f̵l̵]̵ ̵at h1
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+warning: LeanMlir/Proofs/Attention.lean:1309:12: This simp argument is unused:
+  if_pos rfl
+
+Hint: Omit it from the simp argument list.
+  simp [̵i̵f̵_̵p̵o̵s̵ ̵r̵f̵l̵]̵ ̵at h2
+
+Note: This linter can be disabled with `set_option linter.unusedSimpArgs false`
+ℹ [4370/4373] Replayed «lean4-mlir»/f32HelpersO
+info: stderr:
+/home/skoonce/lean/claude_max/lean4-jax/ffi/f32_helpers.c: In function ‘lean_f32_load_idx_images’:
+/home/skoonce/lean/claude_max/lean4-jax/ffi/f32_helpers.c:93:5: warning: ignoring return value of ‘fread’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+   93 |     fread(raw, 1, fsize, f);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~
+/home/skoonce/lean/claude_max/lean4-jax/ffi/f32_helpers.c: In function ‘lean_f32_load_idx_labels’:
+/home/skoonce/lean/claude_max/lean4-jax/ffi/f32_helpers.c:130:5: warning: ignoring return value of ‘fread’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+  130 |     fread(raw, 1, fsize, f);
+      |     ^~~~~~~~~~~~~~~~~~~~~~~
+Ablation: convnext-tiny-gelu-cutmix
+  spec: ConvNeXt-T-GELU, optimizer: Adam
+  lr: 0.001000, cosine: true, wd: 0.000100
+  aug: true, label_smooth: 0.100000
+ConvNeXt-T-GELU-convnext-tiny-gelu-cutmix: 27826186 params
+Generating train step MLIR...
+  789963 chars
+Compiling vmfbs...
+  forward compiled
+  eval forward compiled
+  train step compiled
+  session loaded
+  train: 9469 images (196608 floats/image)
+  27826186 params + m + v (318 MB)
+training: 295 batches/epoch, batch=32, Adam, lr=0.001000, cosine warmup=3, label_smooth=0.100000, wd=0.000100
+  BN layers: 1, BN stat floats: 192
+  step 0/295: loss=2.366845 (2194ms)
+  step 1/295: loss=3.293543 (2187ms)
+  step 2/295: loss=2.543754 (2033ms)
+  step 100/295: loss=2.395037 (1975ms)
+  step 200/295: loss=2.284751 (2018ms)
+Epoch 1/80: loss=2.286462 lr=0.000333 (597056ms)
+  step 0/295: loss=2.180542 (1988ms)
+  step 1/295: loss=2.150484 (1976ms)
+  step 2/295: loss=2.062799 (1973ms)
+  step 100/295: loss=2.040443 (2004ms)
+  step 200/295: loss=1.995533 (2007ms)
+Epoch 2/80: loss=2.159118 lr=0.000667 (598969ms)
+  step 0/295: loss=2.232203 (2023ms)
+  step 1/295: loss=2.409347 (1981ms)
+  step 2/295: loss=2.120812 (2025ms)
+  step 100/295: loss=1.888207 (1976ms)
+  step 200/295: loss=1.940867 (1993ms)
+Epoch 3/80: loss=2.041761 lr=0.001000 (597645ms)
+  step 0/295: loss=2.063595 (2029ms)
+  step 1/295: loss=1.869868 (2031ms)
+  step 2/295: loss=2.058373 (2009ms)
+  step 100/295: loss=1.721735 (1975ms)
+  step 200/295: loss=1.917628 (1998ms)
+Epoch 4/80: loss=1.940740 lr=0.001000 (597865ms)
+  step 0/295: loss=1.910799 (2017ms)
+  step 1/295: loss=1.909416 (1988ms)
+  step 2/295: loss=2.021839 (1969ms)
+  step 100/295: loss=1.830951 (2006ms)
+  step 200/295: loss=1.869735 (1998ms)
+Epoch 5/80: loss=1.886054 lr=0.001000 (596993ms)
+  step 0/295: loss=1.917149 (1989ms)
+  step 1/295: loss=1.878954 (2006ms)
+  step 2/295: loss=2.026392 (2018ms)
+  step 100/295: loss=1.750771 (2025ms)
+  step 200/295: loss=1.795983 (1972ms)
+Epoch 6/80: loss=1.845331 lr=0.000998 (598050ms)
+  step 0/295: loss=1.240507 (2004ms)
+  step 1/295: loss=1.989841 (1994ms)
+  step 2/295: loss=1.755780 (2041ms)
+  step 100/295: loss=1.795115 (2007ms)
+  step 200/295: loss=1.886959 (1985ms)
+Epoch 7/80: loss=1.815901 lr=0.000996 (597126ms)
+  step 0/295: loss=1.942121 (1961ms)
+  step 1/295: loss=1.389744 (1983ms)
+  step 2/295: loss=1.926200 (1985ms)
+  step 100/295: loss=2.011130 (1995ms)
+  step 200/295: loss=1.709470 (1983ms)
+Epoch 8/80: loss=1.744584 lr=0.000993 (597670ms)
+  step 0/295: loss=1.804348 (1992ms)
+  step 1/295: loss=1.824759 (2007ms)
+  step 2/295: loss=1.792165 (2001ms)
+  step 100/295: loss=1.739656 (2035ms)
+  step 200/295: loss=1.868638 (1988ms)
+Epoch 9/80: loss=1.788572 lr=0.000990 (598184ms)
+  step 0/295: loss=1.854769 (2050ms)
+  step 1/295: loss=1.512592 (1987ms)
+  step 2/295: loss=1.478827 (2005ms)
+  step 100/295: loss=1.774035 (2013ms)
+  step 200/295: loss=1.880809 (1999ms)
+Epoch 10/80: loss=1.763951 lr=0.000985 (601411ms)
+  val accuracy (running BN): 2583/3904 = 66.162910%
+  step 0/295: loss=1.888972 (2000ms)
+  step 1/295: loss=1.195674 (2010ms)
+  step 2/295: loss=1.878409 (2008ms)
+  step 100/295: loss=2.154829 (1980ms)
+  step 200/295: loss=1.491023 (1977ms)
+Epoch 11/80: loss=1.704836 lr=0.000980 (598794ms)
+  step 0/295: loss=1.814134 (1965ms)
+  step 1/295: loss=1.759306 (1997ms)
+  step 2/295: loss=1.790538 (1976ms)
+  step 100/295: loss=1.222956 (2006ms)
+  step 200/295: loss=1.325488 (1983ms)
+Epoch 12/80: loss=1.654762 lr=0.000974 (597814ms)
+  step 0/295: loss=1.647080 (2002ms)
+  step 1/295: loss=1.772447 (2004ms)
+  step 2/295: loss=1.702652 (2018ms)
+  step 100/295: loss=1.888376 (1985ms)
+  step 200/295: loss=1.384193 (2005ms)
+Epoch 13/80: loss=1.632269 lr=0.000967 (598116ms)
+  step 0/295: loss=1.438437 (1976ms)
+  step 1/295: loss=1.641822 (1978ms)
+  step 2/295: loss=1.471648 (2010ms)
+  step 100/295: loss=1.637913 (1973ms)
+  step 200/295: loss=1.781721 (2007ms)
+Epoch 14/80: loss=1.591363 lr=0.000959 (597180ms)
+  step 0/295: loss=1.817230 (1956ms)
+  step 1/295: loss=1.808395 (1955ms)
+  step 2/295: loss=1.617725 (1961ms)
+  step 100/295: loss=1.691231 (1977ms)
+  step 200/295: loss=1.503462 (1985ms)
+Epoch 15/80: loss=1.592696 lr=0.000950 (599335ms)
+  step 0/295: loss=1.478270 (2003ms)
+  step 1/295: loss=1.483887 (2014ms)
+  step 2/295: loss=1.181085 (1996ms)
+  step 100/295: loss=1.622580 (2001ms)
+  step 200/295: loss=1.653235 (2010ms)
+Epoch 16/80: loss=1.557255 lr=0.000941 (598181ms)
+  step 0/295: loss=1.415781 (1964ms)
+  step 1/295: loss=1.570173 (1974ms)
+  step 2/295: loss=0.918466 (1989ms)
+  step 100/295: loss=1.478409 (2011ms)
+  step 200/295: loss=1.282395 (2013ms)
+Epoch 17/80: loss=1.543889 lr=0.000931 (597268ms)
+  step 0/295: loss=0.989222 (1976ms)
+  step 1/295: loss=0.988620 (1986ms)
+  step 2/295: loss=1.297679 (2004ms)
+  step 100/295: loss=1.735371 (1968ms)
+  step 200/295: loss=1.380411 (2011ms)
+Epoch 18/80: loss=1.501946 lr=0.000921 (598140ms)
+  step 0/295: loss=1.162997 (1980ms)
+  step 1/295: loss=1.763067 (1970ms)
+  step 2/295: loss=1.764133 (1966ms)
+  step 100/295: loss=0.910264 (2001ms)
+  step 200/295: loss=1.623321 (2002ms)
+Epoch 19/80: loss=1.501063 lr=0.000909 (597755ms)
+  step 0/295: loss=1.669643 (1996ms)
+  step 1/295: loss=1.776815 (1983ms)
+  step 2/295: loss=1.752056 (1966ms)
+  step 100/295: loss=1.813954 (1994ms)
+  step 200/295: loss=1.125836 (2007ms)
+Epoch 20/80: loss=1.468488 lr=0.000897 (597767ms)
+  val accuracy (running BN): 3102/3904 = 79.456967%
+  step 0/295: loss=1.666518 (1991ms)
+  step 1/295: loss=1.290313 (1971ms)
+  step 2/295: loss=0.980860 (1962ms)
+  step 100/295: loss=1.741335 (1967ms)
+  step 200/295: loss=1.296162 (2002ms)
+Epoch 21/80: loss=1.467353 lr=0.000884 (598707ms)
+  step 0/295: loss=1.568353 (1959ms)
+  step 1/295: loss=1.468425 (1969ms)
+  step 2/295: loss=1.606673 (1993ms)
+  step 100/295: loss=1.848134 (1999ms)
+  step 200/295: loss=1.434830 (2013ms)
+Epoch 22/80: loss=1.443283 lr=0.000871 (597934ms)
+  step 0/295: loss=1.171340 (1971ms)
+  step 1/295: loss=1.230478 (1969ms)
+  step 2/295: loss=1.165741 (2009ms)
+  step 100/295: loss=1.258121 (2005ms)
+  step 200/295: loss=1.610775 (1973ms)
+Epoch 23/80: loss=1.436950 lr=0.000857 (598246ms)
+  step 0/295: loss=1.553127 (1994ms)
+  step 1/295: loss=0.943288 (2009ms)
+  step 2/295: loss=1.407767 (1989ms)
+  step 100/295: loss=1.201733 (1968ms)
+  step 200/295: loss=1.453189 (2002ms)
+Epoch 24/80: loss=1.414085 lr=0.000843 (598325ms)
+  step 0/295: loss=1.446617 (1997ms)
+  step 1/295: loss=1.635607 (1965ms)
+  step 2/295: loss=1.420552 (1979ms)
+  step 100/295: loss=0.913738 (1994ms)
+  step 200/295: loss=1.484978 (1975ms)
+Epoch 25/80: loss=1.399742 lr=0.000827 (597535ms)
+  step 0/295: loss=1.324485 (2007ms)
+  step 1/295: loss=0.872078 (1997ms)
+  step 2/295: loss=1.261776 (1961ms)
+  step 100/295: loss=1.415206 (1979ms)
+  step 200/295: loss=1.266830 (2027ms)
+Epoch 26/80: loss=1.397509 lr=0.000812 (598036ms)
+  step 0/295: loss=1.740953 (2001ms)
+  step 1/295: loss=1.502384 (2004ms)
+  step 2/295: loss=1.545341 (2000ms)
+  step 100/295: loss=1.557319 (2019ms)
+  step 200/295: loss=1.172343 (2001ms)
+Epoch 27/80: loss=1.398949 lr=0.000796 (598509ms)
+  step 0/295: loss=1.601965 (2028ms)
+  step 1/295: loss=0.963166 (2019ms)
+  step 2/295: loss=1.001783 (1991ms)
+  step 100/295: loss=1.616369 (1973ms)
+  step 200/295: loss=1.583938 (2004ms)
+Epoch 28/80: loss=1.365248 lr=0.000779 (598552ms)
+  step 0/295: loss=1.189613 (1992ms)
+  step 1/295: loss=0.793310 (1991ms)
+  step 2/295: loss=1.241010 (2003ms)
+  step 100/295: loss=1.518219 (1998ms)
+  step 200/295: loss=0.958821 (1994ms)
+Epoch 29/80: loss=1.355729 lr=0.000762 (597651ms)
+  step 0/295: loss=1.521512 (1990ms)
+  step 1/295: loss=1.690753 (1982ms)
+  step 2/295: loss=1.306147 (1989ms)
+  step 100/295: loss=1.359407 (2009ms)
+  step 200/295: loss=0.805677 (2008ms)
+Epoch 30/80: loss=1.346226 lr=0.000744 (598766ms)
+  val accuracy (running BN): 3246/3904 = 83.145492%
+  step 0/295: loss=1.595883 (2010ms)
+  step 1/295: loss=1.499246 (1999ms)
+  step 2/295: loss=1.631724 (1959ms)
+  step 100/295: loss=1.397139 (2005ms)
+  step 200/295: loss=1.660277 (1977ms)
+Epoch 31/80: loss=1.331275 lr=0.000726 (598349ms)
+  step 0/295: loss=1.593288 (1997ms)
+  step 1/295: loss=0.759996 (2008ms)
+  step 2/295: loss=1.660340 (2014ms)
+  step 100/295: loss=1.080584 (2008ms)
+  step 200/295: loss=1.247623 (1993ms)
+Epoch 32/80: loss=1.311768 lr=0.000708 (597496ms)
+  step 0/295: loss=1.367161 (1983ms)
+  step 1/295: loss=1.274603 (2011ms)
+  step 2/295: loss=1.457487 (1982ms)
+  step 100/295: loss=0.869600 (1982ms)
+  step 200/295: loss=1.245494 (1988ms)
+Epoch 33/80: loss=1.297681 lr=0.000689 (598097ms)
+  step 0/295: loss=1.189189 (2019ms)
+  step 1/295: loss=0.943639 (1983ms)
+  step 2/295: loss=0.826016 (1987ms)
+  step 100/295: loss=1.037923 (1999ms)
+  step 200/295: loss=1.445965 (2016ms)
+Epoch 34/80: loss=1.301164 lr=0.000670 (598264ms)
+  step 0/295: loss=1.304680 (2009ms)
+  step 1/295: loss=1.510564 (1995ms)
+  step 2/295: loss=1.245862 (2007ms)
+  step 100/295: loss=1.145961 (1977ms)
+  step 200/295: loss=0.657036 (1988ms)
+Epoch 35/80: loss=1.307067 lr=0.000651 (598159ms)
+  step 0/295: loss=1.501438 (1965ms)
+  step 1/295: loss=1.272402 (1969ms)
+  step 2/295: loss=1.315813 (1978ms)
+  step 100/295: loss=1.323303 (2000ms)
+  step 200/295: loss=1.385284 (2004ms)
+Epoch 36/80: loss=1.283323 lr=0.000631 (598060ms)
+  step 0/295: loss=1.308937 (1992ms)
+  step 1/295: loss=1.519475 (1968ms)
+  step 2/295: loss=0.888272 (1953ms)
+  step 100/295: loss=1.300712 (2022ms)
+  step 200/295: loss=1.487559 (2013ms)
+Epoch 37/80: loss=1.280989 lr=0.000611 (598306ms)
+  step 0/295: loss=1.357573 (2018ms)
+  step 1/295: loss=1.414345 (2014ms)
+  step 2/295: loss=1.361438 (2006ms)
+  step 100/295: loss=1.443952 (1986ms)
+  step 200/295: loss=1.452992 (1983ms)
+Epoch 38/80: loss=1.267810 lr=0.000591 (598693ms)
+  step 0/295: loss=0.785823 (1963ms)
+  step 1/295: loss=1.643349 (1954ms)
+  step 2/295: loss=1.301928 (1970ms)
+  step 100/295: loss=1.340889 (1958ms)
+  step 200/295: loss=1.294070 (2002ms)
+Epoch 39/80: loss=1.254763 lr=0.000571 (598233ms)
+  step 0/295: loss=0.969343 (1990ms)
+  step 1/295: loss=1.352113 (2003ms)
+  step 2/295: loss=1.229433 (1986ms)
+  step 100/295: loss=1.208574 (2007ms)
+  step 200/295: loss=0.957981 (1996ms)
+Epoch 40/80: loss=1.263398 lr=0.000551 (598676ms)
+  val accuracy (running BN): 3352/3904 = 85.860656%
+  step 0/295: loss=1.166098 (2006ms)
+  step 1/295: loss=0.995823 (2003ms)
+  step 2/295: loss=1.527398 (2008ms)
+  step 100/295: loss=1.110245 (2037ms)
+  step 200/295: loss=1.010909 (2019ms)
+Epoch 41/80: loss=1.234066 lr=0.000531 (598763ms)
+  step 0/295: loss=1.342804 (2022ms)
+  step 1/295: loss=0.891115 (2012ms)
+  step 2/295: loss=0.791715 (2018ms)
+  step 100/295: loss=1.491589 (1985ms)
+  step 200/295: loss=1.524896 (1972ms)
+Epoch 42/80: loss=1.229497 lr=0.000510 (597676ms)
+  step 0/295: loss=1.400622 (1998ms)
+  step 1/295: loss=1.400120 (1995ms)
+  step 2/295: loss=1.233284 (1983ms)
+  step 100/295: loss=1.204487 (2016ms)
+  step 200/295: loss=0.877954 (1948ms)
+Epoch 43/80: loss=1.218484 lr=0.000490 (597632ms)
+  step 0/295: loss=0.709234 (2009ms)
+  step 1/295: loss=1.402989 (2004ms)
+  step 2/295: loss=1.151679 (1991ms)
+  step 100/295: loss=0.748937 (1995ms)
+  step 200/295: loss=1.318471 (1959ms)
+Epoch 44/80: loss=1.201841 lr=0.000469 (598247ms)
+  step 0/295: loss=1.282434 (2019ms)
+  step 1/295: loss=0.937179 (1968ms)
+  step 2/295: loss=1.479571 (1988ms)
+  step 100/295: loss=1.052389 (2003ms)
+  step 200/295: loss=1.193315 (1956ms)
+Epoch 45/80: loss=1.195167 lr=0.000449 (598259ms)
+  step 0/295: loss=1.387240 (2022ms)
+  step 1/295: loss=1.300762 (2019ms)
+  step 2/295: loss=1.394691 (1995ms)
+  step 100/295: loss=1.167459 (2011ms)
+  step 200/295: loss=0.836351 (2013ms)
+Epoch 46/80: loss=1.202990 lr=0.000429 (598227ms)
+  step 0/295: loss=1.033751 (1965ms)
+  step 1/295: loss=1.384752 (1984ms)
+  step 2/295: loss=1.221980 (2011ms)
+  step 100/295: loss=1.262206 (2005ms)
+  step 200/295: loss=1.279373 (1959ms)
+Epoch 47/80: loss=1.203281 lr=0.000409 (598010ms)
+  step 0/295: loss=1.471501 (2045ms)
+  step 1/295: loss=0.925878 (2028ms)
+  step 2/295: loss=1.187022 (2006ms)
+  step 100/295: loss=1.374739 (1980ms)
+  step 200/295: loss=1.192967 (1963ms)
+Epoch 48/80: loss=1.187342 lr=0.000389 (598163ms)
+  step 0/295: loss=1.310808 (2001ms)
+  step 1/295: loss=1.041577 (2002ms)
+  step 2/295: loss=0.851751 (2014ms)
+  step 100/295: loss=1.359340 (2018ms)
+  step 200/295: loss=1.396355 (1995ms)
+Epoch 49/80: loss=1.184687 lr=0.000369 (598252ms)
+  step 0/295: loss=1.238202 (2007ms)
+  step 1/295: loss=0.905283 (1998ms)
+  step 2/295: loss=0.993734 (2005ms)
+  step 100/295: loss=1.187750 (1966ms)
+  step 200/295: loss=1.327624 (1964ms)
+Epoch 50/80: loss=1.186865 lr=0.000349 (597996ms)
+  val accuracy (running BN): 3383/3904 = 86.654713%
+  step 0/295: loss=1.526600 (1993ms)
+  step 1/295: loss=1.089134 (1986ms)
+  step 2/295: loss=1.306386 (1967ms)
+  step 100/295: loss=1.103165 (1971ms)
+  step 200/295: loss=0.688795 (1976ms)
+Epoch 51/80: loss=1.179381 lr=0.000330 (597701ms)
+  step 0/295: loss=0.739479 (1998ms)
+  step 1/295: loss=1.205108 (1973ms)
+  step 2/295: loss=1.380980 (2016ms)
+  step 100/295: loss=1.391971 (2019ms)
+  step 200/295: loss=1.242756 (1987ms)
+Epoch 52/80: loss=1.167045 lr=0.000311 (598574ms)
+  step 0/295: loss=1.266979 (1976ms)
+  step 1/295: loss=1.368517 (1991ms)
+  step 2/295: loss=1.284837 (1988ms)
+  step 100/295: loss=1.091541 (1976ms)
+  step 200/295: loss=1.411640 (1955ms)
+Epoch 53/80: loss=1.168849 lr=0.000292 (597310ms)
+  step 0/295: loss=1.135632 (2035ms)
+  step 1/295: loss=1.176844 (2018ms)
+  step 2/295: loss=1.392067 (1992ms)
+  step 100/295: loss=1.064562 (1991ms)
+  step 200/295: loss=1.005426 (2030ms)
+Epoch 54/80: loss=1.144656 lr=0.000274 (597667ms)
+  step 0/295: loss=0.820958 (2040ms)
+  step 1/295: loss=0.994609 (2014ms)
+  step 2/295: loss=1.309827 (1999ms)
+  step 100/295: loss=0.936397 (1975ms)
+  step 200/295: loss=1.172601 (1967ms)
+Epoch 55/80: loss=1.151753 lr=0.000256 (598092ms)
+  step 0/295: loss=1.232414 (2018ms)
+  step 1/295: loss=1.380160 (1988ms)
+  step 2/295: loss=1.187185 (2013ms)
+  step 100/295: loss=0.912975 (2024ms)
+  step 200/295: loss=0.760348 (2023ms)
+Epoch 56/80: loss=1.135857 lr=0.000238 (598240ms)
+  step 0/295: loss=0.615008 (2027ms)
+  step 1/295: loss=1.068142 (2022ms)
+  step 2/295: loss=1.117879 (1995ms)
+  step 100/295: loss=1.017910 (2011ms)
+  step 200/295: loss=1.314538 (1970ms)
+Epoch 57/80: loss=1.155672 lr=0.000221 (597808ms)
+  step 0/295: loss=1.139014 (2014ms)
+  step 1/295: loss=1.025310 (1982ms)
+  step 2/295: loss=0.570061 (1966ms)
+  step 100/295: loss=1.256624 (1974ms)
+  step 200/295: loss=1.236855 (2031ms)
+Epoch 58/80: loss=1.132356 lr=0.000204 (598071ms)
+  step 0/295: loss=1.110532 (2009ms)
+  step 1/295: loss=1.373951 (2011ms)
+  step 2/295: loss=1.274225 (2013ms)
+  step 100/295: loss=0.754532 (1992ms)
+  step 200/295: loss=1.367937 (1971ms)
+Epoch 59/80: loss=1.138363 lr=0.000188 (599089ms)
+  step 0/295: loss=1.088254 (1997ms)
+  step 1/295: loss=0.838590 (1976ms)
+  step 2/295: loss=1.159548 (2013ms)
+  step 100/295: loss=1.146199 (1999ms)
+  step 200/295: loss=1.255050 (2029ms)
+Epoch 60/80: loss=1.147809 lr=0.000173 (597830ms)
+  val accuracy (running BN): 3399/3904 = 87.064549%
+  step 0/295: loss=0.782828 (2000ms)
+  step 1/295: loss=1.270858 (2032ms)
+  step 2/295: loss=0.893405 (2018ms)
+  step 100/295: loss=1.368068 (2012ms)
+  step 200/295: loss=0.690950 (2005ms)
+Epoch 61/80: loss=1.117717 lr=0.000157 (598056ms)
+  step 0/295: loss=1.090018 (2013ms)
+  step 1/295: loss=1.050713 (2013ms)
+  step 2/295: loss=0.889349 (2014ms)
+  step 100/295: loss=1.239050 (1985ms)
+  step 200/295: loss=1.233575 (2033ms)
+Epoch 62/80: loss=1.123817 lr=0.000143 (597913ms)
+  step 0/295: loss=1.048976 (1979ms)
+  step 1/295: loss=1.007760 (1986ms)
+  step 2/295: loss=0.899957 (1978ms)
+  step 100/295: loss=1.270138 (1988ms)
+  step 200/295: loss=1.315827 (1973ms)
+Epoch 63/80: loss=1.123949 lr=0.000129 (598178ms)
+  step 0/295: loss=1.331102 (1976ms)
+  step 1/295: loss=1.399645 (1981ms)
+  step 2/295: loss=1.327664 (2006ms)
+  step 100/295: loss=1.145795 (2024ms)
+  step 200/295: loss=1.234196 (2008ms)
+Epoch 64/80: loss=1.119490 lr=0.000116 (598397ms)
+  step 0/295: loss=1.245444 (1973ms)
+  step 1/295: loss=0.984518 (1980ms)
+  step 2/295: loss=0.804798 (1970ms)
+  step 100/295: loss=1.180749 (1963ms)
+  step 200/295: loss=1.149126 (1991ms)
+Epoch 65/80: loss=1.118578 lr=0.000103 (597583ms)
+  step 0/295: loss=1.349765 (2027ms)
+  step 1/295: loss=1.256566 (1994ms)
+  step 2/295: loss=1.277151 (1991ms)
+  step 100/295: loss=0.584940 (2008ms)
+  step 200/295: loss=0.687762 (1970ms)
+Epoch 66/80: loss=1.109055 lr=0.000091 (597976ms)
+  step 0/295: loss=1.310167 (1968ms)
+  step 1/295: loss=0.976744 (1984ms)
+  step 2/295: loss=1.181193 (1970ms)
+  step 100/295: loss=1.304554 (1978ms)
+  step 200/295: loss=1.147505 (2013ms)
+Epoch 67/80: loss=1.119895 lr=0.000079 (598443ms)
+  step 0/295: loss=1.101637 (1999ms)
+  step 1/295: loss=1.019784 (1985ms)
+  step 2/295: loss=0.552151 (1987ms)
+  step 100/295: loss=0.656798 (1991ms)
+  step 200/295: loss=1.286461 (2006ms)
+Epoch 68/80: loss=1.108107 lr=0.000069 (598230ms)
+  step 0/295: loss=1.225518 (1973ms)
+  step 1/295: loss=1.082199 (1987ms)
+  step 2/295: loss=1.365659 (2016ms)
+  step 100/295: loss=0.797650 (2007ms)
+  step 200/295: loss=1.143915 (2001ms)
+Epoch 69/80: loss=1.098848 lr=0.000059 (598389ms)
+  step 0/295: loss=1.296956 (1997ms)
+  step 1/295: loss=1.313721 (2012ms)
+  step 2/295: loss=0.678286 (1960ms)
+  step 100/295: loss=1.179841 (2006ms)
+  step 200/295: loss=1.146663 (1977ms)
+Epoch 70/80: loss=1.101666 lr=0.000050 (597871ms)
+  val accuracy (running BN): 3406/3904 = 87.243852%
+  step 0/295: loss=0.905500 (1990ms)
+  step 1/295: loss=1.188689 (1993ms)
+  step 2/295: loss=1.112004 (2006ms)
+  step 100/295: loss=1.101144 (1965ms)
+  step 200/295: loss=1.131864 (1975ms)
+Epoch 71/80: loss=1.090606 lr=0.000041 (596974ms)
+  step 0/295: loss=1.281363 (2022ms)
+  step 1/295: loss=1.133205 (1996ms)
+  step 2/295: loss=1.097388 (1985ms)
+  step 100/295: loss=1.320364 (2023ms)
+  step 200/295: loss=1.031334 (2004ms)
+Epoch 72/80: loss=1.111522 lr=0.000033 (598472ms)
+  step 0/295: loss=0.716271 (1997ms)
+  step 1/295: loss=0.981933 (1992ms)
+  step 2/295: loss=1.200117 (1958ms)
+  step 100/295: loss=1.287532 (1987ms)
+  step 200/295: loss=1.281369 (2015ms)
+Epoch 73/80: loss=1.111708 lr=0.000026 (598342ms)
+  step 0/295: loss=1.024406 (1979ms)
+  step 1/295: loss=1.175603 (1967ms)
+  step 2/295: loss=1.214644 (1985ms)
+  step 100/295: loss=1.136512 (1982ms)
+  step 200/295: loss=1.140701 (1994ms)
+Epoch 74/80: loss=1.097862 lr=0.000020 (597709ms)
+  step 0/295: loss=0.820881 (2026ms)
+  step 1/295: loss=1.163055 (1988ms)
+  step 2/295: loss=1.068337 (2000ms)
+  step 100/295: loss=0.554480 (2032ms)
+  step 200/295: loss=1.180741 (2033ms)
+Epoch 75/80: loss=1.114910 lr=0.000015 (598835ms)
+  step 0/295: loss=1.142812 (2040ms)
+  step 1/295: loss=1.044934 (2010ms)
+  step 2/295: loss=0.673515 (1981ms)
+  step 100/295: loss=1.261533 (1973ms)
+  step 200/295: loss=1.263154 (2008ms)
+Epoch 76/80: loss=1.082820 lr=0.000010 (598399ms)
+  step 0/295: loss=1.333578 (1988ms)
+  step 1/295: loss=1.226118 (2002ms)
+  step 2/295: loss=1.079817 (2007ms)
+  step 100/295: loss=1.476444 (2020ms)
+  step 200/295: loss=0.875507 (2006ms)
+Epoch 77/80: loss=1.109284 lr=0.000007 (598356ms)
+  step 0/295: loss=0.972431 (1992ms)
+  step 1/295: loss=0.793466 (1980ms)
+  step 2/295: loss=0.853397 (1993ms)
+  step 100/295: loss=1.080512 (1952ms)
+  step 200/295: loss=1.334556 (2037ms)
+Epoch 78/80: loss=1.085865 lr=0.000004 (598660ms)
+  step 0/295: loss=1.339421 (2016ms)
+  step 1/295: loss=0.534410 (2004ms)
+  step 2/295: loss=1.225806 (1994ms)
+  step 100/295: loss=0.772426 (1984ms)
+  step 200/295: loss=1.145036 (1977ms)
+Epoch 79/80: loss=1.092996 lr=0.000002 (598177ms)
+  step 0/295: loss=1.239624 (1979ms)
+  step 1/295: loss=1.019994 (1956ms)
+  step 2/295: loss=1.108586 (1957ms)
+  step 100/295: loss=0.947714 (1992ms)
+  step 200/295: loss=0.606998 (1982ms)
+Epoch 80/80: loss=1.096113 lr=0.000000 (598915ms)
+  val accuracy (running BN): 3428/3904 = 87.807377%
+Saved params + BN stats.

@@ -3194,6 +3194,36 @@ plumbing required. Mixup and CutMix route through a soft-label
 train-step variant since they produce fractional labels; Random
 Erasing and RandAugment leave labels alone.
 
+Holding architecture and base optimizer fixed, we can measure the
+marginal effect of each augmentation knob layered on top of the
+bare config, on the same Imagenette data and 80-epoch budget.
+
+\begin{center}
+\begin{tabular}{l r r}
+\hline
+Cell                                          & Val acc & $\Delta$ vs bare \\
+\hline
+\texttt{convnext-tiny-gelu-cutmix}            & 87.81\% & $+2.9$ \\
+\texttt{convnext-tiny-gelu-randaug} (M=9)     & 85.48\% & $+0.5$ \\
+\texttt{convnext-tiny-gelu} (bare)            & 84.94\% & ---     \\
+\hline
+\end{tabular}
+\end{center}
+
+\begin{itemize}
+  \item \textbf{CutMix is the load-bearing knob.} $+2.9\%$ over
+    bare, a single config change. The ViT-Tiny ablation in
+    Ch~\ref{chap:attention} reaches the same conclusion at a
+    different architecture: CutMix alone is the biggest single lift.
+  \item \textbf{RandAugment at M=9 barely lifts.} $+0.5\%$ is at
+    the edge of seed noise. Same pattern as ViT-Tiny: M=9 is too
+    aggressive for our 9.5K-image scale (the paper trained on
+    1.2M images).
+\end{itemize}
+
+One seed per cell. The $+0.5\%$ delta on RandAugment is below
+noise; the $+2.9\%$ delta from CutMix is well above.
+
 \chapter{Vision Transformer}
 \label{chap:attention}
 
