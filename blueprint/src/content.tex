@@ -253,6 +253,49 @@ product), and three VJP record types (\(\HasVJP\),
 \(\HasVJPMat\), \(\HasVJPthree\), one per tensor rank) that bundle a
 backward function with its correctness claim.
 
+The next twenty-eight theorems all reduce to a single definition
+(\(\pdiv\)) plus chain rule, sum rule, and product rule. Before
+we drop you into the deep end, here's the shape of what's coming:
+
+\begin{center}
+\begin{tikzpicture}[
+  node distance=1.2cm,
+  every node/.style={font=\small, align=center},
+  group/.style={rectangle, draw, fill=blue!5, rounded corners,
+                inner sep=4pt, minimum width=4cm, minimum height=1.3cm},
+  root/.style={rectangle, draw, fill=red!10, rounded corners,
+               inner sep=4pt, minimum width=4cm, minimum height=0.8cm},
+  payoff/.style={rectangle, draw, fill=green!10, rounded corners,
+                 inner sep=4pt, minimum width=5cm, minimum height=0.9cm},
+  arrow/.style={->, >=stealth, thick, gray}
+]
+\node[root] (pdiv) at (0, 6) {\(\pdiv\) \\ \footnotesize defined via Mathlib's \(\fderiv\)};
+
+\node[group] (foundation) at (-3.8, 3.8) {\textbf{Foundation rules} \\ chain $\cdot$ sum $\cdot$ product \\ identity $\cdot$ const $\cdot$ reindex};
+\node[group] (lifting) at (3.8, 3.8) {\textbf{Lifting machinery} \\ row-independence \\ 3D chain $\cdot$ 3D add};
+
+\node[group] (vjp) at (-3.8, 1.5) {\textbf{VJP transpose} \\ \texttt{vjp\_comp} $\cdot$ biPath \\ elemwiseProduct $\cdot$ identity};
+\node[group] (matrix) at (3.8, 1.5) {\textbf{Matrix-level VJPs} \\ chain $\cdot$ additive fan-in \\ identity};
+
+\node[group, minimum width=9cm] (ops) at (0, -0.8) {\textbf{Operator-specific theorems} \\ matmul (L) $\cdot$ matmul (R) $\cdot$ transpose \\ scalar-scale $\cdot$ row-wise lifting};
+
+\node[payoff] (payoff) at (0, -3) {Used in Chapters 3--10: \\ every per-architecture VJP is one of these};
+
+\draw[arrow] (pdiv) -- (foundation);
+\draw[arrow] (pdiv) -- (lifting);
+\draw[arrow] (foundation) -- (vjp);
+\draw[arrow] (lifting) -- (matrix);
+\draw[arrow] (vjp) -- (ops);
+\draw[arrow] (matrix) -- (ops);
+\draw[arrow] (ops) -- (payoff);
+\end{tikzpicture}
+\end{center}
+
+Read top-to-bottom, this is the order things get proved.
+Read bottom-to-top, this is what every theorem in Chapters 3--10
+unfolds to. The full clickable dependency graph is in the blueprint
+web view.
+
 \begin{definition}[Partial derivative]
   \label{ax:pdiv}
   \lean{Proofs.pdiv}
