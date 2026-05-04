@@ -151,6 +151,6 @@
    "inputRev": "main",
    "inherited": true,
    "configFile": "lakefile.lean"}],
- "name": "«lean4-jax»",
+ "name": "«lean4-mlir»",
  "lakeDir": ".lake",
  "fixedToolchain": false}
