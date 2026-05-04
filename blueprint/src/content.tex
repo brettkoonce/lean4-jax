@@ -1868,6 +1868,34 @@ plain \texttt{.conv2d} used here keeps the StableHLO much tighter.
 \chapter{CIFAR with BatchNorm}
 \label{chap:bn}
 
+This is structurally the hardest chapter in the book. BN's
+inverse-stddev term \(1/\sqrt{\sigma^2 + \varepsilon}\) has a
+gradient that blows up as \(\sigma^2 \to 0\); proving the
+backward pass exists and is bounded requires
+\texttt{ContinuousLinearMap}-based real-analysis machinery from
+Mathlib that none of the previous chapters needed.
+\textbf{If you're new to formal math, skim the proofs and trust
+them} --- the takeaways are concrete:
+
+\begin{itemize}
+\item BN's gradient has a closed-form 3-term formula
+  (Theorem~\ref{thm:bnNormalize_has_vjp}).
+\item The formula needs \(\varepsilon > 0\) to stay bounded
+  (Theorem~\ref{ax:bnIstdBroadcast_diff}).
+\item BN's whole purpose is to let deeper networks train --- the
+  example in \S\ref{sec:bn_cifar_example} demonstrates that directly.
+\end{itemize}
+
+The proofs themselves use Mathlib's \texttt{HasFDerivAt.sqrt},
+\texttt{(hasDerivAt\_inv).comp\_hasFDerivAt}, and a centering CLM
+chained through the chain rule from Ch~\ref{chap:tensor}. They're
+correct (the Lean kernel checks them) and they're available in
+\texttt{Proofs/BatchNorm.lean} for the curious; you do not need to
+understand them line-by-line to use BN as a layer or to follow the
+rest of the book. \textbf{Ch~\ref{chap:residual} (ResNet-34) is
+the easiest chapter in the book and follows immediately --- this
+is a localized difficulty spike, not the new normal.}
+
 \begin{theorem}[BN affine step Jacobian]
   \label{ax:pdiv_bnAffine}
   \lean{Proofs.pdiv_bnAffine}
