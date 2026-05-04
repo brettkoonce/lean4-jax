@@ -442,80 +442,273 @@ Mechanical; see \leandocref{Proofs.elemwiseProduct\_has\_vjp}.
 Mechanical; see \leandocref{Proofs.identity\_has\_vjp}.
 \end{proof}
 
-\section*{The chapter in one example: MLP gradients}
+\section*{The chapter in one trainable example: linear classifier on MNIST}
 
-Take a one-hidden-layer MLP with cross-entropy loss:
-\[
-  \ell(W_1, b_1, W_2, b_2;\, x, t) =
-  \mathrm{CE}\bigl(\mathrm{softmax}(W_2 \cdot \mathrm{ReLU}(W_1 x + b_1) + b_2),\ t\bigr).
-\]
+The smallest network that learns: a single dense layer mapping
+784-dim images to 10-dim logits, trained with softmax cross-entropy
+and plain SGD. About 7,850 parameters. Trains in seconds. Lands
+near 92\% test accuracy on MNIST. The whole training program is
+six lines:
 
-Computing \(\nabla \ell\) with respect to all four parameters
-requires exactly the theorems above. Each step below names the
-theorem (or foreshadows the Ch 3 theorem) that makes that step
-formally correct.
+\begin{verbatim}
+def mnistLinear : NetSpec where
+  name   := "MNIST-Linear"
+  imageH := 28
+  imageW := 28
+  layers := [.dense 784 10 .identity]
+
+def main : IO Unit := mnistLinear.train (s4tfBaseline 12) "data" .mnist
+\end{verbatim}
+
+In our repo this is \texttt{linear-sgd} in
+\texttt{MainAblation.lean}; build and run it with
+
+\begin{verbatim}
+lake build ablation
+./.lake/build/bin/ablation linear-sgd
+\end{verbatim}
+
+To compute gradients, we need \(\nabla_W \ell\) and
+\(\nabla_b \ell\) where
+\(\ell(W, b;\, x, t) = \mathrm{CE}\bigl(\mathrm{softmax}(W x + b),\, t\bigr)\).
+Each step below names the theorem (or foreshadows the
+Ch~\ref{chap:mlp} theorem) that makes the step formally correct.
 
 \paragraph{Step 1 --- the loss is a composition.}
-\(\ell = \mathrm{CE} \circ \mathrm{softmax} \circ \mathrm{dense}_2 \circ
-\mathrm{ReLU} \circ \mathrm{dense}_1\). Gradient through a composition
-is the chain rule (Theorem~\ref{ax:pdiv_comp}), applied at each
-arrow. The backward pass walks this chain right-to-left, accumulating
-gradients at each layer's parameters along the way.
+\(\ell = \mathrm{CE} \circ \mathrm{softmax} \circ \mathrm{dense}\).
+Gradient through a composition is the chain rule
+(Theorem~\ref{ax:pdiv_comp}), applied at each arrow. The backward
+pass walks this chain right-to-left.
 
 \paragraph{Step 2 --- softmax cross-entropy.}
-The gradient of CE w.r.t. pre-softmax logits \(z\) is the closed form
-\(dz = \mathrm{softmax}(z) - t\)
-(Theorem~\ref{ax:softmaxCE_grad}, proved in Ch 3 next to softmax itself).
-This is the starting upstream gradient; everything below propagates it backward.
+The gradient of CE w.r.t. pre-softmax logits \(z\) is the closed
+form \(dz = \mathrm{softmax}(z) - t\)
+(Theorem~\ref{ax:softmaxCE_grad}, proved in Ch~\ref{chap:mlp} next
+to softmax itself). This is the starting upstream gradient.
 
-\paragraph{Step 3 --- through \(\mathrm{dense}_2\), gradient w.r.t. \(b_2\).}
-The map \(b_2 \mapsto W_2 h + b_2\) is the identity in \(b_2\)
-(with the rest held constant): identity Jacobian
-(Theorem~\ref{ax:pdiv_id}), VJP passes the gradient through unchanged
-(Theorem~\ref{thm:identity_has_vjp}). So \(\nabla_{b_2} \ell = dz\).
+\paragraph{Step 3 --- gradient w.r.t. \(b\).}
+The map \(b \mapsto W x + b\) is the identity in \(b\)
+(with \(W\) and \(x\) held constant): identity Jacobian
+(Theorem~\ref{ax:pdiv_id}), VJP passes the gradient through
+unchanged (Theorem~\ref{thm:identity_has_vjp}). So
+\(\nabla_b \ell = dz\).
 
-\paragraph{Step 4 --- gradient w.r.t. \(W_2\).}
-The map \(W_2 \mapsto W_2 h + b_2\) has the per-entry Dense Jacobian
+\paragraph{Step 4 --- gradient w.r.t. \(W\).}
+The map \(W \mapsto W x + b\) has the per-entry Dense Jacobian
 (Theorem~\ref{ax:pdiv_dense_W}, proved in Ch~\ref{chap:mlp} from
 \emph{this chapter's} foundation rules: \(\pdiv\)\_finset\_sum +
 const + reindex). Chain rule (Theorem~\ref{ax:pdiv_comp}) composes
 that Jacobian with the upstream gradient \(dz\) to give the outer
-product \(\nabla_{W_2} \ell = dz \otimes h\).
-
-\paragraph{Step 5 --- gradient w.r.t. \(h\) (the ReLU activation).}
-Same Dense layer, now differentiated w.r.t. its input: per-entry
-Jacobian by Theorem~\ref{ax:pdiv_dense} (also a Ch~\ref{chap:mlp}
-theorem from this chapter's foundation rules). Chain rule again
-gives \(dh = W_2^T\, dz\).
-
-\paragraph{Step 6 --- through the ReLU.}
-The ReLU VJP is the gated-gradient
-(Theorem~\ref{thm:relu_has_vjp}, formalized in Ch 3):
-\(dh_{\text{pre}} = dh \odot \mathbb{1}_{h_{\text{pre}} > 0}\).
-
-\paragraph{Steps 7--8 --- through \(\mathrm{dense}_1\).}
-Symmetric to Steps 3--4. Identity VJP
-(Theorem~\ref{thm:identity_has_vjp}) gives
-\(\nabla_{b_1} \ell = dh_{\text{pre}}\); the Dense weight Jacobian
-(Theorem~\ref{ax:pdiv_dense_W}) plus chain rule give
-\(\nabla_{W_1} \ell = dh_{\text{pre}} \otimes x\).
+product \(\nabla_W \ell = dz \otimes x\).
 
 \paragraph{What we just used.}
-Eight steps. Three from this chapter (chain rule, identity Jacobian
-and VJP); five foreshadowed for Ch~\ref{chap:mlp} (softmax CE, ReLU
-VJP, the two Dense Jacobians, and Dense-bias-gradient is identity).
-The Ch~\ref{chap:mlp} theorems are \emph{themselves} proved from
-this chapter's foundation rules --- when you read them, you'll see
+Four steps. Three theorems from this chapter (chain rule, identity
+Jacobian, identity VJP); two forward-cites to Ch~\ref{chap:mlp}
+(softmax CE, Dense weight Jacobian). The Ch~\ref{chap:mlp}
+theorems are \emph{themselves} proved from this chapter's
+foundation rules --- when you read them, you'll see
 \(\pdiv\)\_finset\_sum + reindex + const + add doing the work
 underneath.
 
-Every architecture in Part 2 extends this template the same way:
-ResNet adds additive fan-in (Theorem~\ref{thm:biPath_has_vjp}) for
-the residual skip; ConvNeXt replaces ReLU with GELU (one new
-operator VJP); ViT adds attention's softmax-VJP chain (two new
-operator VJPs). The structural rules above \emph{never change};
-later chapters add operator-specific theorems and compose them
-through the chain rule we just proved.
+That is the \emph{entire} backward pass for a working classifier.
+Run \texttt{linear-sgd} and the codegen emits exactly the formulas
+above as fused MLIR; the Lean proofs guarantee they're correct.
+
+\paragraph{One more knob to taste.}
+The \texttt{linear-adam} cell in the same registry trains the
+identical architecture with Adam instead of SGD; comparing the two
+is the smallest possible optimizer-ablation in the book and
+demonstrates that the gradient computation we just derived is
+optimizer-agnostic --- the same \(\nabla \ell\) values feed either
+update rule. This is the Ch~\ref{chap:mlp}--\ref{chap:residual}
+ablation pattern in miniature.
+
+\paragraph{Where this goes.}
+Every architecture in Part~2 extends this template the same way.
+Ch~\ref{chap:mlp} stacks dense layers and inserts ReLU between
+them (one new operator VJP); Ch~\ref{chap:cnn} swaps the dense
+forward for conv2d (one new operator VJP); Ch~\ref{chap:bn} adds
+BatchNorm (one new operator VJP); Ch~\ref{chap:residual} adds the
+residual skip (additive fan-in, Theorem~\ref{thm:biPath_has_vjp},
+no new operator); Ch~\ref{chap:layernorm} replaces ReLU with GELU
+(one new operator); Ch~\ref{chap:attention} adds attention (the
+biggest jump --- new matrix-level machinery plus softmax-VJP
+chains). The structural rules from this chapter \emph{never
+change}; later chapters add operator-specific theorems and compose
+them through the chain rule we just proved.
+
+\section*{What's inside \texttt{.train}?}
+\label{sec:mlp_inside_train}
+
+The section above treated \texttt{mnistLinear.train} as a black box.
+You specified the network, you specified the hyperparameters,
+training happened. That's deliberately the user-facing interface,
+but there's no magic: the training loop is real code, $\sim$100 lines
+of Lean in \texttt{LeanMlir/Train.lean}. Every chapter in this book
+uses the same loop. The only thing that varies chapter to chapter is
+the \texttt{NetSpec} and \texttt{TrainConfig} values handed to it;
+never the loop itself.
+
+This section walks through those hundred lines.
+
+\begin{verbatim}
+def runTraining (spec : NetSpec) (cfg : TrainConfig)
+    (ds : DatasetKind) (dataDir : String)
+    (sess : IreeSession) : IO Unit := do
+  -- 1. Load training data
+  let batchN := cfg.batchSize
+  let dio    := datasetIO ds
+  let (trainImg, trainLbl, nTrain) ← dio.loadTrain dataDir
+
+  -- 2. Initialize parameters + Adam moment buffers
+  let mut p ← spec.heInitParams                        -- He-init weights
+  let mut m ← F32.const (F32.size p).toUSize 0.0        -- Adam 1st moment
+  let mut v ← F32.const (F32.size p).toUSize 0.0        -- Adam 2nd moment
+
+  let bpE := nTrain / batchN
+  let nP  := spec.totalParams
+  let mut globalStep : Nat := 0
+
+  -- 3. Epoch loop: shuffle, schedule LR, train, log
+  for epoch in [:cfg.epochs] do
+    let (sImg, sLbl) ← F32.shuffle trainImg trainLbl
+                         nTrain.toUSize dio.trainPixels.toUSize
+                         (epoch + 42).toUSize
+
+    let lr : Float :=                                   -- cosine + warmup
+      if epoch < cfg.warmupEpochs then
+        cfg.learningRate * (epoch.toFloat + 1.0)
+          / cfg.warmupEpochs.toFloat
+      else if cfg.cosineDecay then
+        cfg.learningRate * 0.5 * (1.0 + Float.cos (
+          3.14159265 * (epoch.toFloat - cfg.warmupEpochs.toFloat)
+                     / (cfg.epochs.toFloat - cfg.warmupEpochs.toFloat)))
+      else cfg.learningRate
+
+    -- 4. Batch loop: forward + loss + backward + optimizer in ONE call
+    let mut epochLoss : Float := 0.0
+    for bi in [:bpE] do
+      globalStep := globalStep + 1
+      let xba := F32.sliceImages sImg (bi * batchN) batchN dio.trainPixels
+      let yb  := F32.sliceLabels sLbl (bi * batchN) batchN
+      let packed := (p.append m).append v
+
+      let out ← IreeSession.trainStepAdamF32 sess spec.trainFnName
+                  packed spec.shapesBA xba (spec.xShape batchN) yb
+                  lr globalStep.toFloat spec.bnShapesBA batchN.toUSize
+
+      epochLoss := epochLoss + F32.extractLoss out (3 * nP)
+      p := F32.slice out 0           nP                 -- updated params
+      m := F32.slice out nP          nP                 -- updated m
+      v := F32.slice out (2 * nP)    nP                 -- updated v
+
+    IO.eprintln s!"Epoch {epoch+1}/{cfg.epochs}: " ++
+                s!"loss={epochLoss / bpE.toFloat} lr={lr}"
+
+    -- 5. Validation every 10 epochs: forward-only vmfb over val set
+    if (epoch + 1) % 10 == 0 || epoch + 1 == cfg.epochs then
+      let evalSess ← IreeSession.create
+                       s!"{spec.buildPrefix}_fwd_eval.vmfb"
+      let (valImg, valLbl, nVal) ← dio.loadVal dataDir
+      let mut correct : Nat := 0
+      for bi in [:nVal / batchN] do
+        let xba := F32.sliceImages valImg (bi * batchN) batchN dio.valPixels
+        let logits ← IreeSession.forwardF32 evalSess spec.evalFnName
+                       p spec.evalShapesBA xba (spec.xShape batchN)
+                       batchN.toUSize spec.numClasses.toUSize
+        for i in [:batchN] do
+          let pred  := F32.argmax10 logits (i * spec.numClasses).toUSize
+          let label := (F32.sliceLabels valLbl (bi * batchN) batchN)
+                         .data[i * 4]!.toNat
+          if pred.toNat == label then correct := correct + 1
+      let acc := correct.toFloat / nVal.toFloat * 100.0
+      IO.eprintln s!"  val accuracy: {correct}/{nVal} = {acc}%"
+
+  -- 6. Save trained parameters
+  IO.FS.writeBinFile s!"{spec.buildPrefix}_params.bin" p
+  IO.eprintln "Saved params."
+\end{verbatim}
+
+Walking through the numbered sections:
+
+\textbf{1. Load training data.} \texttt{datasetIO ds} returns a
+per-dataset I/O helper (MNIST, CIFAR-10, Imagenette) that knows how
+to mmap the on-disk binary files into \texttt{F32Array} buffers.
+\texttt{trainImg} holds the flattened pixel data; \texttt{trainLbl}
+holds integer class labels. Nothing ML-specific yet — this is just
+``put the data somewhere the GPU can reach.''
+
+\textbf{2. Initialize parameters and optimizer state.} He
+initialization (\texttt{spec.heInitParams}) produces a
+random-but-scaled weight vector. Adam's first and second moment
+buffers start at zero. Everything is a flat \texttt{F32Array};
+reshape logic happens per-layer inside the compiled vmfb, not
+here. Three buffers --- \texttt{p}, \texttt{m}, \texttt{v} --- plus
+a running step counter.
+
+\textbf{3. Epoch loop.} Shuffle the data once per epoch with a
+deterministic seed (\texttt{epoch + 42}) so runs are reproducible.
+Compute the learning rate: linear warmup for the first
+\texttt{warmupEpochs}, then cosine decay (if enabled) over the
+rest of training. If neither warmup nor cosine is on --- the
+\texttt{s4tfBaseline} case we used in the first example ---
+\texttt{lr} is just \texttt{cfg.learningRate} constant. Warmup
+handles the transformer-style fragile-early-gradient problem;
+cosine is the standard don't-overfit-at-the-end schedule.
+
+\textbf{4. Batch loop --- the core of training.} For each mini-batch:
+slice the current epoch's images and labels, concatenate
+\texttt{(params, m, v)} into one flat buffer, and call
+\texttt{IreeSession.trainStepAdamF32}. That \emph{one call} does
+\emph{everything}: forward pass through every layer, cross-entropy
+loss, backward pass (the VJP of every layer you've proved in
+earlier sections), Adam update of parameters and moment buffers.
+Whether that update is Adam or plain SGD + momentum is baked into
+the vmfb at codegen time by \texttt{cfg.useAdam} (step~1); the call
+name stays \texttt{trainStepAdamF32} either way.
+All of it executes as one pre-compiled \texttt{stablehlo} vmfb on
+the GPU. The framework unpacks the updated \texttt{(p, m, v)} from
+the output buffer and loops.
+
+The entire Lean $\to$ MLIR $\to$ IREE pipeline's value proposition
+lives in this one line. There is no Python. There is no graph
+construction per-step. There is no autograd interpreter. The
+training step was compiled once, at startup, and every subsequent
+step is a single dispatched vmfb call. That's why training at
+batch 128 runs at $\sim$20\,ms per step on a consumer GPU
+(7900 XTX), $\sim$80\,ms on a 4060 Ti.
+
+\textbf{5. Validation.} Every 10 epochs (and always at the end) we
+swap in the forward-only eval vmfb, which uses BN's \emph{running}
+statistics (not the per-batch estimates training uses). Loop over
+the val set, forward-pass each batch, argmax the logits, compare
+to labels, count correct. Print accuracy. The eval vmfb is a
+separate compiled artifact because BN behaves differently at
+inference and we don't want that branching inside the hot training
+loop.
+
+\textbf{6. Save.} Write the parameter buffer to disk as a raw
+\texttt{.bin} blob so it can be loaded later for inference,
+fine-tuning, or cross-run comparison.
+
+That's the whole function. Seventy-odd lines of Lean doing what
+most Python deep-learning tutorials present as an elaborate black
+box. The reason it's short is that everything heavyweight —
+forward pass, loss, backward pass, optimizer update — is one
+compiled vmfb executing on the GPU. Lean's role here isn't to
+\emph{compute} gradients; it's to \emph{specify} what the training
+step is, \emph{prove} that specification is mathematically correct
+(the theorems earlier in this chapter and in subsequent chapters),
+and \emph{invoke} the IREE-compiled implementation. Three separate
+concerns, cleanly factored.
+
+Every chapter after this one hands a different \texttt{NetSpec} to
+this same loop. Only the NetSpec changes; the loop is literally
+the same hundred lines each time. That's the framework pitch in
+concrete form: once the loop is written (and proved correct one
+layer at a time), every architecture in the book and every
+architecture in the bestiary runs through it with no further
+infrastructure code.
 
 \section*{How to read this book}
 
@@ -1423,179 +1616,6 @@ dense layers: $784 \cdot 512 + 512 = 401\,920$ for layer 1,
 $512 \cdot 512 + 512 = 262\,656$ for layer 2, $512 \cdot 10 + 10 =
 5\,130$ for layer 3. Subsequent chapters show the per-layer MLIR
 fragments this code is assembled from.
-
-\section{What's inside \texttt{.train}?}
-\label{sec:mlp_inside_train}
-
-The section above treated \texttt{mnistMlp.train} as a black box.
-You specified the network, you specified the hyperparameters,
-training happened. That's deliberately the user-facing interface,
-but there's no magic: the training loop is real code, $\sim$100 lines
-of Lean in \texttt{LeanMlir/Train.lean}. Every chapter in this book
-uses the same loop. The only thing that varies chapter to chapter is
-the \texttt{NetSpec} and \texttt{TrainConfig} values handed to it;
-never the loop itself.
-
-This section walks through those hundred lines.
-
-\begin{verbatim}
-def runTraining (spec : NetSpec) (cfg : TrainConfig)
-    (ds : DatasetKind) (dataDir : String)
-    (sess : IreeSession) : IO Unit := do
-  -- 1. Load training data
-  let batchN := cfg.batchSize
-  let dio    := datasetIO ds
-  let (trainImg, trainLbl, nTrain) ← dio.loadTrain dataDir
-
-  -- 2. Initialize parameters + Adam moment buffers
-  let mut p ← spec.heInitParams                        -- He-init weights
-  let mut m ← F32.const (F32.size p).toUSize 0.0        -- Adam 1st moment
-  let mut v ← F32.const (F32.size p).toUSize 0.0        -- Adam 2nd moment
-
-  let bpE := nTrain / batchN
-  let nP  := spec.totalParams
-  let mut globalStep : Nat := 0
-
-  -- 3. Epoch loop: shuffle, schedule LR, train, log
-  for epoch in [:cfg.epochs] do
-    let (sImg, sLbl) ← F32.shuffle trainImg trainLbl
-                         nTrain.toUSize dio.trainPixels.toUSize
-                         (epoch + 42).toUSize
-
-    let lr : Float :=                                   -- cosine + warmup
-      if epoch < cfg.warmupEpochs then
-        cfg.learningRate * (epoch.toFloat + 1.0)
-          / cfg.warmupEpochs.toFloat
-      else if cfg.cosineDecay then
-        cfg.learningRate * 0.5 * (1.0 + Float.cos (
-          3.14159265 * (epoch.toFloat - cfg.warmupEpochs.toFloat)
-                     / (cfg.epochs.toFloat - cfg.warmupEpochs.toFloat)))
-      else cfg.learningRate
-
-    -- 4. Batch loop: forward + loss + backward + optimizer in ONE call
-    let mut epochLoss : Float := 0.0
-    for bi in [:bpE] do
-      globalStep := globalStep + 1
-      let xba := F32.sliceImages sImg (bi * batchN) batchN dio.trainPixels
-      let yb  := F32.sliceLabels sLbl (bi * batchN) batchN
-      let packed := (p.append m).append v
-
-      let out ← IreeSession.trainStepAdamF32 sess spec.trainFnName
-                  packed spec.shapesBA xba (spec.xShape batchN) yb
-                  lr globalStep.toFloat spec.bnShapesBA batchN.toUSize
-
-      epochLoss := epochLoss + F32.extractLoss out (3 * nP)
-      p := F32.slice out 0           nP                 -- updated params
-      m := F32.slice out nP          nP                 -- updated m
-      v := F32.slice out (2 * nP)    nP                 -- updated v
-
-    IO.eprintln s!"Epoch {epoch+1}/{cfg.epochs}: " ++
-                s!"loss={epochLoss / bpE.toFloat} lr={lr}"
-
-    -- 5. Validation every 10 epochs: forward-only vmfb over val set
-    if (epoch + 1) % 10 == 0 || epoch + 1 == cfg.epochs then
-      let evalSess ← IreeSession.create
-                       s!"{spec.buildPrefix}_fwd_eval.vmfb"
-      let (valImg, valLbl, nVal) ← dio.loadVal dataDir
-      let mut correct : Nat := 0
-      for bi in [:nVal / batchN] do
-        let xba := F32.sliceImages valImg (bi * batchN) batchN dio.valPixels
-        let logits ← IreeSession.forwardF32 evalSess spec.evalFnName
-                       p spec.evalShapesBA xba (spec.xShape batchN)
-                       batchN.toUSize spec.numClasses.toUSize
-        for i in [:batchN] do
-          let pred  := F32.argmax10 logits (i * spec.numClasses).toUSize
-          let label := (F32.sliceLabels valLbl (bi * batchN) batchN)
-                         .data[i * 4]!.toNat
-          if pred.toNat == label then correct := correct + 1
-      let acc := correct.toFloat / nVal.toFloat * 100.0
-      IO.eprintln s!"  val accuracy: {correct}/{nVal} = {acc}%"
-
-  -- 6. Save trained parameters
-  IO.FS.writeBinFile s!"{spec.buildPrefix}_params.bin" p
-  IO.eprintln "Saved params."
-\end{verbatim}
-
-Walking through the numbered sections:
-
-\textbf{1. Load training data.} \texttt{datasetIO ds} returns a
-per-dataset I/O helper (MNIST, CIFAR-10, Imagenette) that knows how
-to mmap the on-disk binary files into \texttt{F32Array} buffers.
-\texttt{trainImg} holds the flattened pixel data; \texttt{trainLbl}
-holds integer class labels. Nothing ML-specific yet — this is just
-``put the data somewhere the GPU can reach.''
-
-\textbf{2. Initialize parameters and optimizer state.} He
-initialization (\texttt{spec.heInitParams}) produces a
-random-but-scaled weight vector. Adam's first and second moment
-buffers start at zero. Everything is a flat \texttt{F32Array};
-reshape logic happens per-layer inside the compiled vmfb, not
-here. Three buffers --- \texttt{p}, \texttt{m}, \texttt{v} --- plus
-a running step counter.
-
-\textbf{3. Epoch loop.} Shuffle the data once per epoch with a
-deterministic seed (\texttt{epoch + 42}) so runs are reproducible.
-Compute the learning rate: linear warmup for the first
-\texttt{warmupEpochs}, then cosine decay (if enabled) over the
-rest of training. If neither warmup nor cosine is on --- the
-\texttt{s4tfBaseline} case we used in the first example ---
-\texttt{lr} is just \texttt{cfg.learningRate} constant. Warmup
-handles the transformer-style fragile-early-gradient problem;
-cosine is the standard don't-overfit-at-the-end schedule.
-
-\textbf{4. Batch loop --- the core of training.} For each mini-batch:
-slice the current epoch's images and labels, concatenate
-\texttt{(params, m, v)} into one flat buffer, and call
-\texttt{IreeSession.trainStepAdamF32}. That \emph{one call} does
-\emph{everything}: forward pass through every layer, cross-entropy
-loss, backward pass (the VJP of every layer you've proved in
-earlier sections), Adam update of parameters and moment buffers.
-Whether that update is Adam or plain SGD + momentum is baked into
-the vmfb at codegen time by \texttt{cfg.useAdam} (step~1); the call
-name stays \texttt{trainStepAdamF32} either way.
-All of it executes as one pre-compiled \texttt{stablehlo} vmfb on
-the GPU. The framework unpacks the updated \texttt{(p, m, v)} from
-the output buffer and loops.
-
-The entire Lean $\to$ MLIR $\to$ IREE pipeline's value proposition
-lives in this one line. There is no Python. There is no graph
-construction per-step. There is no autograd interpreter. The
-training step was compiled once, at startup, and every subsequent
-step is a single dispatched vmfb call. That's why training at
-batch 128 runs at $\sim$20\,ms per step on a consumer GPU
-(7900 XTX), $\sim$80\,ms on a 4060 Ti.
-
-\textbf{5. Validation.} Every 10 epochs (and always at the end) we
-swap in the forward-only eval vmfb, which uses BN's \emph{running}
-statistics (not the per-batch estimates training uses). Loop over
-the val set, forward-pass each batch, argmax the logits, compare
-to labels, count correct. Print accuracy. The eval vmfb is a
-separate compiled artifact because BN behaves differently at
-inference and we don't want that branching inside the hot training
-loop.
-
-\textbf{6. Save.} Write the parameter buffer to disk as a raw
-\texttt{.bin} blob so it can be loaded later for inference,
-fine-tuning, or cross-run comparison.
-
-That's the whole function. Seventy-odd lines of Lean doing what
-most Python deep-learning tutorials present as an elaborate black
-box. The reason it's short is that everything heavyweight —
-forward pass, loss, backward pass, optimizer update — is one
-compiled vmfb executing on the GPU. Lean's role here isn't to
-\emph{compute} gradients; it's to \emph{specify} what the training
-step is, \emph{prove} that specification is mathematically correct
-(the theorems earlier in this chapter and in subsequent chapters),
-and \emph{invoke} the IREE-compiled implementation. Three separate
-concerns, cleanly factored.
-
-Every chapter after this one hands a different \texttt{NetSpec} to
-this same loop. Only the NetSpec changes; the loop is literally
-the same hundred lines each time. That's the framework pitch in
-concrete form: once the loop is written (and proved correct one
-layer at a time), every architecture in the book and every
-architecture in the bestiary runs through it with no further
-infrastructure code.
 
 \chapter{MNIST: 2D CNN}
 \label{chap:cnn}
