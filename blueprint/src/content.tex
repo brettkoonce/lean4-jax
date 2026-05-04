@@ -253,7 +253,7 @@ product), and three VJP record types (\(\HasVJP\),
 \(\HasVJPMat\), \(\HasVJPthree\), one per tensor rank) that bundle a
 backward function with its correctness claim.
 
-The next twenty-eight theorems all reduce to a single definition
+The next twelve theorems all reduce to a single definition
 (\(\pdiv\)) plus chain rule, sum rule, and product rule. Before
 we drop you into the deep end, here's the shape of what's coming:
 
@@ -262,39 +262,31 @@ we drop you into the deep end, here's the shape of what's coming:
   node distance=1.2cm,
   every node/.style={font=\small, align=center},
   group/.style={rectangle, draw, fill=blue!5, rounded corners,
-                inner sep=4pt, minimum width=4cm, minimum height=1.3cm},
+                inner sep=4pt, minimum width=5cm, minimum height=1.5cm},
   root/.style={rectangle, draw, fill=red!10, rounded corners,
                inner sep=4pt, minimum width=4cm, minimum height=0.8cm},
   payoff/.style={rectangle, draw, fill=green!10, rounded corners,
-                 inner sep=4pt, minimum width=5cm, minimum height=0.9cm},
+                 inner sep=4pt, minimum width=6.5cm, minimum height=1cm},
   arrow/.style={->, >=stealth, thick, gray}
 ]
-\node[root] (pdiv) at (0, 6) {\(\pdiv\) \\ \footnotesize defined via Mathlib's \(\fderiv\)};
+\node[root] (pdiv) at (0, 5) {\(\pdiv\) \\ \footnotesize defined via Mathlib's \(\fderiv\)};
 
-\node[group] (foundation) at (-3.8, 3.8) {\textbf{Foundation rules} \\ chain $\cdot$ sum $\cdot$ product \\ identity $\cdot$ const $\cdot$ reindex};
-\node[group] (lifting) at (3.8, 3.8) {\textbf{Lifting machinery} \\ row-independence \\ 3D chain $\cdot$ 3D add};
+\node[group] (foundation) at (0, 3) {\textbf{Foundation rules} \\ chain $\cdot$ sum $\cdot$ product \\ identity $\cdot$ const $\cdot$ reindex \\ finite-sum};
 
-\node[group] (vjp) at (-3.8, 1.5) {\textbf{VJP transpose} \\ \texttt{vjp\_comp} $\cdot$ biPath \\ elemwiseProduct $\cdot$ identity};
-\node[group] (matrix) at (3.8, 1.5) {\textbf{Matrix-level VJPs} \\ chain $\cdot$ additive fan-in \\ identity};
+\node[group] (vjp) at (0, 0.5) {\textbf{VJP transpose} \\ \texttt{vjp\_comp} $\cdot$ biPath \\ elemwiseProduct $\cdot$ identity};
 
-\node[group, minimum width=9cm] (ops) at (0, -0.8) {\textbf{Operator-specific theorems} \\ matmul (L) $\cdot$ matmul (R) $\cdot$ transpose \\ scalar-scale $\cdot$ row-wise lifting};
-
-\node[payoff] (payoff) at (0, -3) {Used in Chapters 3--10: \\ every per-architecture VJP is one of these};
+\node[payoff] (payoff) at (0, -2) {Used in Chapters 3--9: every per-architecture \\ VJP unfolds through these structural rules. \\ \footnotesize (Ch~10 attention adds matrix-level machinery; see~\S\ref{sec:matrix_machinery}.)};
 
 \draw[arrow] (pdiv) -- (foundation);
-\draw[arrow] (pdiv) -- (lifting);
 \draw[arrow] (foundation) -- (vjp);
-\draw[arrow] (lifting) -- (matrix);
-\draw[arrow] (vjp) -- (ops);
-\draw[arrow] (matrix) -- (ops);
-\draw[arrow] (ops) -- (payoff);
+\draw[arrow] (vjp) -- (payoff);
 \end{tikzpicture}
 \end{center}
 
 Read top-to-bottom, this is the order things get proved.
-Read bottom-to-top, this is what every theorem in Chapters 3--10
-unfolds to. The full clickable dependency graph is in the blueprint
-web view.
+Read bottom-to-top, this is what every theorem in Chapters
+3--9 unfolds to. The full clickable dependency graph is in the
+blueprint web view.
 
 \begin{definition}[Partial derivative]
   \label{ax:pdiv}
@@ -386,22 +378,6 @@ Mechanical; see \leandocref{Proofs.pdiv\_const}.
 Mechanical; see \leandocref{Proofs.pdiv\_reindex}.
 \end{proof}
 
-\begin{theorem}[Row-independence for matrices]
-  \label{ax:pdivMat_rowIndep}
-  \lean{Proofs.pdivMat_rowIndep}
-  \leanok
-  \uses{ax:pdiv}
-  Applying a vector function per-row to a matrix has block-diagonal Jacobian.
-  Proved from \(\fderiv\) via the row-projection \(\mathrm{ContinuousLinearMap}\)
-  and the chain rule, given a \(\Differentiable\) hypothesis on the
-  per-row function.
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.pdivMat\_rowIndep}.
-\end{proof}
-
 \begin{theorem}[Finite-sum rule]
   \label{thm:pdiv_finset_sum}
   \lean{Proofs.pdiv_finset_sum}
@@ -466,191 +442,6 @@ Mechanical; see \leandocref{Proofs.elemwiseProduct\_has\_vjp}.
 Mechanical; see \leandocref{Proofs.identity\_has\_vjp}.
 \end{proof}
 
-\begin{theorem}[Matrix-level chain rule]
-  \label{thm:vjpMat_comp}
-  \lean{Proofs.vjpMat_comp}
-  \leanok
-  \uses{thm:vjp_comp}
-  Lifts \texttt{vjp\_comp} via the \(\mathsf{Mat.flatten}\) bijection.
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.vjpMat\_comp}.
-\end{proof}
-
-\begin{theorem}[Matrix-level additive fan-in]
-  \label{thm:biPathMat_has_vjp}
-  \lean{Proofs.biPathMat_has_vjp}
-  \leanok
-  \uses{thm:biPath_has_vjp}
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.biPathMat\_has\_vjp}.
-\end{proof}
-
-\begin{theorem}[Matrix-level identity]
-  \label{thm:identityMat_has_vjp}
-  \lean{Proofs.identityMat_has_vjp}
-  \leanok
-  \uses{thm:identity_has_vjp}
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.identityMat\_has\_vjp}.
-\end{proof}
-
-\begin{theorem}[Scalar-scale Jacobian]
-  \label{thm:pdivMat_scalarScale}
-  \lean{Proofs.pdivMat_scalarScale}
-  \leanok
-  \uses{ax:pdiv_mul, ax:pdiv_const, ax:pdiv_id}
-  Phase 6 derivation.
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.pdivMat\_scalarScale}.
-\end{proof}
-
-\begin{theorem}[Transpose Jacobian]
-  \label{thm:pdivMat_transpose}
-  \lean{Proofs.pdivMat_transpose}
-  \leanok
-  \uses{ax:pdiv_reindex}
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.pdivMat\_transpose}.
-\end{proof}
-
-\begin{theorem}[Matmul Jacobian, left factor fixed]
-  \label{thm:pdivMat_matmul_left_const}
-  \lean{Proofs.pdivMat_matmul_left_const}
-  \leanok
-  \uses{ax:pdiv_const, ax:pdiv_reindex, thm:pdiv_finset_sum}
-  Phase 6: derived, not axiomatized.
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.pdivMat\_matmul\_left\_const}.
-\end{proof}
-
-\begin{theorem}[Matmul Jacobian, right factor fixed]
-  \label{thm:pdivMat_matmul_right_const}
-  \lean{Proofs.pdivMat_matmul_right_const}
-  \leanok
-  \uses{ax:pdiv_const, ax:pdiv_reindex, thm:pdiv_finset_sum}
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.pdivMat\_matmul\_right\_const}.
-\end{proof}
-
-\begin{theorem}[Matmul VJP, left factor fixed]
-  \label{thm:matmul_left_const_has_vjp}
-  \lean{Proofs.matmul_left_const_has_vjp}
-  \leanok
-  \uses{thm:pdivMat_matmul_left_const}
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.matmul\_left\_const\_has\_vjp}.
-\end{proof}
-
-\begin{theorem}[Matmul VJP, right factor fixed]
-  \label{thm:matmul_right_const_has_vjp}
-  \lean{Proofs.matmul_right_const_has_vjp}
-  \leanok
-  \uses{thm:pdivMat_matmul_right_const}
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.matmul\_right\_const\_has\_vjp}.
-\end{proof}
-
-\begin{theorem}[Scalar-scale VJP]
-  \label{thm:scalarScale_has_vjp}
-  \lean{Proofs.scalarScale_has_vjp}
-  \leanok
-  \uses{thm:pdivMat_scalarScale}
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.scalarScale\_has\_vjp}.
-\end{proof}
-
-\begin{theorem}[Transpose VJP]
-  \label{thm:transpose_has_vjp}
-  \lean{Proofs.transpose_has_vjp}
-  \leanok
-  \uses{thm:pdivMat_transpose}
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.transpose\_has\_vjp}.
-\end{proof}
-
-\begin{theorem}[Row-wise lifting of any \(\HasVJP\)]
-  \label{thm:rowwise_has_vjp_mat}
-  \lean{Proofs.rowwise_has_vjp_mat}
-  \leanok
-  \uses{ax:pdivMat_rowIndep}
-  Phase 8 generic helper: lifts any \(\HasVJP\, (g : \Vect{n} \to \Vect{p})\)
-  to a \(\HasVJPMat\) on \(\Mat{m}{n} \to \Mat{m}{p}\).
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.rowwise\_has\_vjp\_mat}.
-\end{proof}
-
-\begin{theorem}[3D chain rule]
-  \label{thm:pdiv3_comp}
-  \lean{Proofs.pdiv3_comp}
-  \leanok
-  \uses{ax:pdiv_comp}
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.pdiv3\_comp}.
-\end{proof}
-
-\begin{theorem}[3D VJP chain rule]
-  \label{thm:vjp3_comp}
-  \lean{Proofs.vjp3_comp}
-  \leanok
-  \uses{thm:pdiv3_comp}
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.vjp3\_comp}.
-\end{proof}
-
-\begin{theorem}[3D additive fan-in]
-  \label{thm:biPath3_has_vjp}
-  \lean{Proofs.biPath3_has_vjp}
-  \leanok
-  \uses{ax:pdiv_add}
-\end{theorem}
-
-\begin{proof}
-\leanok
-Mechanical; see \leandocref{Proofs.biPath3\_has\_vjp}.
-\end{proof}
-
 \section*{The chapter in one example: MLP gradients}
 
 Take a one-hidden-layer MLP with cross-entropy loss:
@@ -684,16 +475,18 @@ The map \(b_2 \mapsto W_2 h + b_2\) is the identity in \(b_2\)
 (Theorem~\ref{thm:identity_has_vjp}). So \(\nabla_{b_2} \ell = dz\).
 
 \paragraph{Step 4 --- gradient w.r.t. \(W_2\).}
-The map \(W_2 \mapsto W_2 h\) is matmul with the right factor \(h\)
-held constant: Jacobian by Theorem~\ref{thm:pdivMat_matmul_right_const},
-VJP is the outer product (Theorem~\ref{thm:matmul_right_const_has_vjp}):
-\(\nabla_{W_2} \ell = dz \otimes h\).
+The map \(W_2 \mapsto W_2 h + b_2\) has the per-entry Dense Jacobian
+(Theorem~\ref{ax:pdiv_dense_W}, proved in Ch~\ref{chap:mlp} from
+\emph{this chapter's} foundation rules: \(\pdiv\)\_finset\_sum +
+const + reindex). Chain rule (Theorem~\ref{ax:pdiv_comp}) composes
+that Jacobian with the upstream gradient \(dz\) to give the outer
+product \(\nabla_{W_2} \ell = dz \otimes h\).
 
 \paragraph{Step 5 --- gradient w.r.t. \(h\) (the ReLU activation).}
-The map \(h \mapsto W_2 h\) is matmul with the left factor \(W_2\)
-held constant: Jacobian by Theorem~\ref{thm:pdivMat_matmul_left_const},
-VJP is matmul by transpose (Theorem~\ref{thm:matmul_left_const_has_vjp}):
-\(dh = W_2^T\, dz\).
+Same Dense layer, now differentiated w.r.t. its input: per-entry
+Jacobian by Theorem~\ref{ax:pdiv_dense} (also a Ch~\ref{chap:mlp}
+theorem from this chapter's foundation rules). Chain rule again
+gives \(dh = W_2^T\, dz\).
 
 \paragraph{Step 6 --- through the ReLU.}
 The ReLU VJP is the gated-gradient
@@ -701,16 +494,20 @@ The ReLU VJP is the gated-gradient
 \(dh_{\text{pre}} = dh \odot \mathbb{1}_{h_{\text{pre}} > 0}\).
 
 \paragraph{Steps 7--8 --- through \(\mathrm{dense}_1\).}
-Symmetric to Steps 3--4. Identity VJP gives
-\(\nabla_{b_1} \ell = dh_{\text{pre}}\); matmul-right-const VJP
-gives \(\nabla_{W_1} \ell = dh_{\text{pre}} \otimes x\).
+Symmetric to Steps 3--4. Identity VJP
+(Theorem~\ref{thm:identity_has_vjp}) gives
+\(\nabla_{b_1} \ell = dh_{\text{pre}}\); the Dense weight Jacobian
+(Theorem~\ref{ax:pdiv_dense_W}) plus chain rule give
+\(\nabla_{W_1} \ell = dh_{\text{pre}} \otimes x\).
 
 \paragraph{What we just used.}
-Eight steps, eight theorems. Six from this chapter (chain rule,
-identity Jacobian and VJP, matmul (left- and right-constant)
-Jacobians and VJPs); two foreshadowed for Ch 3 (softmax CE, ReLU
-VJP). No new mathematical machinery is needed for the entire MLP
-backward pass.
+Eight steps. Three from this chapter (chain rule, identity Jacobian
+and VJP); five foreshadowed for Ch~\ref{chap:mlp} (softmax CE, ReLU
+VJP, the two Dense Jacobians, and Dense-bias-gradient is identity).
+The Ch~\ref{chap:mlp} theorems are \emph{themselves} proved from
+this chapter's foundation rules --- when you read them, you'll see
+\(\pdiv\)\_finset\_sum + reindex + const + add doing the work
+underneath.
 
 Every architecture in Part 2 extends this template the same way:
 ResNet adds additive fan-in (Theorem~\ref{thm:biPath_has_vjp}) for
@@ -920,57 +717,6 @@ we ship the closed form: codegen reads off the \texttt{backward}
 field and emits a single fused StableHLO kernel --- no tape, no
 replay.
 
-The next subsection unpacks this on the simplest possible example: the
-dense layer, $f(x) = W x + b$.
-
-\subsection*{Worked example: the dense layer}
-
-The theorems above look abstract on their own. Here's how they
-compose into a concrete VJP, using just the tools of this chapter.
-
-The dense layer forward is $f(x) = W \cdot x + b$, mapping $\Vect{n}$
-to $\Vect{m}$. Its Jacobian at any $x$ is precisely $W$ ---
-Theorem~\ref{ax:pdiv_dense} (\(\texttt{pdiv\_dense}\), proved
-from the foundation rules) states this directly:
-\[
-  \pdiv\, f\, x\, i\, j = W_{i,j}.
-\]
-
-\textbf{Step 1: package $f$ as a $\HasVJP$.} A $\HasVJP$ record
-bundles a backward function with a correctness claim. For dense, the
-backward function is
-$\mathrm{backward}(dy) = W^T \cdot dy$: multiply the upstream
-gradient by the transposed weights. The correctness claim
-$\mathrm{backward}(dy)_j = \sum_i dy_i \cdot \pdiv\, f\, x\, i\, j$
-follows from $\pdiv\_dense$ in two lines. Call the resulting record
-$\texttt{dense\_has\_vjp}$ (proved as
-\S~\ref{thm:dense_has_vjp} in the next chapter).
-
-\textbf{Step 2: compose two dense layers.} Let
-$g(y) = W_2 \cdot y + b_2$ be a second dense layer, mapping
-$\Vect{m}$ to $\Vect{p}$. The composition $g \circ f$ maps
-$\Vect{n}$ all the way to $\Vect{p}$.
-
-By Theorem~\ref{thm:vjp_comp} --- the \emph{VJP chain rule}, proved
-above from $\pdiv\_comp$ --- if $f$ and $g$ each have a $\HasVJP$, so
-does $g \circ f$, with backward function
-$dz \mapsto \mathrm{backward}_f(\mathrm{backward}_g(dz))$.
-
-That's it. Two applications of $\texttt{dense\_has\_vjp}$ plus one
-application of $\texttt{vjp\_comp}$, and a two-layer dense stack has
-a machine-checked backward pass.
-
-\textbf{Every later chapter follows this pattern.}
-Chapter~\ref{chap:mlp}'s MLP is three dense layers plus activations
---- the above, with $\texttt{relu\_has\_vjp}$ inserted between each
-pair. Chapter~\ref{chap:cnn}'s CNN replaces dense with
-$\texttt{conv2d\_has\_vjp3}$ but the composition story is unchanged.
-By Chapter~\ref{chap:attention} the pattern is identical:
-$\HasVJP$s for bundled primitives (conv, BN, attention) composed
-with the chain, fan-in, and product rules from this chapter.
-
-One pattern, scaled up.
-
 \subsection*{Theorem and definition budget per chapter}
 
 If you're planning how much of the book to read, here's the
@@ -980,11 +726,13 @@ the proofs unfold to). The totals across Chapters 2--10 are
 \textbf{81 numbered items (72 theorems + 9 definitions)}.
 
 \textbf{Chapter 2 (You Are Here)} does the structural heavy lifting:
-27 theorems that compose Mathlib's \(\fderiv\) into the VJP
+11 theorems that compose Mathlib's \(\fderiv\) into the VJP
 toolkit every later chapter will reuse --- the chain rule,
-additive and multiplicative fan-in, identity, reindexing,
-row-independence for matrices, and the matrix-/ 3-tensor-level
-lifts. Plus \(\pdiv\) itself as a definition over \(\fderiv\).
+additive and multiplicative fan-in, identity, reindexing, finite-sum.
+Plus \(\pdiv\) itself as a definition over \(\fderiv\). The
+matrix-level extensions (matmul, transpose, scalar-scale, row-wise
+lifting, 3D chain rule) live at the start of Chapter~\ref{chap:attention},
+where attention first uses them.
 
 \textbf{Chapter 3 (MNIST: 1D)} adds 7 theorems plus 2 definitions.
 The guarded ReLU Jacobian \(\pdiv\_\texttt{relu}\) is now proved
@@ -1025,33 +773,36 @@ The GELU Jacobian is proved via \(\fderiv\) and
 its derivative are concrete defs; LayerNorm reuses the BN
 proof template.
 
-\textbf{Chapter 10 (ViT)} adds 20 theorems.
-Phase 3 proved multi-head SDPA via column-stacking (lifting the
-single-head SDPA backward over the head axis using a new
-\(\pdivMat\_\texttt{colIndep}\) +
-\(\texttt{colSlabwise\_has\_vjp\_mat}\) framework). Phase 6 closed
-patch embedding by de-opaquing the forward (Phase 6a) and proving
-the input VJP via spatial rearrangement (Phase 6b). Softmax
-Jacobian, row-wise softmax smoothness, and seven
-transformer-level chains (sublayers, block, tower, ViT body) are
-all proved. The theorems call the matrix-composition kit
-Chapter~2 set up; the transformer block factors through every
-one of them.
+\textbf{Chapter 10 (ViT)} adds 36 theorems --- the largest chapter
+budget in the book and the only one that needs the matrix-level
+extensions of Chapter~2's foundation rules. The chapter opens with
+\textbf{16 matrix-machinery theorems} (matmul Jacobians and VJPs in
+both factor positions, transpose, scalar-scale, row-wise lifting,
+matrix and 3D chain rules) before any attention proof appears.
+Then the 20 attention theorems: Phase 3 proved multi-head SDPA via
+column-stacking (lifting the single-head SDPA backward over the
+head axis using \(\pdivMat\_\texttt{colIndep}\) +
+\(\texttt{colSlabwise\_has\_vjp\_mat}\)). Phase 6 closed patch
+embedding by de-opaquing the forward (Phase 6a) and proving the
+input VJP via spatial rearrangement (Phase 6b). Softmax Jacobian,
+row-wise softmax smoothness, and seven transformer-level chains
+(sublayers, block, tower, ViT body) all factor through the matrix
+machinery this chapter just assembled.
 
 \begin{center}
 \begin{tabular}{l c c r l}
 \hline
 Chapter & New (th + def) & Cumulative & Last \# & Math primitive added \\
 \hline
-2 (You Are Here)       & 27 + 1  & 27 + 1 & 28 & chain / fan-in / product rules \\
-3 (MNIST: 1D)          & 7 + 2   & 34 + 3 & 37 & $+$ Dense $+$ ReLU $+$ softmax CE \\
-4 (MNIST: 2D)          & 3 + 3   & 37 + 6 & 43 & $+$ Conv $+$ MaxPool \\
-5 (CIFAR: BN)          & 7 + 0   & 44 + 6 & 50 & $+$ BatchNorm Jacobian \\
-6 (ResNet-34)          & 1 + 0   & 45 + 6 & 51 & $+$ Residual fan-in \\
-7 (MobileNetV2)        & 3 + 1   & 48 + 7 & 55 & $+$ Depthwise \\
-8 (EfficientNet)       & 1 + 0   & 49 + 7 & 56 & $+$ SE (mult. fan-in) \\
-9 (ConvNeXt)           & 3 + 2   & 52 + 9 & 61 & $+$ LN $+$ GELU \\
-10 (ViT)               & 20 + 0  & 72 + 9 & 81 & $+$ Attention \\
+2 (You Are Here)       & 11 + 1  & 11 + 1 & 12 & chain / fan-in / product rules \\
+3 (MNIST: 1D)          & 7 + 2   & 18 + 3 & 21 & $+$ Dense $+$ ReLU $+$ softmax CE \\
+4 (MNIST: 2D)          & 3 + 3   & 21 + 6 & 27 & $+$ Conv $+$ MaxPool \\
+5 (CIFAR: BN)          & 7 + 0   & 28 + 6 & 34 & $+$ BatchNorm Jacobian \\
+6 (ResNet-34)          & 1 + 0   & 29 + 6 & 35 & $+$ Residual fan-in \\
+7 (MobileNetV2)        & 3 + 1   & 32 + 7 & 39 & $+$ Depthwise \\
+8 (EfficientNet)       & 1 + 0   & 33 + 7 & 40 & $+$ SE (mult. fan-in) \\
+9 (ConvNeXt)           & 3 + 2   & 36 + 9 & 45 & $+$ LN $+$ GELU \\
+10 (ViT)               & 36 + 0  & 72 + 9 & 81 & $+$ matrix kit $+$ Attention \\
 \hline
 \end{tabular}
 \end{center}
@@ -1071,73 +822,6 @@ pdiv-derived witness; the codegen substitutes the standard
 subgradient/argmax convention at non-smooth points. The trust
 kernel for the entire backward pass is just Lean core, Mathlib,
 and the codegen contract.
-
-\subsection*{Roadmap: skip to your target architecture}
-
-Every theorem and definition in the book carries a
-\texttt{\textbackslash uses\{\}} annotation, so the dependency graph
-from ``which target architecture do I care about?'' back to ``which
-Ch 2 items do I actually need?'' is explicit --- we get it for free
-from doing the proofs in Lean in the first place. If your goal is a
-specific architecture rather than the full tour, here's the
-critical-path subset of this chapter per target.
-
-\textbf{Target: MLP (Ch 3).} Chain rule plus a handful of basic
-helpers: \texttt{vjp\_comp}, \texttt{flatten}, \texttt{unflatten},
-\texttt{mulVec}, \texttt{outer}. About a third of this chapter. Skip
-every 2D-matrix theorem (the \texttt{*Mat}-named ones) and every
-3D-tensor theorem (the \texttt{*3}-named ones).
-
-\textbf{Target: CNN (Ch 4), with or without BN (Ch 5).} MLP subset
-plus the 3D-tensor composition tools: \texttt{pdiv3}, \texttt{pdiv3\_comp},
-\texttt{vjp3\_comp}, \texttt{flatten\_unflatten}, \texttt{unflatten\_flatten},
-\texttt{transpose}. Still no matrix composition. About half of this
-chapter. BN itself is self-contained in Ch 5's own theorems; it only
-reuses \texttt{vjp\_comp} from here.
-
-\textbf{Target: ResNet-34 (Ch 6).} CNN subset plus
-\texttt{biPath\_has\_vjp} and \texttt{identity\_has\_vjp} for the
-additive skip connection. \emph{This is a great stopping point.}
-ResNet-34 was state of the art for years, still routinely gets 90\%
-on Imagenette; its slightly bigger brother ResNet-50 is the standard
-benchmark (🐐) for production image classification on consumer
-hardware, and its proofs don't need
-anything more
-complicated than the chain rule and two additive-fan-in lemmas. If
-your destination is a real image-classifier that works, Ch 2
-first-half plus Ch 3-6 is a complete reading list; Ch 7--10 are
-strictly skippable.
-
-\textbf{Target: MobileNet V2 (Ch 7).} ResNet subset unchanged. The
-depthwise chapter introduces its own primitive (depthwise conv) but
-doesn't add any Ch 2 dependencies --- the tensor-calculus tools
-stay the same as for ResNet.
-
-\textbf{Target: EfficientNet (Ch 8).} MobileNet subset plus
-\texttt{elemwiseProduct\_has\_vjp} for the SE gate. Still no matrix
-composition.
-
-\textbf{Target: ConvNeXt (Ch 9).} Same Ch 2 subset as
-EfficientNet. Ch 9 introduces LayerNorm and GELU as new primitives
-but their VJPs are self-contained --- the proofs reuse BN's three-term
-template (Ch 5) for LayerNorm and \(\fderiv\) directly for GELU,
-neither of which reaches back into the tensor-calculus chapter.
-
-\textbf{Target: Attention / ViT (Ch 10).} You finally need the
-2D-matrix half of this chapter: the full \texttt{pdivMat} /
-\texttt{vjpMat\_comp} / \texttt{biPathMat\_has\_vjp} /
-\texttt{identityMat\_has\_vjp} composition kit, plus
-\texttt{transpose\_has\_vjp}, \texttt{matmul\_left\_const\_has\_vjp},
-\texttt{matmul\_right\_const\_has\_vjp},
-\texttt{scalarScale\_has\_vjp}, \texttt{rowwise\_has\_vjp\_mat}, and
-the \texttt{hasVJPMat\_to\_hasVJP} bridge back to flat
-\(\HasVJP\)-land. This is why the matrix half of Ch 2 exists; every
-earlier chapter routes around it.
-
-If you're unsure: read the first half of this chapter carefully
-(tensor helpers, chain rule, additive fan-in) and skim the matrix
-second half. You can always come back for it when you're ready to
-tackle attention.
 
 \begin{figure}[ht]
 \centering
@@ -1173,7 +857,7 @@ tackle attention.
   \texttt{pdiv\_finset\_sum}
 };
 \node[group] (matkit) at (8.0, 0) {
-  \textbf{Ch~2: matrix kit} \\
+  \textbf{Ch~10: matrix kit} \\
   \texttt{pdivMat\_comp} \\
   \texttt{matmul\_left\_const} \\
   \texttt{rowwise\_has\_vjp\_mat}
@@ -1284,6 +968,65 @@ tackle attention.
 \caption{Three architecture spines, all the way down to Ch~2 foundation. ResNet-34 (left) needs only the foundation calculus and Chs~3--6 primitives. EfficientNet-B0 (middle) adds Ch~7's depthwise conv and Ch~8's SE block; dashed arrows mark Chs~4 (CNN) and 5 (BN), shared with R34. ViT (right) is the only path that needs the matrix kit; its longer chain runs through MHSA and the transformer block before bundling into the full ViT VJP. Every node is a Lean theorem.}
 \label{fig:spines}
 \end{figure}
+
+\subsection*{Roadmap: skip to your target architecture}
+
+Every theorem and definition in the book carries a
+\texttt{\textbackslash uses\{\}} annotation, so the dependency graph
+from ``which target architecture do I care about?'' back to which
+foundation pieces you need is explicit --- we get it for free from
+doing the proofs in Lean. Chapter~2 itself is short enough that
+the right answer for every target is ``just read all of it''
+(11 theorems + 1 definition, mostly chain rule and fan-in
+variants). The interesting subsetting decision is which later
+chapters to read, and whether you need Chapter~10's matrix-machinery
+section.
+
+\textbf{Target: MLP (Ch~\ref{chap:mlp}).} Ch~2 + Ch~\ref{chap:mlp}.
+The MLP backward pass uses chain rule, additive fan-in, identity,
+and the Dense Jacobians (which are themselves built from this
+chapter's finite-sum + const + reindex).
+
+\textbf{Target: CNN, with or without BN (Ch \ref{chap:cnn}--\ref{chap:bn}).}
+Ch~2 + Ch~\ref{chap:mlp}--\ref{chap:bn}. CNN adds Conv2d and MaxPool
+VJPs proved from this chapter's foundation; BN adds the
+inverse-stddev smoothness chain.
+
+\textbf{Target: ResNet-34 (Ch~\ref{chap:residual}).} Ch~2--\ref{chap:residual}.
+Adds one theorem on top of CNN+BN: the residual additive-fan-in VJP.
+\emph{This is a great stopping point.} ResNet-34 was state of the
+art for years and still routinely gets 90\% on Imagenette; its
+bigger brother ResNet-50 is the standard benchmark (🐐) for
+production image classification on consumer hardware. If your
+destination is a real image classifier that works, Ch
+2--\ref{chap:residual} is a complete reading list; Chs
+\ref{chap:depthwise}--\ref{chap:attention} are strictly skippable.
+
+\textbf{Target: MobileNetV2 (Ch~\ref{chap:depthwise}).} ResNet
+subset $+$ Ch~\ref{chap:depthwise}. Adds depthwise conv VJPs (same
+recipe as Ch~\ref{chap:cnn} with one fewer summation level).
+
+\textbf{Target: EfficientNet (Ch~\ref{chap:se}).} MobileNet subset
+$+$ Ch~\ref{chap:se}. Adds the SE block VJP (squeeze-and-excitation
+as elementwise product over global pool + 1$\times$1 convs).
+
+\textbf{Target: ConvNeXt (Ch~\ref{chap:layernorm}).} EfficientNet
+subset $+$ Ch~\ref{chap:layernorm}. Adds GELU and LayerNorm as new
+operator primitives; both proved from Ch~2 foundation rules.
+
+\textbf{Target: Attention / ViT (Ch~\ref{chap:attention}).}
+Everything above plus Ch~\ref{chap:attention}. This is the only
+chapter that needs matrix-level machinery (matmul Jacobians and
+VJPs in both factor positions, transpose, scalar-scale, row-wise
+lifting, 3D extensions); they're gathered in
+\S\ref{sec:matrix_machinery} at the start of Ch~\ref{chap:attention},
+just before the attention proofs that use them. Every earlier
+chapter routes around the matrix kit entirely.
+
+If you're unsure: read Ch~2 carefully (it's short), pick an
+architecture target that fits your interest, follow the chapter
+chain to it. You can always extend the read list later as new
+architectures catch your eye.
 
 \subsection*{For readers of the first book}
 
@@ -3325,6 +3068,225 @@ noise; the $+2.9\%$ delta from CutMix is well above.
 
 \chapter{Vision Transformer}
 \label{chap:attention}
+
+\section{Matrix-level machinery}
+\label{sec:matrix_machinery}
+
+Attention is fundamentally matrix algebra: queries times keys
+transposed (\(QK^T\)), softmax over rows of the resulting matrix,
+matmul against values (\(\cdot V\)). Before we can prove backward
+passes through these operations, we need the matrix-level
+extensions of Ch~\ref{chap:tensor}'s foundation rules. Each theorem
+below is the matrix lift of a vector-level theorem from Ch
+\ref{chap:tensor}, proved by composing the vector version with the
+row-projection \(\mathrm{ContinuousLinearMap}\). The Lean proofs all
+live in \texttt{Proofs/Tensor.lean} alongside their vector
+counterparts; we collect them here because Ch~\ref{chap:attention}
+is the first and only chapter to use them.
+
+\begin{theorem}[Row-independence for matrices]
+  \label{ax:pdivMat_rowIndep}
+  \lean{Proofs.pdivMat_rowIndep}
+  \leanok
+  \uses{ax:pdiv}
+  Applying a vector function per-row to a matrix has block-diagonal Jacobian.
+  Proved from \(\fderiv\) via the row-projection \(\mathrm{ContinuousLinearMap}\)
+  and the chain rule, given a \(\Differentiable\) hypothesis on the
+  per-row function.
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.pdivMat\_rowIndep}.
+\end{proof}
+
+\begin{theorem}[Matrix-level chain rule]
+  \label{thm:vjpMat_comp}
+  \lean{Proofs.vjpMat_comp}
+  \leanok
+  \uses{thm:vjp_comp}
+  Lifts \texttt{vjp\_comp} via the \(\mathsf{Mat.flatten}\) bijection.
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.vjpMat\_comp}.
+\end{proof}
+
+\begin{theorem}[Matrix-level additive fan-in]
+  \label{thm:biPathMat_has_vjp}
+  \lean{Proofs.biPathMat_has_vjp}
+  \leanok
+  \uses{thm:biPath_has_vjp}
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.biPathMat\_has\_vjp}.
+\end{proof}
+
+\begin{theorem}[Matrix-level identity]
+  \label{thm:identityMat_has_vjp}
+  \lean{Proofs.identityMat_has_vjp}
+  \leanok
+  \uses{thm:identity_has_vjp}
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.identityMat\_has\_vjp}.
+\end{proof}
+
+\begin{theorem}[Scalar-scale Jacobian]
+  \label{thm:pdivMat_scalarScale}
+  \lean{Proofs.pdivMat_scalarScale}
+  \leanok
+  \uses{ax:pdiv_mul, ax:pdiv_const, ax:pdiv_id}
+  Phase 6 derivation.
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.pdivMat\_scalarScale}.
+\end{proof}
+
+\begin{theorem}[Transpose Jacobian]
+  \label{thm:pdivMat_transpose}
+  \lean{Proofs.pdivMat_transpose}
+  \leanok
+  \uses{ax:pdiv_reindex}
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.pdivMat\_transpose}.
+\end{proof}
+
+\begin{theorem}[Matmul Jacobian, left factor fixed]
+  \label{thm:pdivMat_matmul_left_const}
+  \lean{Proofs.pdivMat_matmul_left_const}
+  \leanok
+  \uses{ax:pdiv_const, ax:pdiv_reindex, thm:pdiv_finset_sum}
+  Phase 6: derived, not axiomatized.
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.pdivMat\_matmul\_left\_const}.
+\end{proof}
+
+\begin{theorem}[Matmul Jacobian, right factor fixed]
+  \label{thm:pdivMat_matmul_right_const}
+  \lean{Proofs.pdivMat_matmul_right_const}
+  \leanok
+  \uses{ax:pdiv_const, ax:pdiv_reindex, thm:pdiv_finset_sum}
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.pdivMat\_matmul\_right\_const}.
+\end{proof}
+
+\begin{theorem}[Matmul VJP, left factor fixed]
+  \label{thm:matmul_left_const_has_vjp}
+  \lean{Proofs.matmul_left_const_has_vjp}
+  \leanok
+  \uses{thm:pdivMat_matmul_left_const}
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.matmul\_left\_const\_has\_vjp}.
+\end{proof}
+
+\begin{theorem}[Matmul VJP, right factor fixed]
+  \label{thm:matmul_right_const_has_vjp}
+  \lean{Proofs.matmul_right_const_has_vjp}
+  \leanok
+  \uses{thm:pdivMat_matmul_right_const}
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.matmul\_right\_const\_has\_vjp}.
+\end{proof}
+
+\begin{theorem}[Scalar-scale VJP]
+  \label{thm:scalarScale_has_vjp}
+  \lean{Proofs.scalarScale_has_vjp}
+  \leanok
+  \uses{thm:pdivMat_scalarScale}
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.scalarScale\_has\_vjp}.
+\end{proof}
+
+\begin{theorem}[Transpose VJP]
+  \label{thm:transpose_has_vjp}
+  \lean{Proofs.transpose_has_vjp}
+  \leanok
+  \uses{thm:pdivMat_transpose}
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.transpose\_has\_vjp}.
+\end{proof}
+
+\begin{theorem}[Row-wise lifting of any \(\HasVJP\)]
+  \label{thm:rowwise_has_vjp_mat}
+  \lean{Proofs.rowwise_has_vjp_mat}
+  \leanok
+  \uses{ax:pdivMat_rowIndep}
+  Phase 8 generic helper: lifts any \(\HasVJP\, (g : \Vect{n} \to \Vect{p})\)
+  to a \(\HasVJPMat\) on \(\Mat{m}{n} \to \Mat{m}{p}\).
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.rowwise\_has\_vjp\_mat}.
+\end{proof}
+
+\begin{theorem}[3D chain rule]
+  \label{thm:pdiv3_comp}
+  \lean{Proofs.pdiv3_comp}
+  \leanok
+  \uses{ax:pdiv_comp}
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.pdiv3\_comp}.
+\end{proof}
+
+\begin{theorem}[3D VJP chain rule]
+  \label{thm:vjp3_comp}
+  \lean{Proofs.vjp3_comp}
+  \leanok
+  \uses{thm:pdiv3_comp}
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.vjp3\_comp}.
+\end{proof}
+
+\begin{theorem}[3D additive fan-in]
+  \label{thm:biPath3_has_vjp}
+  \lean{Proofs.biPath3_has_vjp}
+  \leanok
+  \uses{ax:pdiv_add}
+\end{theorem}
+
+\begin{proof}
+\leanok
+Mechanical; see \leandocref{Proofs.biPath3\_has\_vjp}.
+\end{proof}
+
+\section{Attention proofs}
+\label{sec:attention_proofs}
 
 \begin{theorem}[Softmax Jacobian]
   \label{ax:pdiv_softmax}
