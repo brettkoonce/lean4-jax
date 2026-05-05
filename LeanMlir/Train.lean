@@ -136,6 +136,9 @@ private structure DatasetIO where
   valPixels : Nat
   /-- Channels (1 for MNIST, 3 for CIFAR/Imagenette). -/
   channels : Nat
+  /-- Bytes per label record. 4 for int32-class classification (default),
+      H*W for per-pixel segmentation masks (Pets: 224*224 = 50176). -/
+  labelBytesPerRecord : Nat := 4
   loadTrain : String → IO (ByteArray × ByteArray × Nat)
   loadVal   : String → IO (ByteArray × ByteArray × Nat)
   /-- Apply augmentation to a slice of training data. Receives the raw
@@ -230,10 +233,27 @@ private def cifar10IO : DatasetIO where
   augmentBatch := fun raw batch seed =>
     F32.randomHFlip raw batch 3 32 32 seed.toUSize
 
+/-- Oxford-IIIT Pets: 224×224 RGB images with 224×224 per-pixel
+    masks (3-class trimap: 0=foreground, 1=background, 2=boundary).
+    No augmentation in Phase 0 of the UNet demo — mask-aware aug
+    is a follow-on. The "labels" buffer in this DatasetIO is the
+    mask buffer (224*224 bytes per record, not 4 bytes per record
+    like the classification datasets); downstream segmentation
+    code reads it as a per-pixel layout. -/
+private def petsIO : DatasetIO where
+  trainPixels := 3 * 224 * 224
+  valPixels   := 3 * 224 * 224
+  channels    := 3
+  labelBytesPerRecord := 224 * 224
+  loadTrain := fun dir => F32.loadPets (dir ++ "/train.bin")
+  loadVal   := fun dir => F32.loadPets (dir ++ "/val.bin")
+  augmentBatch := fun raw _ _ => return raw
+
 private def datasetIO : DatasetKind → DatasetIO
   | .imagenette => imagenetteIO
   | .mnist      => mnistIO
   | .cifar10    => cifar10IO
+  | .pets       => petsIO
 
 /-- Adam + cosine-LR + running-BN-stats training loop, generic over
     `DatasetKind`. The dataset specifies how to load the train/val
@@ -295,6 +315,7 @@ def runTraining (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
           | .mnist      => "mnist"
           | .cifar10    => "cifar10"
           | .imagenette => "imagenette"
+          | .pets       => "pets"
         let hdr :=
           "{\"kind\":\"header\",\"phase\":\"phase3\"" ++
           s!",\"netspec_name\":\"{spec.name}\"" ++
@@ -373,7 +394,7 @@ def runTraining (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
       let xbaInit ← if cfg.augment then dio.augmentBatch xbaRaw batch (epoch * 10000 + bi)
                                    else dio.preprocessBatch xbaRaw batch
       let mut xba : ByteArray := xbaInit
-      let yb := F32.sliceLabels curLbl (bi * batchN) batchN
+      let yb := F32.sliceLabels curLbl (bi * batchN) batchN dio.labelBytesPerRecord
       let stepSeed : USize := (epoch * 100000 + bi).toUSize
       let mut yArg : ByteArray := yb
       -- DeiT-style aug. RandAugment first (color-only subset), then RE.
@@ -496,7 +517,7 @@ def runTraining (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
                             evalParams evalShapesBA xba evalXSh evalBatch.toUSize nClasses
             let mom : Float := 1.0 / (k.toFloat + 1.0)
             logitsAcc ← F32.ema logitsAcc logits mom
-          let lblSlice := F32.sliceLabels valLbl (bi * evalBatch) evalBatch
+          let lblSlice := F32.sliceLabels valLbl (bi * evalBatch) evalBatch dio.labelBytesPerRecord
           for i in [:evalBatch] do
             let pred := F32.argmax10 logitsAcc (i * spec.numClasses).toUSize
             let label := lblSlice.data[i * 4]!.toNat
@@ -540,7 +561,7 @@ def runTraining (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
       let mut correct : Nat := 0
       let mut total : Nat := 0
       for bi in [:evalSteps] do
-        let lblSlice := F32.sliceLabels valLbl (bi * evalBatch) evalBatch
+        let lblSlice := F32.sliceLabels valLbl (bi * evalBatch) evalBatch dio.labelBytesPerRecord
         for i in [:evalBatch] do
           let pred := F32.argmax10 logitsAccs[bi]! (i * spec.numClasses).toUSize
           let label := lblSlice.data[i * 4]!.toNat
@@ -605,7 +626,7 @@ def evalOnly (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
     let xba ← dio.valPreprocessBatch xbaRaw evalBatch.toUSize
     let logits ← IreeSession.forwardF32 evalSess spec.evalFnName
                     evalParams evalShapesBA xba evalXSh evalBatch.toUSize nClasses
-    let lblSlice := F32.sliceLabels valLbl (bi * evalBatch) evalBatch
+    let lblSlice := F32.sliceLabels valLbl (bi * evalBatch) evalBatch dio.labelBytesPerRecord
     for i in [:evalBatch] do
       let pred := F32.argmax10 logits (i * spec.numClasses).toUSize
       let label := lblSlice.data[i * 4]!.toNat

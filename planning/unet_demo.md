@@ -137,13 +137,55 @@ the spatial dimensions. ~2-3 days to implement cleanly.
 - NetSpec for `unetTinySpec` (4-stage encoder + decoder)
 - Per-pixel CE loss + spatial lifting
 - mIoU eval
+- Per-pixel train-step ABI: classification's `trainStepAdamF32` /
+  `trainStepAdamF32Soft` assume vector logits + scalar label per
+  record; segmentation needs a `trainStepAdamF32Seg` variant
+  (or generalize the existing one) that takes `(C, H, W)` logits
+  and `(H, W)` int labels per record.
 
 **Phase 3 — data + training (1-2 weeks):**
-- Pets dataset loader
+- Pets dataset loader ✓ done — see "Phase 3 progress" below
 - Mask-aware augmentation
 - End-to-end training, mIoU report
 
 **Total: ~4-6 weeks** for a polished bestiary entry.
+
+## Phase 3 progress (2026-05-05)
+
+**Done:**
+- `download_pets.sh` + `preprocess_pets.py` — fetch, extract, resize,
+  trimap remap (1/2/3 → 0/1/2), pack to flat `train.bin` / `val.bin`
+  with `<count:u32 LE><record>*` records of `3*224*224 + 224*224`
+  bytes each.
+- Data on disk verified by python: `train.bin` 3680 records, `val.bin`
+  3669 records, file sizes match header exactly, mask values strictly
+  in `{0, 1, 2}`, fg/bg/boundary distribution ~25/60/12% as expected.
+- `lean_f32_load_pets` FFI in `ffi/f32_helpers.c` — slurps a `.bin`,
+  ImageNet-normalizes the image bytes into a flat f32 buffer, copies
+  the mask bytes through unchanged. Returns
+  `(imgF32 : ByteArray, maskU8 : ByteArray, count : Nat)`.
+  Loads val.bin (~700MB → 2.2GB f32) in ~1.2s.
+- `F32.loadPets` Lean binding, `F32.sliceLabels` generalized with a
+  `bytesPerLabel : Nat := 4` parameter (default keeps classification
+  call-sites zero-touch).
+- `DatasetKind.pets` + `petsIO : DatasetIO` with
+  `labelBytesPerRecord := 224 * 224` and an identity-augment
+  placeholder. New `labelBytesPerRecord` field on `DatasetIO`
+  threaded through the four `sliceLabels` call sites in
+  `trainGeneric`.
+- End-to-end batch sanity verified: `loadPets` → `sliceImages` /
+  `sliceLabels` for batch=4 produces 2,408,448 / 200,704 byte slices
+  at the expected offsets.
+
+**Not yet wired (blocked on Phase 1 + Phase 2):**
+- `trainGeneric` will load Pets correctly but cannot train it: the
+  forward path is classification-only, the loss path expects
+  4-byte int32 labels at the IREE ABI boundary, and `unetDown` /
+  `unetUp` are still shape-only enum entries (no codegen). No
+  `unetTinySpec` cell yet.
+- Mask-aware augmentation: `petsIO.augmentBatch` is identity. Real
+  augmentation needs to apply the same geometric transform (random
+  crop, hflip, scale) to image and mask, plus image-only color ops.
 
 ## Cells to add
 

@@ -206,6 +206,62 @@ LEAN_EXPORT lean_obj_res lean_f32_load_imagenette_sized(b_lean_obj_arg path_obj,
     return load_imagenette_sized(lean_string_cstr(path_obj), img_size);
 }
 
+// ---- Pets (Oxford-IIIT) loader ----
+// Binary format per record:
+//   image: 3 * 224 * 224 bytes (channel-first RGB, uint8)
+//   mask:  224 * 224     bytes (per-pixel class 0/1/2)
+// Total per record: 200,704 bytes.
+//
+// Returns (image_f32_normalized, mask_uint8, count) as a 3-tuple.
+// Image is normalized with ImageNet mean/std for transfer-learning consistency
+// with the rest of the project; the mask is left as raw uint8 (one byte per
+// pixel) so downstream code can treat it as integer per-pixel class labels.
+LEAN_EXPORT lean_obj_res lean_f32_load_pets(b_lean_obj_arg path_obj, lean_obj_arg w) {
+    (void)w;
+    const char* path = lean_string_cstr(path_obj);
+    FILE* f = fopen(path, "rb");
+    if (!f) return lean_io_result_mk_error(lean_mk_io_user_error(lean_mk_string("cannot open pets file")));
+    uint32_t file_count;
+    if (fread(&file_count, 4, 1, f) != 1) { fclose(f);
+        return lean_io_result_mk_error(lean_mk_io_user_error(lean_mk_string("bad header"))); }
+    uint32_t count = file_count;
+    const size_t img_size = 224;
+    const size_t pix = 3 * img_size * img_size;          // 150,528
+    const size_t mask_pix = img_size * img_size;         // 50,176
+    size_t img_bytes  = (size_t)count * pix * 4;         // f32 image buffer
+    size_t mask_bytes = (size_t)count * mask_pix;        // uint8 mask buffer
+    lean_object* img_ba  = lean_alloc_sarray(1, img_bytes,  img_bytes);
+    lean_object* mask_ba = lean_alloc_sarray(1, mask_bytes, mask_bytes);
+    float*   img  = (float*)lean_sarray_cptr(img_ba);
+    uint8_t* mask = lean_sarray_cptr(mask_ba);
+    const float mean[3] = {0.485f, 0.456f, 0.406f};
+    const float istd[3] = {1.0f/0.229f, 1.0f/0.224f, 1.0f/0.225f};
+    uint8_t* buf = (uint8_t*)malloc(pix + mask_pix);
+    for (uint32_t i = 0; i < count; i++) {
+        if (fread(buf, 1, pix + mask_pix, f) != pix + mask_pix) { free(buf); fclose(f);
+            return lean_io_result_mk_error(lean_mk_io_user_error(lean_mk_string("short read"))); }
+        // Normalize image into f32 buffer
+        float* dst = img + (size_t)i * pix;
+        size_t hw = img_size * img_size;
+        for (int ch = 0; ch < 3; ch++) {
+            float m = mean[ch], s = istd[ch];
+            for (size_t j = 0; j < hw; j++)
+                dst[ch*hw+j] = (buf[ch*hw+j]/255.0f - m) * s;
+        }
+        // Mask is already uint8 0/1/2; copy directly
+        memcpy(mask + (size_t)i * mask_pix, buf + pix, mask_pix);
+    }
+    free(buf); fclose(f);
+
+    lean_object* inner_pair = lean_alloc_ctor(0, 2, 0);
+    lean_ctor_set(inner_pair, 0, mask_ba);
+    lean_ctor_set(inner_pair, 1, lean_usize_to_nat((size_t)count));
+    lean_object* outer = lean_alloc_ctor(0, 2, 0);
+    lean_ctor_set(outer, 0, img_ba);
+    lean_ctor_set(outer, 1, inner_pair);
+    return lean_io_result_mk_ok(outer);
+}
+
 // ---- Shuffle images + labels in-place (Fisher-Yates) ----
 // images: n * pixels_per * 4 bytes; labels: n * 4 bytes
 LEAN_EXPORT lean_obj_res lean_f32_shuffle(lean_obj_arg img_obj, lean_obj_arg lbl_obj,

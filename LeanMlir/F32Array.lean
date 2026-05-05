@@ -61,9 +61,12 @@ opaque loadIdxLabels (path : @& String) : IO (ByteArray × Nat)
 def sliceImages (images : ByteArray) (start count pixelsPerImage : Nat) : ByteArray :=
   images.extract (start * pixelsPerImage * 4) ((start + count) * pixelsPerImage * 4)
 
-/-- Slice a batch of labels: `count` × 4 bytes (int32 LE). -/
-def sliceLabels (labels : ByteArray) (start count : Nat) : ByteArray :=
-  labels.extract (start * 4) ((start + count) * 4)
+/-- Slice a batch of labels: `count` records of `bytesPerLabel` bytes
+    each. Defaults to 4 (int32 LE) for classification. Per-pixel
+    segmentation masks pass `bytesPerLabel := H * W` (e.g. 224*224 = 50176
+    for Pets). Zero-copy. -/
+def sliceLabels (labels : ByteArray) (start count : Nat) (bytesPerLabel : Nat := 4) : ByteArray :=
+  labels.extract (start * bytesPerLabel) ((start + count) * bytesPerLabel)
 
 /-- Convert a batch of CIFAR-10 raw records to f32 ByteArray.
     `raw` is the concatenated batch file bytes (3073 bytes per record).
@@ -79,6 +82,13 @@ opaque loadImagenette (path : @& String) : IO (ByteArray × ByteArray × Nat)
 /-- Load Imagenette with explicit image size (e.g. 256 for train, 224 for val). -/
 @[extern "lean_f32_load_imagenette_sized"]
 opaque loadImagenetteSized (path : @& String) (imgSize : USize) : IO (ByteArray × ByteArray × Nat)
+
+/-- Load Oxford-IIIT Pets binary file. Returns
+    (images f32 ByteArray, masks uint8 ByteArray, count).
+    Images are 224×224×3, channel-first, normalized with ImageNet mean/std.
+    Masks are 224×224 uint8 per-pixel class labels (0=fg, 1=bg, 2=boundary). -/
+@[extern "lean_f32_load_pets"]
+opaque loadPets (path : @& String) : IO (ByteArray × ByteArray × Nat)
 
 /-- Shuffle images and labels in-place (Fisher-Yates). Returns (shuffled images, shuffled labels). -/
 @[extern "lean_f32_shuffle"]

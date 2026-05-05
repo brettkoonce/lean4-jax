@@ -287,6 +287,7 @@ inductive DatasetKind where
   | mnist
   | cifar10
   | imagenette
+  | pets
 deriving Repr, BEq
 
 /-- IREE compile flags from environment. Defaults to CUDA (sm_86).
