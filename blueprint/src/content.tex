@@ -275,7 +275,7 @@ we drop you into the deep end, here's the shape of what's coming:
 
 \node[group] (vjp) at (0, 0.5) {\textbf{VJP transpose} \\ \texttt{vjp\_comp} $\cdot$ biPath \\ elemwiseProduct $\cdot$ identity};
 
-\node[payoff] (payoff) at (0, -2) {Used in Chapters 3--9: every per-architecture \\ VJP unfolds through these structural rules. \\ \footnotesize (Ch~10 attention adds matrix-level machinery; see~\S\ref{sec:matrix_machinery}.)};
+\node[payoff] (payoff) at (0, -2) {Used in Chapters 3--9: every per-architecture \\ VJP unfolds through these structural rules.};
 
 \draw[arrow] (pdiv) -- (foundation);
 \draw[arrow] (foundation) -- (vjp);
@@ -285,8 +285,10 @@ we drop you into the deep end, here's the shape of what's coming:
 
 Read top-to-bottom, this is the order things get proved.
 Read bottom-to-top, this is what every theorem in Chapters
-3--9 unfolds to. The full clickable dependency graph is in the
-blueprint web view.
+3--9 unfolds to. (Ch~\ref{chap:attention} attention adds
+matrix-level machinery on top; see
+\S\ref{sec:matrix_machinery}.) The full clickable dependency
+graph is in the blueprint web view.
 
 \begin{definition}[Partial derivative]
   \label{ax:pdiv}
