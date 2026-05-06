@@ -152,21 +152,48 @@ the spatial dimensions. ~2-3 days to implement cleanly.
 
 ## Phase 3 progress (2026-05-05)
 
-**Phase 1+2 also kicked off (2026-05-06):**
+**Phase 1+2 progress (2026-05-06):**
 
-- `Layer.bilinearUpsample (scale : Nat)` registered in `Types.lean`.
-  Shape-only — same status as `unetDown` / `unetUp`. `archStr` arm
-  in `Spec.lean` renders `Upsample(×N)`; all other Spec/MlirCodegen
-  dispatchers handle it via existing wildcards (0 params, channels
-  passthrough, codegen silently skipped). Verified by reach test:
-  a 3-layer NetSpec `[conv2d, bilinearUpsample 2, conv2d]` builds,
-  validates, and produces correct param count (251 = 224 + 0 + 27).
-- `Bestiary/UNet.lean` gains `unetPets : NetSpec` — depth 4, base 32,
-  224×224 RGB → 3-class trimap. **7.76M params**, arch:
-  `UNetDown(3→32) → ... → UNetDown(128→256) → Conv(256→512)+BN →
-  Conv(512→512)+BN → UNetUp(512→256) → ... → UNetUp(64→32) →
-  Conv(32→3,1x1)`. Validates cleanly. Sits between `unetSmall`
-  (1.9M) and the original `unet` (31M).
+Layer registration + Spec wiring (commit `c196915`):
+- `Layer.bilinearUpsample (scale : Nat)` in `Types.lean`. `archStr`
+  arm in `Spec.lean` renders `Upsample(×N)`; all other dispatchers
+  handle it via existing wildcards. Reach test passed: 3-layer
+  `[conv2d, bilinearUpsample 2, conv2d]` builds, validates, param
+  count correct (251 = 224 + 0 + 27).
+- `unetPets : NetSpec` in `Bestiary/UNet.lean` — depth 4, base 32,
+  224×224 RGB → 3-class trimap, **7.76M params**. Validates cleanly.
+  Sits between `unetSmall` (1.9M) and `unet` (31M).
+
+Bilinear upsample codegen (commit `b5b6982`):
+- `bilinearWeights1D` precomputes `(outLen × inLen)` matrix using
+  half-pixel centers, no align_corners (PyTorch / JAX default).
+- Forward emits two `dot_general` + transpose, factorizing
+  `Y = Wy · X · Wxᵀ`. Wired into `emitForwardBody`,
+  `emitForwardSig`, `emitForwardEvalSig`, and `emitTrainStepBody`.
+- Backward emits the transpose pair: `dM = dY · Wx`,
+  `dXᵀ = dM · Wy`, `dX = transpose dXᵀ`. Wired into the train-step
+  backward dispatcher with a `FwdRec` so shapes thread.
+- IREE-verified at three shapes: `1×1×2×2 → 4×4` (11KB vmfb),
+  smallest UNet decoder `4×64×14×14 → 28×28` (16KB), largest
+  `4×32×112×112 → 224×224` (114KB). Full train step on a
+  `[conv → upsample → conv → GAP → dense]` spec compiles to a
+  45KB vmfb in ~0.4s with zero warnings.
+
+FD verification — all of these match analytical gradients to
+~1e-11 (well below the `1e-4` tolerance):
+- `bilinearUpsample_input_grad` (commit `fbad929`)
+- `bilinearUpsample_edge_clamp` (commit `fbad929`)
+- `channelConcat_input_grad` (commit `51dba99`)
+- `perPixelSoftmaxCE_grad` (commit `633e666`)
+
+Suite is now 29/29 PASS.
+
+Channel concat helpers (commit `51dba99`):
+- `emitChannelConcat` (forward `stablehlo.concatenate dim=1`)
+- `emitChannelSplitGrad` (backward `stablehlo.slice` per branch)
+- Binary primitive (two NCHW inputs), so no Layer constructor —
+  these are sub-primitives that future `emitUnetUp` codegen will
+  call directly.
 
 **Phase 3 done:**
 - `download_pets.sh` + `preprocess_pets.py` — fetch, extract, resize,
@@ -193,16 +220,40 @@ the spatial dimensions. ~2-3 days to implement cleanly.
   `sliceLabels` for batch=4 produces 2,408,448 / 200,704 byte slices
   at the expected offsets.
 
-**Not yet wired (blocked on Phase 1 + Phase 2):**
-- `trainGeneric` will load Pets correctly but cannot train it: the
-  forward path is classification-only, the loss path expects
-  4-byte int32 labels at the IREE ABI boundary, and `unetDown` /
-  `unetUp` are still shape-only enum entries (no codegen). No
-  `unet-pets` cell yet (the `unetPets` NetSpec exists but
-  cannot compile to MLIR until upsample / concat codegen lands).
-- Mask-aware augmentation: `petsIO.augmentBatch` is identity. Real
-  augmentation needs to apply the same geometric transform (random
-  crop, hflip, scale) to image and mask, plus image-only color ops.
+**Not yet wired — what's left to actually train Pets:**
+
+1. **Per-pixel softmax-CE in MLIR emission.** Math is FD-verified
+   (commit `633e666`) and the Lean helper signatures are clear, but
+   `emitTrainStepBody` has classification CE (`B, NC` shapes)
+   hardcoded into the loss + backward sections (lines ~4168-4234).
+   Lifting to per-pixel `(B, NC, H, W)` is a parallel rewrite of
+   that block. ~1-2 days.
+2. **`trainStepAdamF32Seg` IREE ABI.** Segmentation labels are
+   `(N, H, W)` int32, not `(N,)` int32 — so the train-step
+   signature, the FFI call site in `LeanMlir/IreeRuntime.lean`,
+   and the Lean-side label slicing all need a parallel path.
+   ~3-5 days.
+3. **`unetDown` / `unetUp` codegen.** The hard one. Skip
+   connections require cross-layer state — encoder layers stash
+   features that decoder layers consume. The current dispatcher is
+   purely sequential (`for l in spec.layers`); skip threading
+   needs an additional pass or a new state field. The bilinear
+   upsample + channel concat sub-primitives are ready
+   (commits `b5b6982`, `51dba99`), so the work is the wiring +
+   skip-state plumbing, not new math. ~1 week.
+4. **Mask-aware augmentation.** `petsIO.augmentBatch` is identity.
+   Real augmentation applies the same geometric transform (random
+   crop, hflip, scale) to image and mask, plus image-only color
+   ops. ~1 week.
+5. **mIoU eval.** Per-class IoU averaged across classes, evaluated
+   on val set. ~3 days.
+
+A faster intermediate target: an **autoencoder** variant of the
+above (no skip connections) is trainable end-to-end once steps 1+2
+land — items 3-5 can come later. Skip connections are what makes
+UNet "U-shaped"; without them it's a CNN autoencoder, which is
+worse for segmentation but a useful stepping stone that exercises
+the bilinear upsample primitive in a real training loop.
 
 ## Cells to add
 
