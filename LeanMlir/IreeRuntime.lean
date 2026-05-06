@@ -87,6 +87,19 @@ opaque trainStepAdamF32Soft
   (bnShapes : @& ByteArray)
   (batch : USize) (nClasses : USize) : IO ByteArray
 
+/-- Per-pixel segmentation variant: `ySeg` is an int32 `[batch, H, W]`
+    per-pixel label tensor. Routes to the codegen produced with
+    `useSeg := true`. -/
+@[extern "lean_iree_train_step_adam_f32_seg"]
+opaque trainStepAdamF32Seg
+  (sess : @& IreeSession) (fnName : @& String)
+  (params : @& ByteArray) (shapes : @& ByteArray)
+  (x : @& ByteArray) (xShape : @& ByteArray)
+  (ySeg : @& ByteArray)
+  (lr : Float) (t : Float)
+  (bnShapes : @& ByteArray)
+  (batch : USize) (H : USize) (W : USize) : IO ByteArray
+
 /-- Zero-copy f32 forward pass. Pushes x then param tensors, returns logits.
     For inference/eval — no y, lr, or velocity inputs. -/
 @[extern "lean_iree_forward_f32"]

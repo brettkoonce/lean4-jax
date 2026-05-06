@@ -507,3 +507,83 @@ int iree_ffi_train_step_adam_softlabel(
   if (!iree_status_is_ok(s)) { print_status("adam_train_softlabel_pop", s); return 4; }
   return 0;
 }
+
+// ============================================================
+// Per-pixel segmentation variant. Same protocol as
+// iree_ffi_train_step_adam, but `y` is an int32 [batch, H, W]
+// per-pixel label tensor instead of a [batch] vector. Used by the
+// codegen produced with `useSeg := true`.
+// ============================================================
+int iree_ffi_train_step_adam_seg(
+    iree_ffi_session_t* sess, const char* fn_name, int batch, int H, int W,
+    int n_params,
+    const int32_t* param_ranks,
+    const int64_t* param_dims_flat,
+    const int64_t* param_sizes,
+    const float* packed_params,
+    int x_rank, const int64_t* x_dims, const float* x,
+    const int32_t* y, float lr, float t,
+    float* packed_params_out, float* loss_out,
+    int n_bn_layers, const int64_t* bn_sizes, float* bn_stats_out) {
+
+  iree_runtime_call_t call;
+  iree_status_t s = iree_runtime_call_initialize_by_name(
+      sess->session, iree_make_cstring_view(fn_name), &call);
+  if (!iree_status_is_ok(s)) { print_status("adam_train_seg_init", s); return 1; }
+
+  int dims_off = 0;
+  int64_t data_off = 0;
+  for (int i = 0; i < n_params && iree_status_is_ok(s); i++) {
+    s = push_input(&call, sess->device,
+                   IREE_HAL_ELEMENT_TYPE_FLOAT_32, 4,
+                   param_ranks[i], &param_dims_flat[dims_off],
+                   packed_params + data_off);
+    dims_off += param_ranks[i];
+    data_off += param_sizes[i];
+  }
+  if (iree_status_is_ok(s))
+    s = push_input(&call, sess->device,
+                   IREE_HAL_ELEMENT_TYPE_FLOAT_32, 4,
+                   x_rank, x_dims, x);
+  int64_t d_y[3] = {batch, H, W};
+  if (iree_status_is_ok(s))
+    s = push_input(&call, sess->device,
+                   IREE_HAL_ELEMENT_TYPE_INT_32, 4,
+                   3, d_y, y);
+  if (iree_status_is_ok(s))
+    s = push_input(&call, sess->device,
+                   IREE_HAL_ELEMENT_TYPE_FLOAT_32, 4,
+                   0, NULL, &lr);
+  if (iree_status_is_ok(s))
+    s = push_input(&call, sess->device,
+                   IREE_HAL_ELEMENT_TYPE_FLOAT_32, 4,
+                   0, NULL, &t);
+
+  if (!iree_status_is_ok(s)) { print_status("adam_train_seg_push", s);
+    iree_runtime_call_deinitialize(&call); return 2; }
+
+  s = iree_runtime_call_invoke(&call, 0);
+  if (!iree_status_is_ok(s)) { print_status("adam_train_seg_invoke", s);
+    iree_runtime_call_deinitialize(&call); return 3; }
+
+  data_off = 0;
+  for (int i = 0; i < n_params && iree_status_is_ok(s); i++) {
+    s = pop_output(&call, sess->device, param_sizes[i], 4,
+                   packed_params_out + data_off);
+    data_off += param_sizes[i];
+  }
+  if (iree_status_is_ok(s))
+    s = pop_output(&call, sess->device, 1, 4, loss_out);
+  if (bn_stats_out && n_bn_layers > 0) {
+    int64_t bn_off = 0;
+    for (int i = 0; i < n_bn_layers * 2 && iree_status_is_ok(s); i++) {
+      s = pop_output(&call, sess->device, bn_sizes[i], 4,
+                     bn_stats_out + bn_off);
+      bn_off += bn_sizes[i];
+    }
+  }
+
+  iree_runtime_call_deinitialize(&call);
+  if (!iree_status_is_ok(s)) { print_status("adam_train_seg_pop", s); return 4; }
+  return 0;
+}
