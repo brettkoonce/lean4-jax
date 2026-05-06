@@ -122,9 +122,12 @@ def Layer.nParams : Layer → Nat
       -- 2 × (conv3x3 + BN): ic→oc then oc→oc; maxPool adds zero params.
       (9 * ic * oc + 2 * oc) + (9 * oc * oc + 2 * oc)
   | .unetUp ic oc =>
-      -- Transposed-conv 2×2 upsample (ic→oc) + concat(2·oc) + 2 × (conv3x3 + BN)
-      -- 2oc→oc, then oc→oc.
-      (4 * ic * oc + oc) + (9 * 2 * oc * oc + 2 * oc) + (9 * oc * oc + 2 * oc)
+      -- Bilinear 2× upsample (no params, keeps `ic` channels) + concat with
+      -- the encoder skip (`oc` channels) → `ic + oc` channels.
+      -- Then 2 × (conv3x3 + BN): (ic+oc) → oc, then oc → oc.
+      -- Avoids transposed conv (no checkerboard artifacts; one fewer
+      -- primitive to FD-verify) — modern UNets converge here anyway.
+      (9 * (ic + oc) * oc + 2 * oc) + (9 * oc * oc + 2 * oc)
   | .transformerDecoder dim _heads mlpDim nBlocks nQueries =>
       -- Per block: 3 LayerNorms, self-attn Q/K/V/O (4·dim²+4·dim),
       -- cross-attn Q/K/V/O (4·dim²+4·dim), FFN (2·dim·mlpDim + dim + mlpDim).

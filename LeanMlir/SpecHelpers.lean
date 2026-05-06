@@ -132,6 +132,14 @@ def paramShapes (spec : NetSpec) : Array (Array Nat) := Id.run do
         shapes := shapes.push #[mlpDim, dim] |>.push #[dim]
       -- Final LN after all blocks
       shapes := shapes.push #[dim] |>.push #[dim]
+    | .unetDown ic oc =>
+      -- 2× convBn (ic→oc, oc→oc). Maxpool no params.
+      shapes := shapes.push #[oc, ic, 3, 3] |>.push #[oc] |>.push #[oc]
+      shapes := shapes.push #[oc, oc, 3, 3] |>.push #[oc] |>.push #[oc]
+    | .unetUp ic oc =>
+      -- 2× convBn ((ic+oc)→oc, oc→oc). Bilinear/concat no params.
+      shapes := shapes.push #[oc, ic + oc, 3, 3] |>.push #[oc] |>.push #[oc]
+      shapes := shapes.push #[oc, oc, 3, 3] |>.push #[oc] |>.push #[oc]
     | _ => pure ()
   return shapes
 
@@ -431,6 +439,16 @@ private def heInitLayer (l : Layer) (seed : USize) : IO (Array ByteArray × USiz
     let (gf, bf) ← heLN dim
     parts := parts.push gf |>.push bf
     return (parts, s)
+  | .unetDown ic oc =>
+    -- 2× convBn (ic→oc, oc→oc). Maxpool no params.
+    let (W1, g1, b1, s1) ← heConvBn oc ic 3 seed
+    let (W2, g2, b2, s2) ← heConvBn oc oc 3 s1
+    return (#[W1, g1, b1, W2, g2, b2], s2)
+  | .unetUp ic oc =>
+    -- 2× convBn ((ic+oc)→oc, oc→oc). Bilinear/concat no params.
+    let (W1, g1, b1, s1) ← heConvBn oc (ic + oc) 3 seed
+    let (W2, g2, b2, s2) ← heConvBn oc oc 3 s1
+    return (#[W1, g1, b1, W2, g2, b2], s2)
   | _ =>
     -- Unsupported layer (no trainable params OR not in paramShapes).
     -- flatten / maxPool / globalAvgPool / reshape have no params → empty.

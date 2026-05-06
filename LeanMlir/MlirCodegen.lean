@@ -25,6 +25,7 @@ def inputFlatDim (spec : NetSpec) : Nat :=
   | some (.invertedResidual ic _ _ _ _) => ic * spec.imageH * spec.imageW
   | some (.mbConv ic _ _ _ _ _ _) => ic * spec.imageH * spec.imageW
   | some (.patchEmbed ic _ _ _) => ic * spec.imageH * spec.imageW
+  | some (.unetDown ic _) => ic * spec.imageH * spec.imageW
   | _ => spec.imageH * spec.imageW
 
 /-- If the first layer is conv/convBn, returns the NCHW input channels. -/
@@ -35,6 +36,7 @@ def inputChannels (spec : NetSpec) : Option Nat :=
   | some (.invertedResidual ic _ _ _ _) => some ic
   | some (.mbConv ic _ _ _ _ _ _) => some ic
   | some (.patchEmbed ic _ _ _) => some ic
+  | some (.unetDown ic _) => some ic
   | _ => none
 
 /-- Render tensor type: `tensor<128x1x28x28xf32>`. -/
@@ -1461,6 +1463,12 @@ private def emitForwardBody (spec : NetSpec) (batchSize : Nat) (fixedBN : Bool :
   | none => pure ()
   let mut pidx : Nat := 0   -- param index (conv + dense)
   let mut pos  : Nat := 0   -- layer position (for unique SSA names on pool/flatten)
+  -- UNet skip stack: each `unetDown` pushes the (preMaxPoolSSA, preMaxPoolShape)
+  -- of its second convBn output; each `unetUp` pops the most-recent one to
+  -- concat with its upsampled feature. Pairing is LIFO — i-th unetUp from the
+  -- bottom matches i-th unetDown from the top, which is what unetPets / unet
+  -- assume.
+  let mut skipStack : List (String × List Nat) := []
   for l in spec.layers do
     match l with
     | .dense fanIn fanOut act =>
@@ -1591,6 +1599,39 @@ private def emitForwardBody (spec : NetSpec) (batchSize : Nat) (fixedBN : Bool :
       | _ => pure ()
       let _ := dim
       pidx := p
+    | .unetDown ic oc =>
+      -- [convBn(ic→oc) + convBn(oc→oc)] → push pre-pool feature → maxPool 2.
+      let (s1, ssa1, sh1) := emitConvBn pidx curSSA curShape ic oc 3 1 (fixedBN := fixedBN)
+      code := code ++ s1
+      pidx := pidx + 1
+      let (s2, ssa2, sh2) := emitConvBn pidx ssa1 sh1 oc oc 3 1 (fixedBN := fixedBN)
+      code := code ++ s2
+      pidx := pidx + 1
+      -- Save pre-pool feature for the matching `unetUp`.
+      skipStack := (ssa2, sh2) :: skipStack
+      let (s3, ssa3, sh3) := emitMaxPool pos ssa2 sh2 2 2
+      code := code ++ s3
+      curSSA := ssa3
+      curShape := sh3
+    | .unetUp ic oc =>
+      -- bilinear×2 → concat with most-recent skip → 2× convBn ((ic+oc)→oc, oc→oc).
+      let (s1, ssa1, sh1) := emitBilinearUpsample pos curSSA curShape 2
+      code := code ++ s1
+      match skipStack with
+      | (skipSSA, skipShape) :: rest =>
+        skipStack := rest
+        let (s2, ssa2, sh2) := emitChannelConcat s!"{pos}_uu" ssa1 skipSSA sh1 skipShape
+        code := code ++ s2
+        let (s3, ssa3, sh3) := emitConvBn pidx ssa2 sh2 (ic + oc) oc 3 1 (fixedBN := fixedBN)
+        code := code ++ s3
+        pidx := pidx + 1
+        let (s4, ssa4, sh4) := emitConvBn pidx ssa3 sh3 oc oc 3 1 (fixedBN := fixedBN)
+        code := code ++ s4
+        pidx := pidx + 1
+        curSSA := ssa4
+        curShape := sh4
+      | [] =>
+        code := code ++ "    // unetUp: skip stack empty (no matching unetDown above)\n"
     | _ =>
       code := code ++ "    // UNSUPPORTED LAYER\n"
     pos := pos + 1
@@ -1630,6 +1671,27 @@ private def emitForwardSig (spec : NetSpec) (batchSize : Nat) : String := Id.run
       | _ => pure ()
       outShape := curShape
       pidx := pidx + 1
+    | .unetDown ic oc =>
+      -- 2× convBn (ic→oc, oc→oc) then maxPool 2 (no params).
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [oc, ic, 3, 3]}, %g{pidx}: {tensorTy [oc]}, %bt{pidx}: {tensorTy [oc]}"
+      pidx := pidx + 1
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [oc, oc, 3, 3]}, %g{pidx}: {tensorTy [oc]}, %bt{pidx}: {tensorTy [oc]}"
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, h, w] => curShape := [b, oc, (h + 1) / 2, (w + 1) / 2]
+      | _ => pure ()
+      outShape := curShape
+    | .unetUp ic oc =>
+      -- bilinear ×2 (no params) + concat with skip(oc) → (ic+oc) channels +
+      -- 2× convBn ((ic+oc)→oc, oc→oc).
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [oc, ic + oc, 3, 3]}, %g{pidx}: {tensorTy [oc]}, %bt{pidx}: {tensorTy [oc]}"
+      pidx := pidx + 1
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [oc, oc, 3, 3]}, %g{pidx}: {tensorTy [oc]}, %bt{pidx}: {tensorTy [oc]}"
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, h, w] => curShape := [b, oc, h * 2, w * 2]
+      | _ => pure ()
+      outShape := curShape
     | .residualBlock ic oc nBlocks firstStride =>
       let needsProj := !(ic == oc && firstStride == 1)
       match curShape with
@@ -2009,6 +2071,18 @@ def collectBnLayers (spec : NetSpec) : Array (Nat × Nat) := Id.run do
       if norm == .bn then
         result := result.push (pidx, ic)
       pidx := pidx + 2
+    | .unetDown _ic oc =>
+      -- 2× convBn (ic→oc, oc→oc). Both BN, both `oc` channels.
+      result := result.push (pidx, oc)
+      pidx := pidx + 1
+      result := result.push (pidx, oc)
+      pidx := pidx + 1
+    | .unetUp _ic oc =>
+      -- 2× convBn ((ic+oc)→oc, oc→oc). Both BN, both `oc` channels.
+      result := result.push (pidx, oc)
+      pidx := pidx + 1
+      result := result.push (pidx, oc)
+      pidx := pidx + 1
     | _ => pure ()
   return result
 
@@ -2046,6 +2120,27 @@ private def emitForwardEvalSig (spec : NetSpec) (batchSize : Nat) : String := Id
       | _ => pure ()
       outShape := curShape
       pidx := pidx + 1
+    | .unetDown ic oc =>
+      -- 2× convBn (ic→oc, oc→oc) then maxPool 2 (no params).
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [oc, ic, 3, 3]}, %g{pidx}: {tensorTy [oc]}, %bt{pidx}: {tensorTy [oc]}"
+      pidx := pidx + 1
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [oc, oc, 3, 3]}, %g{pidx}: {tensorTy [oc]}, %bt{pidx}: {tensorTy [oc]}"
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, h, w] => curShape := [b, oc, (h + 1) / 2, (w + 1) / 2]
+      | _ => pure ()
+      outShape := curShape
+    | .unetUp ic oc =>
+      -- bilinear ×2 (no params) + concat with skip(oc) → (ic+oc) channels +
+      -- 2× convBn ((ic+oc)→oc, oc→oc).
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [oc, ic + oc, 3, 3]}, %g{pidx}: {tensorTy [oc]}, %bt{pidx}: {tensorTy [oc]}"
+      pidx := pidx + 1
+      params := params ++ s!",\n    %W{pidx}: {tensorTy [oc, oc, 3, 3]}, %g{pidx}: {tensorTy [oc]}, %bt{pidx}: {tensorTy [oc]}"
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, h, w] => curShape := [b, oc, h * 2, w * 2]
+      | _ => pure ()
+      outShape := curShape
     | .residualBlock ic oc nBlocks firstStride =>
       let needsProj := !(ic == oc && firstStride == 1)
       match curShape with

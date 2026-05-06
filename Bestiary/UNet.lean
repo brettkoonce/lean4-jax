@@ -34,9 +34,16 @@ Each `unetDown ic oc` is `[conv3×3 + BN + ReLU]×2 + maxPool-2`. It
 saves the pre-pool feature map as a **skip** for the matching `unetUp`
 later.
 
-Each `unetUp ic oc` is `transposed-conv(ic→oc, stride=2)` (upsample 2×)
-then `concat with skip(oc)` (now `2·oc` channels) then
-`[conv3×3(2oc→oc) + BN + ReLU] + [conv3×3(oc→oc) + BN + ReLU]`.
+Each `unetUp ic oc` is `bilinearUpsample(2×)` (no params, keeps `ic`
+channels) then `concat with skip(oc)` (now `ic+oc` channels) then
+`[conv3×3((ic+oc)→oc) + BN + ReLU] + [conv3×3(oc→oc) + BN + ReLU]`.
+
+Why bilinear instead of the original Ronneberger transposed-conv:
+saves a primitive (no fresh forward + VJP + FD-verify), avoids the
+checkerboard artifacts transposed conv is known for, and matches what
+most modern UNets ship with (Stable Diffusion, segmentation libraries,
+etc.). The skip-state plumbing is the same either way — that's the
+load-bearing piece of the codegen.
 
 The crucial thing about the NetSpec: it's **still a linear list**. The
 skip connections are implicit — the codegen matches the `i`-th `unetUp`

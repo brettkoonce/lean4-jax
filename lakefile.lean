@@ -211,6 +211,9 @@ lean_exe «bench-resnet» where
 lean_exe «test-resnet-fwd» where
   root := `tests.TestResnetForward
 
+lean_exe «test-unet-forward» where
+  root := `tests.TestUnetForward
+
 lean_exe «test-convnext-fwd-emit» where
   root := `tests.TestConvNextForwardEmit
   moreLinkArgs := ireeLink
