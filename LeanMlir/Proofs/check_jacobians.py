@@ -1038,6 +1038,58 @@ def test_channel_concat_input_grad():
     return err < TOL
 
 # ════════════════════════════════════════════════════════════════
+# Per-pixel softmax CE: lift the (N, C) classification loss across
+# spatial dims to (N, C, H, W). Forward = mean over (N, H, W) of the
+# per-pixel softmax CE. Backward propagates (softmax - onehot)/(N·H·W)
+# back to logits.
+# ════════════════════════════════════════════════════════════════
+def test_per_pixel_softmax_ce():
+    """Spatial lift of the standard softmax-CE VJP. Pinned semantics:
+      - softmax along axis 1 (channel)
+      - mean over (N, H, W) — every pixel contributes equally
+      - dLogits = (softmax - onehot(labels)) / (N · H · W)
+    Math is identical to the (N, C) case lifted per-pixel; this test
+    catches integration bugs (wrong axis, wrong normalization)."""
+    n, c, h, w = 2, 4, 3, 3
+    np.random.seed(3)
+    logits = np.random.randn(n, c, h, w)
+    labels = np.random.randint(0, c, size=(n, h, w))
+
+    def softmax_axis1(z):
+        z = z - z.max(axis=1, keepdims=True)
+        e = np.exp(z)
+        return e / e.sum(axis=1, keepdims=True)
+
+    def fwd(logits_flat):
+        z = logits_flat.reshape(n, c, h, w)
+        p = softmax_axis1(z)
+        # Gather softmax probability at the label index for each pixel
+        idx_n, idx_h, idx_w = np.indices((n, h, w))
+        p_label = p[idx_n, labels, idx_h, idx_w]   # (N, H, W)
+        return -np.log(p_label).mean()             # scalar
+
+    # FD scalar gradient
+    flat = logits.ravel()
+    g_fd = np.zeros_like(flat)
+    for i in range(len(flat)):
+        fp = flat.copy(); fp[i] += EPS
+        fm = flat.copy(); fm[i] -= EPS
+        g_fd[i] = (fwd(fp) - fwd(fm)) / (2 * EPS)
+    g_fd = g_fd.reshape(n, c, h, w)
+
+    # Claimed: (softmax - onehot) / (N·H·W)
+    p = softmax_axis1(logits)
+    onehot = np.zeros_like(logits)
+    idx_n, idx_h, idx_w = np.indices((n, h, w))
+    onehot[idx_n, labels, idx_h, idx_w] = 1.0
+    g_claimed = (p - onehot) / (n * h * w)
+
+    err = np.max(np.abs(g_fd - g_claimed))
+    status = "PASS" if err < TOL else "FAIL"
+    print(f"  {status}: {'perPixelSoftmaxCE_grad':30s} max_err={err:.2e}")
+    return err < TOL
+
+# ════════════════════════════════════════════════════════════════
 # Run all
 # ════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
@@ -1071,6 +1123,7 @@ if __name__ == "__main__":
     results.append(("UNet",         "bilinearUpsample_input_grad", test_bilinear_upsample_input_grad()))
     results.append(("UNet",         "bilinearUpsample_edge_clamp", test_bilinear_upsample_edge_clamp()))
     results.append(("UNet",         "channelConcat_input_grad",    test_channel_concat_input_grad()))
+    results.append(("UNet",         "perPixelSoftmaxCE_grad",      test_per_pixel_softmax_ce()))
     try:
         results.append(("LayerNorm", "pdiv_gelu",           test_gelu()))
     except ImportError:
