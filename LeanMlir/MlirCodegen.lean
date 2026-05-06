@@ -2511,6 +2511,19 @@ private structure FwdRec where
   cndBnNormSSA    : String := ""    -- BN-mode: [b, ic, h, w]
   cndBnMeanBcSSA  : String := ""    -- BN-mode: [b, ic, h, w]
   cndBnIstdBcSSA  : String := ""    -- BN-mode: [b, ic, h, w]
+  -- ═════════ UNet decoder concat-split marker ═════════
+  -- One per `unetUp`, pushed between bilinearUpsample and the two convBns.
+  -- Carries enough info for the backward pass to channel-split the gradient
+  -- at the concat output: `inShape` is the upsampled (decoder) side, the
+  -- skip side is `unetSkipShape`. The decoder-half gradient flows back to
+  -- bilinearUpsample; the skip-half is saved as `%unet_skip_g{unetEncoderIdx}`
+  -- and consumed by the matching `unetDown`'s maxPool record (via
+  -- `addSkipGrad`). Encoder index is assigned monotonically at forward
+  -- emit time; pairing is LIFO (i-th unetUp from the bottom ↔ i-th
+  -- unetDown from the top).
+  isUnetUpConcat  : Bool := false
+  unetSkipShape   : List Nat := []
+  unetEncoderIdx  : Nat := 0
 instance : Inhabited FwdRec where
   default := { layer := .flatten, pidx := none, pos := 0,
                inputSSA := "", preActSSA := "", outputSSA := "",
@@ -3415,6 +3428,12 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
   let mut pidx : Nat := 0
   let mut pos : Nat := 0
   let mut records : Array FwdRec := #[]
+  -- UNet skip plumbing. `unetEncStack` holds encoder indices (assigned
+  -- monotonically as `unetDown`s are seen) waiting for their matching
+  -- `unetUp`. Pairing is LIFO. The encoder index also names the SSA the
+  -- backward pass uses to thread the skip gradient: `%unet_skip_g{e}`.
+  let mut unetEncStack : List Nat := []
+  let mut nextUnetEncIdx : Nat := 0
 
   for l in spec.layers do
     let inSSA := curSSA
@@ -4309,6 +4328,107 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
         curShape := outShape
       | _ => pure ()
 
+    | .unetDown ic oc =>
+      -- 2× convBn (ic→oc, oc→oc) → push pre-pool feature on encoder stack →
+      -- maxPool 2 with `addSkipGrad := %unet_skip_g{e}` so the matching
+      -- unetUp's backward can route the skip-half gradient back here.
+      let (s1, rec1) := emitConvBnTrain pidx pos curSSA curShape ic oc 3 1 true
+      code := code ++ s1; curSSA := rec1.outputSSA; curShape := rec1.outShape
+      records := records.push rec1; pidx := pidx + 1
+      let (s2, rec2) := emitConvBnTrain pidx pos curSSA curShape oc oc 3 1 true
+      code := code ++ s2; curSSA := rec2.outputSSA; curShape := rec2.outShape
+      let preeMaxSSA := curSSA
+      let preeMaxShape := curShape
+      records := records.push rec2; pidx := pidx + 1
+      -- Assign this encoder its slot index. The skip-grad SSA name is fixed:
+      -- `%unet_skip_g{e}`. The matching unetUp will define it on backward.
+      let encIdx := nextUnetEncIdx
+      unetEncStack := encIdx :: unetEncStack
+      nextUnetEncIdx := nextUnetEncIdx + 1
+      -- maxPool 2 (size = stride = 2) — same emit as the standalone case.
+      match curShape with
+      | [b, c, h, w] =>
+        let oH := (h + 1) / 2  -- ceil-div for SAME with stride 2
+        let oW := (w + 1) / 2
+        let outShape := [b, c, oH, oW]
+        -- For stride 2 / size 2 we don't need extra padding (the standard
+        -- maxPool case fully handles that, but here we know size==stride==2
+        -- so no padding is required).
+        code := code ++ s!"    %pli{pos} = stablehlo.constant dense<0xFF800000> : tensor<f32>\n"
+        code := code ++ s!"    %pl{pos} = \"stablehlo.reduce_window\"({preeMaxSSA}, %pli{pos}) (" ++ "{\n"
+        code := code ++ s!"      ^bb0(%rwa{pos}: tensor<f32>, %rwb{pos}: tensor<f32>):\n"
+        code := code ++ s!"        %rwm{pos} = stablehlo.maximum %rwa{pos}, %rwb{pos} : tensor<f32>\n"
+        code := code ++ s!"        \"stablehlo.return\"(%rwm{pos}) : (tensor<f32>) -> ()\n"
+        code := code ++ "      }) " ++ "{" ++ s!"window_dimensions = array<i64: 1, 1, 2, 2>, "
+        code := code ++ s!"window_strides = array<i64: 1, 1, 2, 2>" ++ "}\n"
+        code := code ++ s!"      : ({tensorTy preeMaxShape}, tensor<f32>) -> {tensorTy outShape}\n"
+        curSSA := s!"%pl{pos}"
+        let mut poolRec : FwdRec := default
+        poolRec := { poolRec with layer := .maxPool 2 2, pidx := none, pos := pos }
+        poolRec := { poolRec with inputSSA := preeMaxSSA, preActSSA := "0,0,0,0" }
+        poolRec := { poolRec with outputSSA := curSSA }
+        poolRec := { poolRec with inShape := preeMaxShape, outShape := outShape }
+        -- The matching unetUp's UnetUpConcat backward will define this SSA.
+        poolRec := { poolRec with addSkipGrad := s!"%unet_skip_g{encIdx}" }
+        records := records.push poolRec
+        curShape := outShape
+      | _ => pure ()
+
+    | .unetUp ic oc =>
+      -- bilinear ×2 (no params, recorded as a normal `.bilinearUpsample`) →
+      -- UnetUpConcat marker (channel-concat + skip-grad-save point) →
+      -- 2× convBn ((ic+oc)→oc, oc→oc).
+      let (s1, ssa1, sh1) := emitBilinearUpsample pos curSSA curShape 2
+      code := code ++ s1
+      records := records.push { layer := .bilinearUpsample 2, pidx := none, pos
+                              , inputSSA := inSSA, preActSSA := ""
+                              , outputSSA := ssa1, inShape := curShape, outShape := sh1 }
+      curSSA := ssa1; curShape := sh1
+      -- Pop matching encoder from the LIFO stack.
+      match unetEncStack with
+      | encIdx :: rest =>
+        unetEncStack := rest
+        -- Concat with the skip feature pushed by the matching unetDown.
+        -- The skip feature SSA is the second convBn output of that unetDown,
+        -- which lives at `%cbn_out{pidx-of-that-convBn}`. We don't track
+        -- that pidx here (would couple us to the encoder); instead use the
+        -- existing emit helper which expects raw SSA + shapes. The skip
+        -- feature SSA we want is exactly the input of the matching maxPool —
+        -- we look it up via the records array.
+        --
+        -- Identify the matching unetDown's maxPool record (the one with
+        -- `addSkipGrad = %unet_skip_g{encIdx}`) and use its `inputSSA` as
+        -- the skip feature SSA. This avoids passing intermediate SSA
+        -- through the layer-walk state.
+        let skipMatch := records.findSomeRev? (fun r =>
+          if r.addSkipGrad == s!"%unet_skip_g{encIdx}" then
+            some (r.inputSSA, r.inShape) else none)
+        match skipMatch with
+        | some (skipSSA, skipShape) =>
+          let (s2, ssa2, sh2) := emitChannelConcat s!"{pos}_uut" ssa1 skipSSA sh1 skipShape
+          code := code ++ s2
+          curSSA := ssa2; curShape := sh2
+          -- Push UnetUpConcat marker. Backward will: split sh2 → (sh1, skipShape),
+          -- save skipShape gradient as `%unet_skip_g{encIdx}`, set gradSSA to sh1.
+          records := records.push {
+            layer := .unetUp ic oc, pidx := none, pos
+            inputSSA := ssa1, preActSSA := "", outputSSA := ssa2
+            inShape := sh1, outShape := sh2
+            isUnetUpConcat := true
+            unetSkipShape := skipShape
+            unetEncoderIdx := encIdx
+          }
+          let (s3, rec3) := emitConvBnTrain pidx pos curSSA curShape (ic + oc) oc 3 1 true
+          code := code ++ s3; curSSA := rec3.outputSSA; curShape := rec3.outShape
+          records := records.push rec3; pidx := pidx + 1
+          let (s4, rec4) := emitConvBnTrain pidx pos curSSA curShape oc oc 3 1 true
+          code := code ++ s4; curSSA := rec4.outputSSA; curShape := rec4.outShape
+          records := records.push rec4; pidx := pidx + 1
+        | none =>
+          code := code ++ "    // unetUp: matching unetDown maxPool record not found\n"
+      | [] =>
+        code := code ++ "    // unetUp: encoder stack empty (no matching unetDown)\n"
+
     | _ => code := code ++ "    // UNSUPPORTED\n"
     pos := pos + 1
 
@@ -4677,6 +4797,13 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
         code := code ++ s!"    %mp_dx{r.pos} = stablehlo.select %mp_mask{r.pos}, {gradTile}, %mp_zg{r.pos} : {maskTy}, {inTy}\n"
         gradSSA := s!"%mp_dx{r.pos}"
         gradShape := r.inShape
+        -- UNet skip plumbing: if this maxPool was emitted as part of a
+        -- `unetDown` and tagged with a skip-grad slot, accumulate the
+        -- skip-half gradient (defined earlier in the reverse walk by the
+        -- matching `unetUp`'s UnetUpConcat backward).
+        if r.addSkipGrad != "" then
+          code := code ++ s!"    %mp_skip{r.pos} = stablehlo.add {gradSSA}, {r.addSkipGrad} : {inTy}\n"
+          gradSSA := s!"%mp_skip{r.pos}"
       | _ => pure ()
 
     | .flatten =>
@@ -4711,6 +4838,37 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
         gradSSA := s!"%bu_dx{r.pos}"
         gradShape := r.inShape
       | _ => pure ()
+
+    | .unetUp _ic _oc =>
+      if r.isUnetUpConcat then
+        -- Concat-split backward at the UNet decoder skip junction.
+        -- Incoming `gradSSA` has shape `r.outShape = [b, ic+oc, 2h, 2w]`.
+        -- Split along the channel axis into:
+        --   `g_upsampled : [b, ic, 2h, 2w]` (decoder-half) — flows out via gradSSA
+        --   `g_skipFeat  : [b, oc, 2h, 2w]` (skip-half)    — saved as
+        --                                                   `%unet_skip_g{e}`
+        --                                                   for the matching
+        --                                                   unetDown's maxPool.
+        let e := r.unetEncoderIdx
+        let aShape := r.inShape          -- decoder upsampled side
+        let bShape := r.unetSkipShape    -- encoder skip side
+        let outTy  := tensorTy r.outShape
+        let aTy    := tensorTy aShape
+        let bTy    := tensorTy bShape
+        match aShape, bShape, r.outShape with
+        | [n, ca, h, w], [_, cb, _, _], [_, _, _, _] =>
+          code := code ++ s!"    // ─── UNet concat-split backward (channelSplit_has_vjp ↔ channelConcat) ───\n"
+          code := code ++ s!"    //     dConcat[:, :ca]  → upsampled-half (decoder, flows to bilinearUpsample backward)\n"
+          code := code ++ s!"    //     dConcat[:, ca:]  → skip-half (saved as %unet_skip_g{e}, accumulated at unetDown maxPool)\n"
+          code := code ++ s!"    %uut_a{r.pos} = \"stablehlo.slice\"({gradSSA}) " ++ "{" ++
+            s!"start_indices = array<i64: 0, 0, 0, 0>, limit_indices = array<i64: {n}, {ca}, {h}, {w}>, strides = array<i64: 1, 1, 1, 1>" ++
+            "}" ++ s!" : ({outTy}) -> {aTy}\n"
+          code := code ++ s!"    %unet_skip_g{e} = \"stablehlo.slice\"({gradSSA}) " ++ "{" ++
+            s!"start_indices = array<i64: 0, {ca}, 0, 0>, limit_indices = array<i64: {n}, {ca + cb}, {h}, {w}>, strides = array<i64: 1, 1, 1, 1>" ++
+            "}" ++ s!" : ({outTy}) -> {bTy}\n"
+          gradSSA := s!"%uut_a{r.pos}"
+          gradShape := aShape
+        | _, _, _ => pure ()
 
     | .patchEmbed _ic _dim _p _nP =>
       if r.isPatchEmbed then
@@ -5995,6 +6153,42 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat)
       match curShape with
       | [b, _, h, w] => curShape := [b, oc, h / 2, w / 2]
       | _ => pure ()
+    | .unetDown ic oc =>
+      -- 2× convBn (ic→oc, oc→oc) then maxPool 2 (no params).
+      let ocTy := tensorTy [oc]
+      let cv1Ty := tensorTy [oc, ic, 3, 3]
+      let cv2Ty := tensorTy [oc, oc, 3, 3]
+      params := params ++ s!"      %W{pidx}: {cv1Ty}, %g{pidx}: {ocTy}, %bt{pidx}: {ocTy},\n"
+      paramRetTypes := paramRetTypes.push cv1Ty |>.push ocTy |>.push ocTy
+      mRetTypes := mRetTypes.push cv1Ty |>.push ocTy |>.push ocTy
+      vRetTypes := vRetTypes.push cv1Ty |>.push ocTy |>.push ocTy
+      pidx := pidx + 1
+      params := params ++ s!"      %W{pidx}: {cv2Ty}, %g{pidx}: {ocTy}, %bt{pidx}: {ocTy},\n"
+      paramRetTypes := paramRetTypes.push cv2Ty |>.push ocTy |>.push ocTy
+      mRetTypes := mRetTypes.push cv2Ty |>.push ocTy |>.push ocTy
+      vRetTypes := vRetTypes.push cv2Ty |>.push ocTy |>.push ocTy
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, h, w] => curShape := [b, oc, (h + 1) / 2, (w + 1) / 2]
+      | _ => pure ()
+    | .unetUp ic oc =>
+      -- bilinear ×2 (no params) + concat → 2× convBn ((ic+oc)→oc, oc→oc).
+      let ocTy := tensorTy [oc]
+      let cv1Ty := tensorTy [oc, ic + oc, 3, 3]
+      let cv2Ty := tensorTy [oc, oc, 3, 3]
+      params := params ++ s!"      %W{pidx}: {cv1Ty}, %g{pidx}: {ocTy}, %bt{pidx}: {ocTy},\n"
+      paramRetTypes := paramRetTypes.push cv1Ty |>.push ocTy |>.push ocTy
+      mRetTypes := mRetTypes.push cv1Ty |>.push ocTy |>.push ocTy
+      vRetTypes := vRetTypes.push cv1Ty |>.push ocTy |>.push ocTy
+      pidx := pidx + 1
+      params := params ++ s!"      %W{pidx}: {cv2Ty}, %g{pidx}: {ocTy}, %bt{pidx}: {ocTy},\n"
+      paramRetTypes := paramRetTypes.push cv2Ty |>.push ocTy |>.push ocTy
+      mRetTypes := mRetTypes.push cv2Ty |>.push ocTy |>.push ocTy
+      vRetTypes := vRetTypes.push cv2Ty |>.push ocTy |>.push ocTy
+      pidx := pidx + 1
+      match curShape with
+      | [b, _, h, w] => curShape := [b, oc, h * 2, w * 2]
+      | _ => pure ()
     | .maxPool _size stride =>
       match curShape with
       | [b, c, h, w] => curShape := [b, c, (h + stride - 1) / stride, (w + stride - 1) / stride]
@@ -6220,6 +6414,14 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat)
       let cvTy := tensorTy [oc, ic, 2, 2]
       params := params ++ s!"      %m_W{mpidx}: {icTy}, %m_b{mpidx}: {icTy},\n"; mpidx := mpidx + 1
       params := params ++ s!"      %m_W{mpidx}: {cvTy}, %m_b{mpidx}: {ocTy},\n"; mpidx := mpidx + 1
+    | .unetDown ic oc =>
+      let ocTy := tensorTy [oc]
+      params := params ++ s!"      %m_W{mpidx}: {tensorTy [oc, ic, 3, 3]}, %m_g{mpidx}: {ocTy}, %m_bt{mpidx}: {ocTy},\n"; mpidx := mpidx + 1
+      params := params ++ s!"      %m_W{mpidx}: {tensorTy [oc, oc, 3, 3]}, %m_g{mpidx}: {ocTy}, %m_bt{mpidx}: {ocTy},\n"; mpidx := mpidx + 1
+    | .unetUp ic oc =>
+      let ocTy := tensorTy [oc]
+      params := params ++ s!"      %m_W{mpidx}: {tensorTy [oc, ic + oc, 3, 3]}, %m_g{mpidx}: {ocTy}, %m_bt{mpidx}: {ocTy},\n"; mpidx := mpidx + 1
+      params := params ++ s!"      %m_W{mpidx}: {tensorTy [oc, oc, 3, 3]}, %m_g{mpidx}: {ocTy}, %m_bt{mpidx}: {ocTy},\n"; mpidx := mpidx + 1
     | .patchEmbed ic dim pSize nP =>
       params := params ++ s!"      %m_W{mpidx}: {tensorTy [dim, ic, pSize, pSize]}, %m_b{mpidx}: {tensorTy [dim]},\n"
       mpidx := mpidx + 1
@@ -6379,6 +6581,14 @@ private def emitTrainStepSig (spec : NetSpec) (batchSize : Nat)
       let cvTy := tensorTy [oc, ic, 2, 2]
       params := params ++ s!"      %v_W{vpidx2}: {icTy}, %v_b{vpidx2}: {icTy},\n"; vpidx2 := vpidx2 + 1
       params := params ++ s!"      %v_W{vpidx2}: {cvTy}, %v_b{vpidx2}: {ocTy},\n"; vpidx2 := vpidx2 + 1
+    | .unetDown ic oc =>
+      let ocTy := tensorTy [oc]
+      params := params ++ s!"      %v_W{vpidx2}: {tensorTy [oc, ic, 3, 3]}, %v_g{vpidx2}: {ocTy}, %v_bt{vpidx2}: {ocTy},\n"; vpidx2 := vpidx2 + 1
+      params := params ++ s!"      %v_W{vpidx2}: {tensorTy [oc, oc, 3, 3]}, %v_g{vpidx2}: {ocTy}, %v_bt{vpidx2}: {ocTy},\n"; vpidx2 := vpidx2 + 1
+    | .unetUp ic oc =>
+      let ocTy := tensorTy [oc]
+      params := params ++ s!"      %v_W{vpidx2}: {tensorTy [oc, ic + oc, 3, 3]}, %v_g{vpidx2}: {ocTy}, %v_bt{vpidx2}: {ocTy},\n"; vpidx2 := vpidx2 + 1
+      params := params ++ s!"      %v_W{vpidx2}: {tensorTy [oc, oc, 3, 3]}, %v_g{vpidx2}: {ocTy}, %v_bt{vpidx2}: {ocTy},\n"; vpidx2 := vpidx2 + 1
     | .patchEmbed ic dim pSize nP =>
       params := params ++ s!"      %v_W{vpidx2}: {tensorTy [dim, ic, pSize, pSize]}, %v_b{vpidx2}: {tensorTy [dim]},\n"
       vpidx2 := vpidx2 + 1

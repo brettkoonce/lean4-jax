@@ -29,21 +29,26 @@ def unetPets : NetSpec where
     .conv2d 32 3 1 .same .identity
   ]
 
-def main : IO Unit := do
-  IO.FS.createDirAll ".lake/build"
-  let mlir := MlirCodegen.generate unetPets 2
-  let mlirPath := ".lake/build/test_unet_forward.mlir"
-  let vmfbPath := ".lake/build/test_unet_forward.vmfb"
+private def compileOne (label mlir mlirPath vmfbPath : String) : IO Unit := do
   IO.FS.writeFile mlirPath mlir
-  IO.eprintln s!"  wrote {mlirPath} ({mlir.length} chars)"
+  IO.eprintln s!"  [{label}] wrote {mlirPath} ({mlir.length} chars)"
   let args ← ireeCompileArgs mlirPath vmfbPath
-  IO.eprintln s!"  iree-compile {String.intercalate " " args.toList}"
   let compiler := if (← System.FilePath.pathExists ".venv/bin/iree-compile")
                   then ".venv/bin/iree-compile"
                   else "iree-compile"
   let r ← IO.Process.output { cmd := compiler, args := args }
   if r.exitCode != 0 then
-    IO.eprintln s!"FAIL: iree-compile exit {r.exitCode}"
+    IO.eprintln s!"  [{label}] FAIL: iree-compile exit {r.exitCode}"
     IO.eprintln (r.stderr.take 4000)
     IO.Process.exit 1
-  IO.eprintln s!"OK: {vmfbPath} produced"
+  IO.eprintln s!"  [{label}] OK: {vmfbPath} produced"
+
+def main : IO Unit := do
+  IO.FS.createDirAll ".lake/build"
+  let fwd := MlirCodegen.generate unetPets 2
+  compileOne "forward" fwd
+    ".lake/build/test_unet_forward.mlir" ".lake/build/test_unet_forward.vmfb"
+  let train := MlirCodegen.generateTrainStep unetPets 2 "jit_test_unet_train_step"
+    (useAdam := true) (useSeg := true)
+  compileOne "train-step" train
+    ".lake/build/test_unet_train.mlir" ".lake/build/test_unet_train.vmfb"
