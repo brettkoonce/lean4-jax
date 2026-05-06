@@ -798,6 +798,41 @@ private def emitFlatten (pos : Nat) (curSSA : String) (curShape : List Nat)
     return (s, s!"%fl{pos}", newShape)
   | _ => return ("    // flatten: already flat or unknown rank\n", curSSA, curShape)
 
+/-- Channel-concatenate two NCHW tensors `A : (N, Ca, H, W)` and
+    `B : (N, Cb, H, W)` along the channel axis (dim 1). Output:
+    `(N, Ca + Cb, H, W)`. Used by UNet decoder skip-connection
+    fusion (`emitUnetUp` will call this). The two inputs must
+    share `(N, H, W)`. -/
+private def emitChannelConcat (tag : String) (aSSA bSSA : String)
+    (aShape bShape : List Nat) : String × String × List Nat := Id.run do
+  match aShape, bShape with
+  | [n, ca, h, w], [_, cb, _, _] =>
+    let outShape := [n, ca + cb, h, w]
+    let s := s!"    %cc_o{tag} = stablehlo.concatenate {aSSA}, {bSSA}, dim = 1 : ({tensorTy aShape}, {tensorTy bShape}) -> {tensorTy outShape}\n"
+    return (s, s!"%cc_o{tag}", outShape)
+  | _, _ => return ("    // channelConcat error: expected rank-4 NCHW inputs\n", aSSA, aShape)
+
+/-- VJP of channel-concat: split the gradient `(N, Ca + Cb, H, W)`
+    back into `dA : (N, Ca, H, W)` and `dB : (N, Cb, H, W)`. Returns
+    `(code, dA_SSA, dB_SSA)`. -/
+private def emitChannelSplitGrad (tag : String) (gSSA : String)
+    (aShape bShape : List Nat) : String × String × String := Id.run do
+  match aShape, bShape with
+  | [n, ca, h, w], [_, cb, _, _] =>
+    let gShape := [n, ca + cb, h, w]
+    let gTy := tensorTy gShape
+    let aTy := tensorTy aShape
+    let bTy := tensorTy bShape
+    let mut s := ""
+    s := s ++ s!"    %cs_a{tag} = \"stablehlo.slice\"({gSSA}) " ++ "{" ++
+      s!"start_indices = array<i64: 0, 0, 0, 0>, limit_indices = array<i64: {n}, {ca}, {h}, {w}>, strides = array<i64: 1, 1, 1, 1>" ++
+      "}" ++ s!" : ({gTy}) -> {aTy}\n"
+    s := s ++ s!"    %cs_b{tag} = \"stablehlo.slice\"({gSSA}) " ++ "{" ++
+      s!"start_indices = array<i64: 0, {ca}, 0, 0>, limit_indices = array<i64: {n}, {ca + cb}, {h}, {w}>, strides = array<i64: 1, 1, 1, 1>" ++
+      "}" ++ s!" : ({gTy}) -> {bTy}\n"
+    return (s, s!"%cs_a{tag}", s!"%cs_b{tag}")
+  | _, _ => return ("    // channelSplitGrad error: expected rank-4 NCHW shapes\n", gSSA, gSSA)
+
 /-- 1-D bilinear-resampling weight matrix `Wy : (outLen × inLen)` for
     integer upsampling factor `scale`, where `outLen = inLen * scale`.
     Half-pixel centers, `align_corners = false` (PyTorch / JAX default):

@@ -994,6 +994,50 @@ def test_bilinear_upsample_edge_clamp():
     return err < TOL
 
 # ════════════════════════════════════════════════════════════════
+# Channel concat VJP: forward stacks (Ca + Cb) along channel axis,
+#                     backward slices the gradient back per branch.
+# ════════════════════════════════════════════════════════════════
+def test_channel_concat_input_grad():
+    """VJP of channel concat. Forward Y = concat(A, B, dim=1) where
+    A : (N, Ca, H, W), B : (N, Cb, H, W). Backward:
+        dA = dY[:, :Ca]
+        dB = dY[:, Ca:]
+    Trivial axis-slice — but easy to typo (wrong axis, off-by-one
+    on the split point). FD catches both."""
+    n, ca, cb, h, w = 2, 3, 4, 3, 3
+    np.random.seed(2)
+    a  = np.random.randn(n, ca, h, w)
+    b  = np.random.randn(n, cb, h, w)
+    dy = np.random.randn(n, ca + cb, h, w)
+
+    def fwd(a_flat, b_flat):
+        a_ = a_flat.reshape(n, ca, h, w)
+        b_ = b_flat.reshape(n, cb, h, w)
+        return np.concatenate([a_, b_], axis=1).ravel()
+
+    af, bf = a.ravel(), b.ravel()
+    da_fd = np.zeros_like(af)
+    for i in range(len(af)):
+        ap = af.copy(); ap[i] += EPS
+        am = af.copy(); am[i] -= EPS
+        da_fd[i] = np.sum(((fwd(ap, bf) - fwd(am, bf)) / (2 * EPS)) * dy.ravel())
+    db_fd = np.zeros_like(bf)
+    for i in range(len(bf)):
+        bp = bf.copy(); bp[i] += EPS
+        bm = bf.copy(); bm[i] -= EPS
+        db_fd[i] = np.sum(((fwd(af, bp) - fwd(af, bm)) / (2 * EPS)) * dy.ravel())
+
+    da_claimed = dy[:, :ca].ravel()
+    db_claimed = dy[:, ca:].ravel()
+
+    err_a = np.max(np.abs(da_fd - da_claimed))
+    err_b = np.max(np.abs(db_fd - db_claimed))
+    err   = max(err_a, err_b)
+    status = "PASS" if err < TOL else "FAIL"
+    print(f"  {status}: {'channelConcat_input_grad':30s} max_err={err:.2e}")
+    return err < TOL
+
+# ════════════════════════════════════════════════════════════════
 # Run all
 # ════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
@@ -1026,6 +1070,7 @@ if __name__ == "__main__":
     results.append(("Depthwise",    "depthwise_bias_grad",   test_depthwise_bias_grad()))
     results.append(("UNet",         "bilinearUpsample_input_grad", test_bilinear_upsample_input_grad()))
     results.append(("UNet",         "bilinearUpsample_edge_clamp", test_bilinear_upsample_edge_clamp()))
+    results.append(("UNet",         "channelConcat_input_grad",    test_channel_concat_input_grad()))
     try:
         results.append(("LayerNorm", "pdiv_gelu",           test_gelu()))
     except ImportError:
