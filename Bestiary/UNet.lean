@@ -155,6 +155,38 @@ def unetPets : NetSpec where
   ]
 
 -- ════════════════════════════════════════════════════════════════
+-- § autoencoderPets — no-skips encoder/decoder (UNet demo Phase 1)
+-- ════════════════════════════════════════════════════════════════
+
+/-- Skipless encoder/decoder for the Pets segmentation demo. The point
+    is to exercise the per-pixel CE codegen + seg train-step ABI on a
+    spec built entirely from primitives the codegen already supports
+    (`.convBn`, `.maxPool`, `.bilinearUpsample`, `.conv2d`) — i.e.
+    without the `.unetDown` / `.unetUp` skip-state plumbing that the
+    real `unetPets` will need. Spatial trip is 224 → 14 → 224 via
+    four maxPool-2's then four bilinearUpsample-2's. ~5.5M params.
+    Once `Train.lean` routes seg correctly through this spec on the
+    Pets data, training loss should decrease. -/
+def autoencoderPets : NetSpec where
+  name := "Autoencoder (Pets, 224×224 RGB → 3-class trimap, skipless)"
+  imageH := 224
+  imageW := 224
+  layers := [
+    -- Encoder: 224 → 14 (four 2× downsamples), 3 → 512 channels
+    .convBn 3   64  3 1 .same, .maxPool 2 2,   -- 224 → 112
+    .convBn 64  128 3 1 .same, .maxPool 2 2,   -- 112 → 56
+    .convBn 128 256 3 1 .same, .maxPool 2 2,   -- 56  → 28
+    .convBn 256 512 3 1 .same, .maxPool 2 2,   -- 28  → 14
+    .convBn 512 512 3 1 .same,                 -- bottleneck @ 14×14
+    -- Decoder: 14 → 224 (four 2× bilinear upsamples), 512 → 64 channels
+    .bilinearUpsample 2, .convBn 512 256 3 1 .same,   -- 14  → 28
+    .bilinearUpsample 2, .convBn 256 128 3 1 .same,   -- 28  → 56
+    .bilinearUpsample 2, .convBn 128 64  3 1 .same,   -- 56  → 112
+    .bilinearUpsample 2, .convBn 64  64  3 1 .same,   -- 112 → 224
+    .conv2d 64 3 1 .same .identity                    -- output projection (1×1, 3 classes)
+  ]
+
+-- ════════════════════════════════════════════════════════════════
 -- § tinyUnet — bestiary fixture
 -- ════════════════════════════════════════════════════════════════
 
@@ -200,6 +232,7 @@ def main : IO Unit := do
   summarize unetRgb
   summarize unetSmall
   summarize unetPets
+  summarize autoencoderPets
   summarize tinyUnet
 
   IO.println ""
