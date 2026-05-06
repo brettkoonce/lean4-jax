@@ -1090,6 +1090,84 @@ def test_per_pixel_softmax_ce():
     return err < TOL
 
 # ════════════════════════════════════════════════════════════════
+# UNet skip plumbing: a feature B fans out into two downstream paths
+# (decoder via maxPool→bilinear→concat, skip directly into the same
+# concat). The chain rule requires SUMMING both gradient contributions
+# back at B — that's the novel architectural piece in
+# `MlirCodegen.lean`'s unetDown/unetUp emit. This test isolates the
+# math without rebuilding convBn.
+#
+# Forward:
+#     B [N, C, 2H, 2W]
+#     ├──[maxPool 2 → bilinear 2 → U [N, C, 2H, 2W]]──┐
+#     └────────────── skip path ──────────────────────┤
+#                                                      v
+#                          Y = concat(U, B, dim=1) [N, 2C, 2H, 2W]
+#     loss = sum(Y * grad_seed)
+#
+# Backward (what the codegen claims, after composition):
+#     dY        = grad_seed
+#     dU        = dY[:, :C]                 (channel split, decoder)
+#     dB_skip   = dY[:, C:]                 (channel split, skip)
+#     dP        = bilinear_T(dU)
+#     dB_pool   = maxPool_back(B, P, dP)
+#     dB        = dB_pool + dB_skip         ← THE NEW PIECE
+# ════════════════════════════════════════════════════════════════
+def test_unet_skip_plumbing():
+    n, c, h, w = 2, 3, 3, 3   # 2H × 2W = 6 × 6 input
+    big_h, big_w = 2 * h, 2 * w
+    np.random.seed(7)
+    B = np.random.randn(n, c, big_h, big_w)
+    grad_seed = np.random.randn(n, 2 * c, big_h, big_w)
+
+    Wy = _bilinear_weights_1d(h, 2)  # (2h × h)
+    Wx = _bilinear_weights_1d(w, 2)
+
+    def fwd(b_flat):
+        b = b_flat.reshape(n, c, big_h, big_w)
+        # MaxPool 2 (non-overlapping 2×2): (N, C, 2H, 2W) → (N, C, H, W)
+        p = b.reshape(n, c, h, 2, w, 2).max(axis=(3, 5))
+        # Bilinear 2× upsample: P → U
+        u = np.einsum('ih,nchw->nciw', Wy, p)
+        u = np.einsum('jw,nciw->ncij', Wx, u)
+        # Concat decoder-half + skip-half along channel axis.
+        y = np.concatenate([u, b], axis=1)
+        # Inner-product loss with grad_seed
+        return np.sum(y * grad_seed)
+
+    bf = B.ravel()
+    dB_fd = np.zeros_like(bf)
+    for i in range(len(bf)):
+        bp = bf.copy(); bp[i] += EPS
+        bm = bf.copy(); bm[i] -= EPS
+        dB_fd[i] = (fwd(bp) - fwd(bm)) / (2 * EPS)
+    dB_fd = dB_fd.reshape(n, c, big_h, big_w)
+
+    # ── Claimed backward (matches the codegen's emit) ──
+    # dY ≡ grad_seed
+    dU = grad_seed[:, :c, :, :]
+    dB_skip = grad_seed[:, c:, :, :]
+    # bilinear backward: dP = Wyᵀ · dU · Wx
+    dP = np.einsum('ih,ncij->nchj', Wy, dU)
+    dP = np.einsum('jw,nchj->nchw', Wx, dP)
+    # maxPool backward: route dP to argmax of each 2×2 window in B
+    P = B.reshape(n, c, h, 2, w, 2).max(axis=(3, 5))
+    dB_pool = np.zeros_like(B)
+    for ni in range(n):
+        for ci in range(c):
+            for hi in range(h):
+                for wi in range(w):
+                    block = B[ni, ci, 2*hi:2*hi+2, 2*wi:2*wi+2]
+                    ay, ax = np.unravel_index(block.argmax(), (2, 2))
+                    dB_pool[ni, ci, 2*hi+ay, 2*wi+ax] = dP[ni, ci, hi, wi]
+    dB_claimed = dB_pool + dB_skip
+
+    err = np.max(np.abs(dB_fd - dB_claimed))
+    status = "PASS" if err < TOL else "FAIL"
+    print(f"  {status}: {'unetSkipPlumbing_input_grad':30s} max_err={err:.2e}")
+    return err < TOL
+
+# ════════════════════════════════════════════════════════════════
 # Run all
 # ════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
@@ -1124,6 +1202,7 @@ if __name__ == "__main__":
     results.append(("UNet",         "bilinearUpsample_edge_clamp", test_bilinear_upsample_edge_clamp()))
     results.append(("UNet",         "channelConcat_input_grad",    test_channel_concat_input_grad()))
     results.append(("UNet",         "perPixelSoftmaxCE_grad",      test_per_pixel_softmax_ce()))
+    results.append(("UNet",         "unetSkipPlumbing_input_grad", test_unet_skip_plumbing()))
     try:
         results.append(("LayerNorm", "pdiv_gelu",           test_gelu()))
     except ImportError:
