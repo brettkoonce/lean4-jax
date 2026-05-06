@@ -118,6 +118,10 @@ lean_exe «autoencoder-pets-train» where
   root := `MainAutoencoderPetsTrain
   moreLinkArgs := ireeLink
 
+lean_exe «unet-pets-train» where
+  root := `MainUnetPetsTrain
+  moreLinkArgs := ireeLink
+
 -- ═══════════════════════════════════════════════════════════════════
 -- VJP oracle — one binary per axiom under test.
 -- Trainers live in tests/vjp_oracle/phase3/ so the root isn't crowded
