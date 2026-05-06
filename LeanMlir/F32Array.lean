@@ -90,6 +90,12 @@ opaque loadImagenetteSized (path : @& String) (imgSize : USize) : IO (ByteArray 
 @[extern "lean_f32_load_pets"]
 opaque loadPets (path : @& String) : IO (ByteArray × ByteArray × Nat)
 
+/-- Convert a uint8 mask ByteArray (one byte per pixel) into a little-endian
+    int32 ByteArray of 4× the size. Pets `loadPets` returns masks as packed
+    uint8; `trainStepAdamF32Seg` expects int32 per-pixel class labels. -/
+@[extern "lean_f32_mask_u8_to_i32"]
+opaque maskU8ToI32 (mask : @& ByteArray) : IO ByteArray
+
 /-- Shuffle images and labels in-place (Fisher-Yates). Returns (shuffled images, shuffled labels). -/
 @[extern "lean_f32_shuffle"]
 opaque shuffle (images : ByteArray) (labels : ByteArray)

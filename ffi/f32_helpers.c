@@ -262,6 +262,28 @@ LEAN_EXPORT lean_obj_res lean_f32_load_pets(b_lean_obj_arg path_obj, lean_obj_ar
     return lean_io_result_mk_ok(outer);
 }
 
+// ---- uint8 mask → int32 LE mask ByteArray ----
+// Pets `loadPets` returns per-pixel class labels packed as one byte per pixel.
+// `trainStepAdamF32Seg` expects an int32 LE buffer (one 4-byte little-endian
+// signed int per pixel, matching the classification label convention used
+// elsewhere in the project). Output buffer is exactly 4× the input size.
+LEAN_EXPORT lean_obj_res lean_f32_mask_u8_to_i32(
+    b_lean_obj_arg mask_u8, lean_obj_arg w) {
+    (void)w;
+    size_t n = lean_sarray_size(mask_u8);
+    size_t nbytes = n * 4;
+    lean_object* out = lean_alloc_sarray(1, nbytes, nbytes);
+    const uint8_t* in = (const uint8_t*)lean_sarray_cptr(mask_u8);
+    uint8_t* o = lean_sarray_cptr(out);
+    for (size_t i = 0; i < n; i++) {
+        o[i*4]     = in[i];
+        o[i*4 + 1] = 0;
+        o[i*4 + 2] = 0;
+        o[i*4 + 3] = 0;
+    }
+    return lean_io_result_mk_ok(out);
+}
+
 // ---- Shuffle images + labels in-place (Fisher-Yates) ----
 // images: n * pixels_per * 4 bytes; labels: n * 4 bytes
 LEAN_EXPORT lean_obj_res lean_f32_shuffle(lean_obj_arg img_obj, lean_obj_arg lbl_obj,
