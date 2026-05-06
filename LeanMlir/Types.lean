@@ -60,6 +60,13 @@ inductive Layer where
   -- channel count (from the previous decoder or bottleneck); `oc` is
   -- both the output channel count and the expected skip channel count.
   | unetUp (ic oc : Nat)
+  -- Bilinear upsample: parameter-free spatial scale-up by integer
+  -- factor `scale`. Channel count unchanged; output (H, W) =
+  -- (scale·H, scale·W). The "gateway op" for UNet decoders, FPN,
+  -- BiFPN, DeepLab, diffusion U-Nets, and super-resolution.
+  -- Currently shape-only — no codegen yet, so any NetSpec referencing
+  -- it cannot compile to MLIR. See `planning/unet_demo.md`.
+  | bilinearUpsample (scale : Nat)
   -- Transformer decoder stack (DETR-style): N blocks of self-attention
   -- on `nQueries` learned object queries + cross-attention with the
   -- encoder output + FFN. The object-query embedding is part of this

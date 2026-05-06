@@ -388,6 +388,7 @@ def NetSpec.archStr (s : NetSpec) : String :=
     | .patchMerging i o          => s!"PatchMerge({i}→{o})"
     | .unetDown ic oc            => s!"UNetDown({ic}→{oc})"
     | .unetUp ic oc              => s!"UNetUp({ic}→{oc})"
+    | .bilinearUpsample s        => s!"Upsample(×{s})"
     | .transformerDecoder dim h _ n nq => s!"Dec{n}x[{h}h,{dim}],{nq}q"
     | .detrHeads dim c           => s!"DETR-heads({dim}→cls{c+1}+box4)"
     | .shuffleBlock ic oc g n    => s!"Shuffle{n}({ic}→{oc},g{g})"

@@ -52,6 +52,9 @@ prose explains the pairing; the NetSpec stays readable.
 - `unetSmall` — depth 3, base 32 — lighter variant used as a
   Stable-Diffusion-style denoiser backbone (without the attention
   blocks; those'd need additional primitives).
+- `unetPets` — depth 4, base 32, 224×224 RGB → 3-class trimap.
+  The Pets demo target (`planning/unet_demo.md`); sits between
+  `unetSmall` and the original `unet` in size.
 - `tinyUnet` — depth 2, base 16 — bestiary fixture.
 -/
 
@@ -123,6 +126,35 @@ def unetSmall : NetSpec where
   ]
 
 -- ════════════════════════════════════════════════════════════════
+-- § unetPets — depth 4, base 32, RGB → 3-class trimap (Pets demo)
+-- ════════════════════════════════════════════════════════════════
+
+/-- The Pets demo target. 224×224 RGB input, 3-class output
+    (foreground / background / boundary, after trimap remap 1/2/3 →
+    0/1/2). Depth 4 with base 32 channels — between `unetSmall`
+    (depth 3) and `unet` (depth 4 base 64). Bottleneck doubles to
+    512. See `planning/unet_demo.md`. Currently shape-only — depends
+    on `.unetDown` / `.unetUp` codegen, which depends on the new
+    `.bilinearUpsample` primitive (registered, no codegen yet). -/
+def unetPets : NetSpec where
+  name := "UNet (Pets, 224×224 RGB → 3-class trimap)"
+  imageH := 224
+  imageW := 224
+  layers := [
+    .unetDown 3   32,                  -- encoder stage 1: 224 → 112
+    .unetDown 32  64,                  -- encoder stage 2: 112 → 56
+    .unetDown 64  128,                 -- encoder stage 3: 56  → 28
+    .unetDown 128 256,                 -- encoder stage 4: 28  → 14
+    .convBn 256 512 3 1 .same,         -- bottleneck part 1
+    .convBn 512 512 3 1 .same,         -- bottleneck part 2
+    .unetUp 512 256,                   -- decoder stage 4 (skip: encoder 4)
+    .unetUp 256 128,                   -- decoder stage 3 (skip: encoder 3)
+    .unetUp 128 64,                    -- decoder stage 2 (skip: encoder 2)
+    .unetUp 64  32,                    -- decoder stage 1 (skip: encoder 1)
+    .conv2d 32 3 1 .same .identity     -- output projection (1×1 conv to 3 classes)
+  ]
+
+-- ════════════════════════════════════════════════════════════════
 -- § tinyUnet — bestiary fixture
 -- ════════════════════════════════════════════════════════════════
 
@@ -167,15 +199,17 @@ def main : IO Unit := do
   summarize unet
   summarize unetRgb
   summarize unetSmall
+  summarize unetPets
   summarize tinyUnet
 
   IO.println ""
   IO.println "────────────────────────────────────────────────────────────────"
   IO.println "  Notes"
   IO.println "────────────────────────────────────────────────────────────────"
-  IO.println "  • `.unetDown` and `.unetUp` are new Layer constructors added"
-  IO.println "    for this bestiary. Codegen emits UNSUPPORTED; a real UNet"
-  IO.println "    trainer needs transposed-conv + concat kernels plus skip-"
+  IO.println "  • `.unetDown` and `.unetUp` are shape-only Layer constructors"
+  IO.println "    added for this bestiary. Codegen emits UNSUPPORTED; a real"
+  IO.println "    UNet trainer needs the new `.bilinearUpsample` primitive"
+  IO.println "    (registered, codegen pending) + a concat kernel + skip-"
   IO.println "    connection threading across the encoder/decoder pair."
   IO.println "  • Skip pairing is implicit: the i-th `unetUp` from the bottom"
   IO.println "    receives the skip from the i-th `unetDown` from the top. A"

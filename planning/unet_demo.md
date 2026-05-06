@@ -152,7 +152,23 @@ the spatial dimensions. ~2-3 days to implement cleanly.
 
 ## Phase 3 progress (2026-05-05)
 
-**Done:**
+**Phase 1+2 also kicked off (2026-05-06):**
+
+- `Layer.bilinearUpsample (scale : Nat)` registered in `Types.lean`.
+  Shape-only — same status as `unetDown` / `unetUp`. `archStr` arm
+  in `Spec.lean` renders `Upsample(×N)`; all other Spec/MlirCodegen
+  dispatchers handle it via existing wildcards (0 params, channels
+  passthrough, codegen silently skipped). Verified by reach test:
+  a 3-layer NetSpec `[conv2d, bilinearUpsample 2, conv2d]` builds,
+  validates, and produces correct param count (251 = 224 + 0 + 27).
+- `Bestiary/UNet.lean` gains `unetPets : NetSpec` — depth 4, base 32,
+  224×224 RGB → 3-class trimap. **7.76M params**, arch:
+  `UNetDown(3→32) → ... → UNetDown(128→256) → Conv(256→512)+BN →
+  Conv(512→512)+BN → UNetUp(512→256) → ... → UNetUp(64→32) →
+  Conv(32→3,1x1)`. Validates cleanly. Sits between `unetSmall`
+  (1.9M) and the original `unet` (31M).
+
+**Phase 3 done:**
 - `download_pets.sh` + `preprocess_pets.py` — fetch, extract, resize,
   trimap remap (1/2/3 → 0/1/2), pack to flat `train.bin` / `val.bin`
   with `<count:u32 LE><record>*` records of `3*224*224 + 224*224`
@@ -182,7 +198,8 @@ the spatial dimensions. ~2-3 days to implement cleanly.
   forward path is classification-only, the loss path expects
   4-byte int32 labels at the IREE ABI boundary, and `unetDown` /
   `unetUp` are still shape-only enum entries (no codegen). No
-  `unetTinySpec` cell yet.
+  `unet-pets` cell yet (the `unetPets` NetSpec exists but
+  cannot compile to MLIR until upsample / concat codegen lands).
 - Mask-aware augmentation: `petsIO.augmentBatch` is identity. Real
   augmentation needs to apply the same geometric transform (random
   crop, hflip, scale) to image and mask, plus image-only color ops.
@@ -190,9 +207,13 @@ the spatial dimensions. ~2-3 days to implement cleanly.
 ## Cells to add
 
 ```
-("unet-tiny-pets",       ⟨unetTinySpec, unetConfig, .pets, "data/pets"⟩),
-("unet-tiny-pets-aug",   ⟨unetTinySpec, unetAugConfig, .pets, "data/pets"⟩),
+("unet-pets",       ⟨unetPets, unetConfig, .pets, "data/pets"⟩),
+("unet-pets-aug",   ⟨unetPets, unetAugConfig, .pets, "data/pets"⟩),
 ```
+
+`unetPets` lives in `Bestiary/UNet.lean` (registered 2026-05-06).
+Two cells: bare baseline + augmented, mirroring the recipe-ablation
+pattern from the classification chapters.
 
 Two cells: bare baseline + augmented. Lets us do the same
 recipe-ablation pattern as the classification chapters (does aug
