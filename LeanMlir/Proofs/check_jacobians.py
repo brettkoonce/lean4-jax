@@ -896,6 +896,104 @@ def test_mhsa_full():
     return all_ok
 
 # ════════════════════════════════════════════════════════════════
+# Bilinear upsample VJP: dX = Wyᵀ · dY · Wx (per N,C slice)
+# ════════════════════════════════════════════════════════════════
+def _bilinear_weights_1d(in_len, scale):
+    """Match LeanMlir/MlirCodegen.lean::bilinearWeights1D — half-pixel
+    centers, no align_corners. Returns (out_len × in_len) where
+    out_len = in_len * scale."""
+    out_len = in_len * scale
+    W = np.zeros((out_len, in_len))
+    for i in range(out_len):
+        y_in = (i + 0.5) / scale - 0.5
+        y0 = int(np.floor(y_in))
+        wy = y_in - y0
+        i0 = max(0, min(y0,     in_len - 1))
+        i1 = max(0, min(y0 + 1, in_len - 1))
+        W[i, i0] += (1 - wy)
+        W[i, i1] += wy
+    return W
+
+def test_bilinear_upsample_input_grad():
+    """Bilinear upsample VJP. Forward Y = Wy · X · Wxᵀ → backward
+    dX = Wyᵀ · dY · Wx, applied per-(N,C) slice."""
+    n, c, h, w, scale = 2, 3, 4, 4, 2
+    o_h, o_w = h * scale, w * scale
+    Wy = _bilinear_weights_1d(h, scale)
+    Wx = _bilinear_weights_1d(w, scale)
+
+    def fwd(x_flat):
+        x = x_flat.reshape(n, c, h, w)
+        # Apply Wy along H, then Wx along W
+        y = np.einsum('ih,nchw->nciw', Wy, x)  # contract h
+        y = np.einsum('jw,nciw->ncij', Wx, y)  # contract w
+        return y.ravel()
+
+    np.random.seed(0)
+    x  = np.random.randn(n, c, h, w)
+    dy = np.random.randn(n, c, o_h, o_w)
+
+    # Finite-diff gradient: dX[i] = ∂<Y, dY>/∂X[i]
+    xf = x.ravel()
+    dx_fd = np.zeros_like(xf)
+    for i in range(len(xf)):
+        xp = xf.copy(); xp[i] += EPS
+        xm = xf.copy(); xm[i] -= EPS
+        fp = fwd(xp); fm = fwd(xm)
+        dx_fd[i] = np.sum(((fp - fm) / (2 * EPS)) * dy.ravel())
+
+    # Claimed: dX = Wyᵀ · dY · Wx
+    dx_claimed = np.einsum('ih,ncij->nchj', Wy, dy)
+    dx_claimed = np.einsum('jw,nchj->nchw', Wx, dx_claimed)
+
+    err = np.max(np.abs(dx_fd - dx_claimed.ravel()))
+    status = "PASS" if err < TOL else "FAIL"
+    print(f"  {status}: {'bilinearUpsample_input_grad':30s} max_err={err:.2e}")
+    return err < TOL
+
+def test_bilinear_upsample_edge_clamp():
+    """Edge case: very small input (h=w=1) where every output position
+    clamps to the only input cell. Wy and Wx should each have a single
+    nonzero column with values that sum to 1 per row."""
+    n, c, h, w, scale = 1, 1, 1, 1, 3
+    o_h, o_w = h * scale, w * scale
+    Wy = _bilinear_weights_1d(h, scale)
+    Wx = _bilinear_weights_1d(w, scale)
+
+    # Every row of Wy / Wx should sum to 1 (partition of unity).
+    if not np.allclose(Wy.sum(axis=1), 1.0) or not np.allclose(Wx.sum(axis=1), 1.0):
+        print(f"  FAIL: bilinearUpsample_edge_clamp (weight rows don't sum to 1)")
+        return False
+
+    # h=w=1 forces every weight to clamp to col 0 with sum 1.0
+    expected = np.ones((o_h, h))
+    if not np.allclose(Wy, expected) or not np.allclose(Wx, expected):
+        print(f"  FAIL: bilinearUpsample_edge_clamp (Wy/Wx ≠ all-ones for h=1)")
+        return False
+
+    # FD vs claimed (same as above, but on the degenerate shape)
+    def fwd(x_flat):
+        x = x_flat.reshape(n, c, h, w)
+        y = np.einsum('ih,nchw->ncih', Wy, x)
+        y = np.einsum('jw,nciw->ncij', Wx, y)
+        return y.ravel()
+
+    np.random.seed(1)
+    x  = np.random.randn(n, c, h, w)
+    dy = np.random.randn(n, c, o_h, o_w)
+    xf = x.ravel()
+    dx_fd = np.zeros_like(xf)
+    for i in range(len(xf)):
+        xp = xf.copy(); xp[i] += EPS
+        xm = xf.copy(); xm[i] -= EPS
+        dx_fd[i] = np.sum(((fwd(xp) - fwd(xm)) / (2 * EPS)) * dy.ravel())
+    dx_claimed = np.einsum('ih,jw,ncij->nchw', Wy, Wx, dy).ravel()
+    err = np.max(np.abs(dx_fd - dx_claimed))
+    status = "PASS" if err < TOL else "FAIL"
+    print(f"  {status}: {'bilinearUpsample_edge_clamp':30s} max_err={err:.2e}")
+    return err < TOL
+
+# ════════════════════════════════════════════════════════════════
 # Run all
 # ════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
@@ -926,6 +1024,8 @@ if __name__ == "__main__":
     results.append(("Depthwise",    "depthwise_input_grad", test_depthwise_input_grad()))
     results.append(("Depthwise",    "depthwise_weight_grad", test_depthwise_weight_grad()))
     results.append(("Depthwise",    "depthwise_bias_grad",   test_depthwise_bias_grad()))
+    results.append(("UNet",         "bilinearUpsample_input_grad", test_bilinear_upsample_input_grad()))
+    results.append(("UNet",         "bilinearUpsample_edge_clamp", test_bilinear_upsample_edge_clamp()))
     try:
         results.append(("LayerNorm", "pdiv_gelu",           test_gelu()))
     except ImportError:
