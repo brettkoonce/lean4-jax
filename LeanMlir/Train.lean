@@ -83,8 +83,14 @@ private def runIreeCached (mlirPath outPath mlir : String) : IO (Bool × Bool) :
     to a `.vmfb`. Cached on the MLIR content + IREE backend so a
     second run with no codegen changes skips iree-compile entirely
     (saves ~10-15 min for ResNet-sized models). Returns the path to
-    the train-step vmfb. -/
-def compileVmfbs (spec : NetSpec) (cfg : TrainConfig) : IO String := do
+    the train-step vmfb.
+
+    `useSeg = true` switches the train-step codegen to per-pixel
+    softmax CE (segmentation), where labels are an int32 `[B, H, W]`
+    tensor instead of a `[B]` class index. Mutually exclusive with
+    soft-label / focal / label-smoothing flows. -/
+def compileVmfbs (spec : NetSpec) (cfg : TrainConfig)
+    (useSeg : Bool := false) : IO String := do
   IO.FS.createDirAll ".lake/build"
   let pfx := spec.buildPrefix
 
@@ -95,6 +101,12 @@ def compileVmfbs (spec : NetSpec) (cfg : TrainConfig) : IO String := do
     throw <| IO.userError "useFocal is restricted to int-label loss; disable mixup/cutmix/knnMixup"
   if cfg.useFocal && cfg.labelSmoothing != 0.0 then
     throw <| IO.userError "useFocal requires labelSmoothing = 0 (focal mixes poorly with smoothing)"
+  if useSeg && useSoftLabels then
+    throw <| IO.userError "segmentation datasets are incompatible with mixup/cutmix/knnMixup (per-pixel labels can't be mixed batch-wise)"
+  if useSeg && cfg.useFocal then
+    throw <| IO.userError "segmentation + focal not yet supported (Phase 0: plain per-pixel CE only)"
+  if useSeg && cfg.labelSmoothing != 0.0 then
+    throw <| IO.userError "segmentation + label smoothing not yet supported (Phase 0: plain per-pixel CE only)"
   let trainMlir := MlirCodegen.generateTrainStep spec cfg.batchSize ("jit_" ++ spec.sanitizedName ++ "_train_step")
     (labelSmoothing := cfg.labelSmoothing)
     (weightDecay := cfg.weightDecay)
@@ -102,6 +114,7 @@ def compileVmfbs (spec : NetSpec) (cfg : TrainConfig) : IO String := do
     (useSoftLabels := useSoftLabels)
     (useFocal := cfg.useFocal)
     (focalGamma := cfg.focalGamma)
+    (useSeg := useSeg)
   IO.FS.writeFile s!"{pfx}_train_step.mlir" trainMlir
   IO.eprintln s!"  {trainMlir.length} chars"
 
@@ -268,6 +281,10 @@ def runTraining (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
   let batchN : Nat := cfg.batchSize
   let batch  : USize := cfg.batchSize.toUSize
   let dio := datasetIO ds
+  -- Segmentation datasets carry per-pixel masks (H*W bytes per record)
+  -- instead of int32 class indices. Switches the train-step ABI to
+  -- `trainStepAdamF32Seg` and disables the classification eval block.
+  let useSeg := dio.labelBytesPerRecord != 4
 
   let (trainImg, trainLbl, nTrain) ← dio.loadTrain dataDir
   IO.eprintln s!"  train: {nTrain} images ({dio.trainPixels} floats/image)"
@@ -425,7 +442,15 @@ def runTraining (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
         yArg ← F32.cutmixSoftLabels yb batch nClassesNat.toUSize augH.toUSize augW.toUSize cfg.cutmixAlpha cfg.labelSmoothing mixSeed
       let packed := (p.append m).append v
       let ts0 ← IO.monoMsNow
-      let out ← if useSoftLabels then
+      let out ← if useSeg then do
+                  -- Pets `loadPets` returns uint8 masks; the seg train step
+                  -- expects int32 LE [B, H, W]. yArg here is the raw uint8
+                  -- batch slice (sliceLabels with bytesPerRecord = H*W).
+                  let yI32 ← F32.maskU8ToI32 yArg
+                  IreeSession.trainStepAdamF32Seg sess spec.trainFnName
+                    packed allShapes xba xSh yI32 lr globalStep.toFloat bnShapes batch
+                    spec.imageH.toUSize spec.imageW.toUSize
+                else if useSoftLabels then
                   IreeSession.trainStepAdamF32Soft sess spec.trainFnName
                     packed allShapes xba xSh yArg lr globalStep.toFloat bnShapes batch nClassesNat.toUSize
                 else
@@ -476,6 +501,14 @@ def runTraining (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
       swaCount := swaCount + 1
 
     if (epoch + 1) % 10 == 0 || epoch + 1 == epochs then
+     if useSeg then
+       -- TODO: per-pixel accuracy / mIoU eval for seg. Phase 0 of the
+       -- UNet demo only verifies that loss decreases — see
+       -- planning/unet_demo.md. The classification eval block below
+       -- (argmax + int32 label compare) is invalid for seg and would
+       -- read past the mask buffer.
+       IO.eprintln s!"  (seg eval skipped — Phase 0; train loss above is the signal)"
+     else
       let evalVmfb := s!"{pfx}_fwd_eval.vmfb"
       if ← System.FilePath.pathExists evalVmfb then
         let evalSess ← IreeSession.create evalVmfb
@@ -590,6 +623,9 @@ def evalOnly (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
     (dataDir : String) : IO Unit := do
   let pfx := spec.buildPrefix
   let dio := datasetIO ds
+  if dio.labelBytesPerRecord != 4 then
+    IO.eprintln "evalOnly is classification-only (argmax vs int32 label). Seg eval (mIoU) is Phase 2 of the UNet demo."
+    return ()
 
   let paramsPath := s!"{pfx}_params.bin"
   let bnPath := s!"{pfx}_bn_stats.bin"
@@ -647,13 +683,14 @@ def evalOnly (spec : NetSpec) (cfg : TrainConfig) (ds : DatasetKind)
 def train (spec : NetSpec) (cfg : TrainConfig) (dataDir : String)
     (ds : DatasetKind := .imagenette) : IO Unit := do
   IO.eprintln s!"{spec.name}: {spec.totalParams} params"
+  let useSeg := (datasetIO ds).labelBytesPerRecord != 4
   match (← IO.getEnv "LEAN_MLIR_EVAL_ONLY") with
   | some _ =>
     -- compileVmfbs is cheap when cached and produces the eval vmfb we need.
-    let _ ← spec.compileVmfbs cfg
+    let _ ← spec.compileVmfbs cfg useSeg
     spec.evalOnly cfg ds dataDir
   | none => do
-    let trainVmfb ← spec.compileVmfbs cfg
+    let trainVmfb ← spec.compileVmfbs cfg useSeg
     let sess ← IreeSession.create trainVmfb
     IO.eprintln "  session loaded"
     spec.runTraining cfg ds dataDir sess
