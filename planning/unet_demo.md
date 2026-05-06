@@ -220,23 +220,51 @@ Channel concat helpers (commit `51dba99`):
   `sliceLabels` for batch=4 produces 2,408,448 / 200,704 byte slices
   at the expected offsets.
 
+**Phase 1+2 codegen also landed (2026-05-06):**
+
+Per-pixel CE in MLIR (commit `078ddd8`):
+- `emitPerPixelCEBlock` — softmax along channel axis, onehot
+  built from `(B, H, W)` i32 via iota + broadcast + compare +
+  select, loss reduced over `(N, H, W)`, gradient seed
+  `(softmax - onehot) / (B · H · W)`.
+- `useSeg : Bool` flag plumbed through `emitTrainStepBody`,
+  `emitTrainStepSig`, `generateTrainStep`. When set, the function
+  signature takes `%y_seg : tensor<BxHxWxi32>` and the loss block
+  emits the per-pixel form; the (B, NC, H, W) gradient flows
+  correctly into all backward arms.
+- IREE-verified end-to-end: 5-layer encoder-decoder NetSpec
+  `[conv → maxPool → conv → bilinearUpsample 2 → conv]` produces
+  34KB MLIR → 57KB vmfb, zero errors.
+
+Seg train-step FFI (commit `8d9dc9d`):
+- `iree_ffi_train_step_adam_seg` C entry — same as classic but
+  pushes y as int32 rank-3 `(batch, H, W)`.
+- `lean_iree_train_step_adam_f32_seg` Lean wrapper.
+- `IreeSession.trainStepAdamF32Seg` opaque in `IreeRuntime.lean`.
+- `libiree_ffi.so` rebuilt against the static runtime under
+  `/home/skoonce/lean/claude_max/iree-build` (recipe in
+  `IREE_BUILD.md §4`).
+
 **Not yet wired — what's left to actually train Pets:**
 
-1. **Per-pixel softmax-CE in MLIR emission.** Math is FD-verified
-   (commit `633e666`) and the Lean helper signatures are clear, but
-   `emitTrainStepBody` has classification CE (`B, NC` shapes)
-   hardcoded into the loss + backward sections (lines ~4168-4234).
-   Lifting to per-pixel `(B, NC, H, W)` is a parallel rewrite of
-   that block. ~1-2 days.
-2. **`trainStepAdamF32Seg` IREE ABI.** Segmentation labels are
-   `(N, H, W)` int32, not `(N,)` int32 — so the train-step
-   signature, the FFI call site in `LeanMlir/IreeRuntime.lean`,
-   and the Lean-side label slicing all need a parallel path.
-   ~3-5 days.
+1. **`Train.lean` seg path.** A parallel `trainGeneric` variant
+   (or a `useSeg` branch in the existing one) that:
+   - Loads `(B, H, W)` int32 mask labels (Pets `loadPets` returns
+     uint8 masks; need a uint8 → int32 helper, either FFI or a
+     `F32.maskToI32` shim)
+   - Calls `IreeSession.trainStepAdamF32Seg` with `(batch, H, W)`
+     instead of just `batch`
+   - Eval path: mIoU instead of top-1 accuracy
+   ~2-3 days.
+2. **`autoencoderPets` NetSpec.** A no-skip encoder-decoder that
+   exercises the seg train step end-to-end without needing the
+   skip-state lift. A useful intermediate verification target —
+   trains worse than UNet but tests the whole pipeline.
+   ~1 day.
 3. **`unetDown` / `unetUp` codegen.** The hard one. Skip
    connections require cross-layer state — encoder layers stash
-   features that decoder layers consume. The current dispatcher is
-   purely sequential (`for l in spec.layers`); skip threading
+   features that decoder layers consume. The current dispatcher
+   is purely sequential (`for l in spec.layers`); skip threading
    needs an additional pass or a new state field. The bilinear
    upsample + channel concat sub-primitives are ready
    (commits `b5b6982`, `51dba99`), so the work is the wiring +
@@ -248,12 +276,10 @@ Channel concat helpers (commit `51dba99`):
 5. **mIoU eval.** Per-class IoU averaged across classes, evaluated
    on val set. ~3 days.
 
-A faster intermediate target: an **autoencoder** variant of the
-above (no skip connections) is trainable end-to-end once steps 1+2
-land — items 3-5 can come later. Skip connections are what makes
-UNet "U-shaped"; without them it's a CNN autoencoder, which is
-worse for segmentation but a useful stepping stone that exercises
-the bilinear upsample primitive in a real training loop.
+The cleanest next chunk is **#1 + #2** combined — wire up the
+Train.lean seg loop and define `autoencoderPets`. End-to-end
+training (without skips) becomes possible. UNet proper (with
+skips) follows in #3.
 
 ## Cells to add
 
