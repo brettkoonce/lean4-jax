@@ -798,6 +798,76 @@ private def emitFlatten (pos : Nat) (curSSA : String) (curShape : List Nat)
     return (s, s!"%fl{pos}", newShape)
   | _ => return ("    // flatten: already flat or unknown rank\n", curSSA, curShape)
 
+/-- 1-D bilinear-resampling weight matrix `Wy : (outLen × inLen)` for
+    integer upsampling factor `scale`, where `outLen = inLen * scale`.
+    Half-pixel centers, `align_corners = false` (PyTorch / JAX default):
+    output index `i` samples input fractional coordinate
+    `(i + 0.5) / scale - 0.5`, with edge values clamped (so the first
+    and last output rows replicate the corresponding input rows).
+    Each row has at most two nonzero entries. -/
+private def bilinearWeights1D (inLen scale : Nat) : Array (Array Float) := Id.run do
+  let outLen := inLen * scale
+  let mut rows : Array (Array Float) := Array.replicate outLen (Array.replicate inLen 0.0)
+  let den : Int := 2 * Int.ofNat scale
+  let inLenI : Int := Int.ofNat inLen
+  for i in [:outLen] do
+    let num : Int := 2 * Int.ofNat i + 1 - Int.ofNat scale
+    -- floor(num / den) for positive den, all signs of num
+    let y0 : Int := if num ≥ 0 then num / den else -((-num + den - 1) / den)
+    let wyNum : Int := num - y0 * den  -- in [0, den)
+    let wy : Float := wyNum.toNat.toFloat / den.toNat.toFloat
+    let cl := fun (x : Int) =>
+      if x < 0 then (0 : Nat)
+      else if x ≥ inLenI then inLen - 1
+      else x.toNat
+    let i0 := cl y0
+    let i1 := cl (y0 + 1)
+    let mut row := rows[i]!
+    row := row.set! i0 (row[i0]! + (1.0 - wy))
+    row := row.set! i1 (row[i1]! + wy)
+    rows := rows.set! i row
+  return rows
+
+/-- Serialize a 2-D float matrix as MLIR `dense<[[...]]>` payload (no
+    `dense<>` wrapper, no type — caller adds those). -/
+private def floatMatrixToMlirDense (m : Array (Array Float)) : String :=
+  let rowStrs := m.toList.map fun row =>
+    "[" ++ ",".intercalate (row.toList.map fun v => s!"{v}") ++ "]"
+  "[" ++ ",".intercalate rowStrs ++ "]"
+
+/-- Emit bilinear upsample: (b, c, h, w) → (b, c, h*scale, w*scale).
+    Factorizes as two `dot_general`s with precomputed weight matrices:
+        Y = Wy · X (along H)        →  shape (b, c, w, oH)
+        T = transpose Y to (b, c, oH, w)
+        Z = T · Wxᵀ (along W)        →  shape (b, c, oH, oW)
+    `Wy` and `Wx` are emitted as `stablehlo.constant dense<...>`. The
+    matmul factorization keeps the cost at `O(b·c·(h·w·oH + oH·w·oW))`
+    rather than naïve gather + 4-corner blend, and reuses the existing
+    `dot_general` lowering paths. -/
+private def emitBilinearUpsample (pos : Nat) (curSSA : String) (curShape : List Nat)
+    (scale : Nat) : String × String × List Nat := Id.run do
+  match curShape with
+  | [b, c, h, w] =>
+    let oH := h * scale
+    let oW := w * scale
+    let newShape := [b, c, oH, oW]
+    let wyStr := floatMatrixToMlirDense (bilinearWeights1D h scale)
+    let wxStr := floatMatrixToMlirDense (bilinearWeights1D w scale)
+    let inTy := tensorTy curShape
+    let interTy := tensorTy [b, c, w, oH]   -- after Wy contraction
+    let inter2Ty := tensorTy [b, c, oH, w]  -- after transpose
+    let outTy := tensorTy newShape
+    let wyTy := s!"tensor<{oH}x{h}xf32>"
+    let wxTy := s!"tensor<{oW}x{w}xf32>"
+    let mut s := ""
+    s := s ++ s!"    %bu_wy{pos} = stablehlo.constant dense<{wyStr}> : {wyTy}\n"
+    s := s ++ s!"    %bu_wx{pos} = stablehlo.constant dense<{wxStr}> : {wxTy}\n"
+    s := s ++ s!"    %bu_my{pos} = stablehlo.dot_general {curSSA}, %bu_wy{pos}, contracting_dims = [2] x [1], precision = [DEFAULT, DEFAULT] : ({inTy}, {wyTy}) -> {interTy}\n"
+    s := s ++ s!"    %bu_t{pos} = stablehlo.transpose %bu_my{pos}, dims = [0, 1, 3, 2] : ({interTy}) -> {inter2Ty}\n"
+    s := s ++ s!"    %bu_out{pos} = stablehlo.dot_general %bu_t{pos}, %bu_wx{pos}, contracting_dims = [3] x [1], precision = [DEFAULT, DEFAULT] : ({inter2Ty}, {wxTy}) -> {outTy}\n"
+    return (s, s!"%bu_out{pos}", newShape)
+  | _ => return ("    // bilinearUpsample error: expected rank-4 NCHW\n", curSSA, curShape)
+
 /-- Emit patch embedding forward. Input (B, ic, H, W) → (B, N+1, dim).
     Three params: W (dim, ic, p, p), b (dim,), cls (dim,), pos (N+1, dim).
     Returns (code, outSSA, outShape). -/
@@ -1380,6 +1450,11 @@ private def emitForwardBody (spec : NetSpec) (batchSize : Nat) (fixedBN : Bool :
       code := code ++ snip
       curSSA := newSSA
       curShape := newShape
+    | .bilinearUpsample scale =>
+      let (snip, newSSA, newShape) := emitBilinearUpsample pos curSSA curShape scale
+      code := code ++ snip
+      curSSA := newSSA
+      curShape := newShape
     | .convBn ic oc kSize stride _ =>
       let (snip, newSSA, newShape) := emitConvBn pidx curSSA curShape ic oc kSize stride (fixedBN := fixedBN)
       code := code ++ snip
@@ -1713,6 +1788,11 @@ private def emitForwardSig (spec : NetSpec) (batchSize : Nat) : String := Id.run
     | .flatten =>
       match curShape with
       | [b, c, h, w] => curShape := [b, c * h * w]
+      | _ => pure ()
+      outShape := curShape
+    | .bilinearUpsample scale =>
+      match curShape with
+      | [b, c, h, w] => curShape := [b, c, h * scale, w * scale]
       | _ => pure ()
       outShape := curShape
     | .patchEmbed ic dim pSize nP =>
@@ -2114,6 +2194,11 @@ private def emitForwardEvalSig (spec : NetSpec) (batchSize : Nat) : String := Id
     | .flatten =>
       match curShape with
       | [b, c, h, w] => curShape := [b, c * h * w]
+      | _ => pure ()
+      outShape := curShape
+    | .bilinearUpsample scale =>
+      match curShape with
+      | [b, c, h, w] => curShape := [b, c, h * scale, w * scale]
       | _ => pure ()
       outShape := curShape
     | .patchEmbed ic dim pSize nP =>
@@ -3240,6 +3325,13 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
         records := records.push { layer := .flatten, pidx := none, pos, inputSSA := inSSA, preActSSA := "", outputSSA := curSSA, inShape, outShape }
         curShape := outShape
       | _ => pure ()
+
+    | .bilinearUpsample scale =>
+      let (snip, newSSA, outShape) := emitBilinearUpsample pos curSSA curShape scale
+      code := code ++ snip
+      curSSA := newSSA
+      records := records.push { layer := .bilinearUpsample scale, pidx := none, pos, inputSSA := inSSA, preActSSA := "", outputSSA := curSSA, inShape, outShape }
+      curShape := outShape
 
     | .convBn ic oc kSize stride _ =>
       let (snip, rec) := emitConvBnTrain pidx pos curSSA curShape ic oc kSize stride true
@@ -4396,6 +4488,33 @@ private def emitTrainStepBody (spec : NetSpec) (batchSize : Nat) (_moduleName : 
       code := code ++ s!"    %ufl{r.pos} = stablehlo.reshape {gradSSA} : ({tensorTy gradShape}) -> {tensorTy r.inShape}\n"
       gradSSA := s!"%ufl{r.pos}"
       gradShape := r.inShape
+
+    | .bilinearUpsample scale =>
+      -- VJP of `Y = Wy · X · Wxᵀ` (precomputed const Wy, Wx).
+      --   dM = dY · Wx       (contract along W_out)
+      --   dXᵀ = dM · Wy      (contract along H_out)
+      --   dX  = transpose dXᵀ
+      -- Wy / Wx are recomputed and re-emitted; IREE folds duplicate
+      -- constants so this is purely a textual cost.
+      match r.inShape with
+      | [b, c, h, w] =>
+        let oH := h * scale
+        let oW := w * scale
+        let wyStr := floatMatrixToMlirDense (bilinearWeights1D h scale)
+        let wxStr := floatMatrixToMlirDense (bilinearWeights1D w scale)
+        let wyTy := s!"tensor<{oH}x{h}xf32>"
+        let wxTy := s!"tensor<{oW}x{w}xf32>"
+        let dmShape := [b, c, oH, w]
+        let dxtShape := [b, c, w, h]
+        code := code ++ s!"    // ─── bilinear upsample backward (transpose of forward matmul-pair) ───\n"
+        code := code ++ s!"    %bu_bwy{r.pos} = stablehlo.constant dense<{wyStr}> : {wyTy}\n"
+        code := code ++ s!"    %bu_bwx{r.pos} = stablehlo.constant dense<{wxStr}> : {wxTy}\n"
+        code := code ++ s!"    %bu_dm{r.pos} = stablehlo.dot_general {gradSSA}, %bu_bwx{r.pos}, contracting_dims = [3] x [0], precision = [DEFAULT, DEFAULT] : ({tensorTy r.outShape}, {wxTy}) -> {tensorTy dmShape}\n"
+        code := code ++ s!"    %bu_dt{r.pos} = stablehlo.dot_general %bu_dm{r.pos}, %bu_bwy{r.pos}, contracting_dims = [2] x [0], precision = [DEFAULT, DEFAULT] : ({tensorTy dmShape}, {wyTy}) -> {tensorTy dxtShape}\n"
+        code := code ++ s!"    %bu_dx{r.pos} = stablehlo.transpose %bu_dt{r.pos}, dims = [0, 1, 3, 2] : ({tensorTy dxtShape}) -> {tensorTy r.inShape}\n"
+        gradSSA := s!"%bu_dx{r.pos}"
+        gradShape := r.inShape
+      | _ => pure ()
 
     | .patchEmbed _ic _dim _p _nP =>
       if r.isPatchEmbed then
